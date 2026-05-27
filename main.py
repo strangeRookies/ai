@@ -1,15 +1,17 @@
 import argparse
 import sys
 import time
-from queue import Empty
+from queue import Empty, Queue
 
+from ai.events.clip_worker import ClipWriterWorker, enqueue_event_clip
+from ai.events.event_clip import EventClipBuffer
 from config import load_settings
 from detector.mock_detector import MockDetector
 from detector.yolo_pose_detector import YoloPoseDetector
 from messaging.event_schema import build_safety_event
 from messaging.mqtt_publisher import MqttPublisher
 from rules.fall_rule import FallRuleEngine
-from stream.rtsp_reader import RtspFrameReader
+from stream.rtsp_reader import RtspFrameReader, redact_url
 
 
 def parse_args():
@@ -56,7 +58,7 @@ def rtsp_frames(settings):
                     print("[edge-ai] no RTSP frame available, using mock frame fallback", file=sys.stderr)
                     yield {"mock": True}
                 else:
-                    print(f"[edge-ai] waiting for RTSP frames: url={settings.rtsp_url}", file=sys.stderr)
+                    print(f"[edge-ai] waiting for RTSP frames: url={redact_url(settings.rtsp_url)}", file=sys.stderr)
     finally:
         reader.stop()
 
@@ -102,6 +104,21 @@ def main():
     if not args.dry_run:
         publisher.connect()
 
+    clip_worker = None
+    clip_buffer = None
+    clip_queue = None
+    if settings.event_clip_enabled:
+        clip_queue = Queue(maxsize=max(1, settings.event_clip_queue_size))
+        clip_buffer = EventClipBuffer(
+            pre_event_frame_count=settings.event_clip_pre_frames,
+            post_event_frame_count=settings.event_clip_post_frames,
+            cooldown_seconds=settings.event_clip_cooldown_seconds,
+            fps=settings.event_clip_fps,
+            output_dir=settings.event_clip_output_dir,
+        )
+        clip_worker = ClipWriterWorker(clip_queue)
+        clip_worker.start()
+
     frames = mock_frames(settings.mock_frame_interval_seconds)
     if settings.detector_mode != "mock":
         frames = rtsp_frames(settings)
@@ -109,6 +126,10 @@ def main():
     processed = 0
     try:
         for frame in frames:
+            clip_task = clip_buffer.add_frame(frame) if clip_buffer else None
+            if clip_task and clip_queue:
+                enqueue_event_clip(clip_queue, clip_task)
+
             detections = detector.detect(frame)
             for detection, rule_score, pose_state in rule_engine.evaluate(detections):
                 event = build_fall_event(settings, detection, rule_score, pose_state)
@@ -116,6 +137,17 @@ def main():
                     print(f"[edge-ai] dry-run event: {event}", flush=True)
                 else:
                     publisher.publish_event(event)
+                if clip_buffer:
+                    clip_buffer.trigger_event(
+                        event_type=event["type"],
+                        camera_id=event["camera_id"],
+                        metadata={
+                            "event_timestamp": event.get("timestamp"),
+                            "track_id": detection.get("track_id"),
+                            "rule_score": rule_score,
+                            "pose_state": pose_state,
+                        },
+                    )
                 if args.once:
                     return 0
 
@@ -127,6 +159,8 @@ def main():
         print("\n[edge-ai] stopped by user")
         return 0
     finally:
+        if clip_worker:
+            clip_worker.stop()
         publisher.close()
 
 

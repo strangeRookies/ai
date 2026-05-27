@@ -1,8 +1,23 @@
 import sys
 import threading
 import time
+from urllib.parse import urlsplit, urlunsplit
 
 from stream.frame_queue import LatestFrameQueue
+
+
+def redact_url(url):
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
+        return "<invalid-url>"
+    if not parsed.password:
+        return url
+    username = parsed.username or ""
+    host = parsed.hostname or ""
+    port = f":{parsed.port}" if parsed.port else ""
+    netloc = f"{username}:***@{host}{port}" if username else f"***@{host}{port}"
+    return urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
 
 
 class RtspFrameReader:
@@ -38,7 +53,7 @@ class RtspFrameReader:
             cap = cv2.VideoCapture(self.rtsp_url)
             if not cap.isOpened():
                 print(
-                    f"[rtsp-reader] RTSP connection failed: url={self.rtsp_url}. "
+                    f"[rtsp-reader] RTSP connection failed: url={redact_url(self.rtsp_url)}. "
                     f"Retrying in {self.reconnect_delay_seconds}s",
                     file=sys.stderr,
                 )
@@ -46,13 +61,13 @@ class RtspFrameReader:
                 time.sleep(self.reconnect_delay_seconds)
                 continue
 
-            print(f"[rtsp-reader] Connected to RTSP stream: {self.rtsp_url}")
+            print(f"[rtsp-reader] Connected to RTSP stream: {redact_url(self.rtsp_url)}")
             try:
                 while not self._stop_event.is_set():
                     ok, frame = cap.read()
                     if not ok:
                         print(
-                            f"[rtsp-reader] Failed to read RTSP frame: url={self.rtsp_url}. Reconnecting.",
+                            f"[rtsp-reader] Failed to read RTSP frame: url={redact_url(self.rtsp_url)}. Reconnecting.",
                             file=sys.stderr,
                         )
                         break

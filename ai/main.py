@@ -1,10 +1,13 @@
 import csv
+from queue import Queue
 from pathlib import Path
 
 from ai.action.classifier import MockActionClassifier
 from ai.action.sequence_buffer import CropSequenceBuffer
 from ai.config import parse_config
 from ai.detection.yolo_person_detector import MockPersonDetector, YoloPersonDetector
+from ai.events.clip_worker import ClipWriterWorker, enqueue_event_clip
+from ai.events.event_clip import EventClipBuffer
 from ai.evaluation.event_evaluator import evaluate_frame_level
 from ai.labels.event_label_loader import load_dataset_rows, load_event_label
 from ai.publishers.event_publisher import ConsoleEventPublisher, build_event_payload
@@ -26,14 +29,33 @@ def run_one_video(config, video_path, label_path):
     publisher = ConsoleEventPublisher()
     records = []
     writer = None
+    clip_queue = None
+    clip_worker = None
+    clip_buffer = None
 
     with VideoReader(str(video_path)) as reader:
+        if config.event_clip_enabled:
+            clip_queue = Queue(maxsize=max(1, config.event_clip_queue_size))
+            clip_buffer = EventClipBuffer(
+                pre_event_frame_count=config.event_clip_pre_frames,
+                post_event_frame_count=config.event_clip_post_frames,
+                cooldown_seconds=config.event_clip_cooldown_seconds,
+                fps=reader.fps,
+                output_dir=config.event_clip_output_dir,
+            )
+            clip_worker = ClipWriterWorker(clip_queue)
+            clip_worker.start()
+
         while True:
             packet = reader.read()
             if packet is None:
                 break
             if config.max_frames > 0 and packet.frame_idx >= config.max_frames:
                 break
+
+            clip_task = clip_buffer.add_frame(packet.frame) if clip_buffer else None
+            if clip_task and clip_queue:
+                enqueue_event_clip(clip_queue, clip_task)
 
             detection = detector.detect(packet.frame, packet.frame_idx)
             boxes = detection["boxes"]
@@ -54,6 +76,17 @@ def run_one_video(config, video_path, label_path):
                     snapshot_path=None,
                 )
                 publisher.publish(payload)
+                if clip_buffer:
+                    clip_buffer.trigger_event(
+                        event_type=prediction["label"],
+                        camera_id=config.camera_id,
+                        metadata={
+                            "frame_idx": packet.frame_idx,
+                            "timestamp": packet.timestamp,
+                            "score": prediction["score"],
+                            "boxes": boxes,
+                        },
+                    )
 
             if config.output_video:
                 import cv2
@@ -67,6 +100,8 @@ def run_one_video(config, video_path, label_path):
 
     if writer is not None:
         writer.release()
+    if clip_worker is not None:
+        clip_worker.stop()
     metrics = evaluate_frame_level(records)
     print(f"[evaluation] {metrics}")
     return metrics

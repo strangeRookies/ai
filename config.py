@@ -42,6 +42,13 @@ class Settings:
     mqtt_client_id: str
     fall_min_duration_seconds: float
     fall_debounce_seconds: float
+    event_clip_pre_frames: int
+    event_clip_post_frames: int
+    event_clip_cooldown_seconds: float
+    event_clip_fps: float
+    event_clip_output_dir: str
+    event_clip_queue_size: int
+    event_clip_enabled: bool
     max_frames: int
 
 
@@ -62,5 +69,12 @@ def load_settings():
         mqtt_client_id=os.getenv("MQTT_CLIENT_ID", "edge-ai-001"),
         fall_min_duration_seconds=get_env_float("FALL_MIN_DURATION_SECONDS", 1.5),
         fall_debounce_seconds=get_env_float("FALL_DEBOUNCE_SECONDS", 10),
+        event_clip_pre_frames=get_env_int("EVENT_CLIP_PRE_FRAMES", 150),
+        event_clip_post_frames=get_env_int("EVENT_CLIP_POST_FRAMES", 150),
+        event_clip_cooldown_seconds=get_env_float("EVENT_CLIP_COOLDOWN_SECONDS", 10),
+        event_clip_fps=get_env_float("EVENT_CLIP_FPS", 30),
+        event_clip_output_dir=os.getenv("EVENT_CLIP_OUTPUT_DIR", "clips"),
+        event_clip_queue_size=get_env_int("EVENT_CLIP_QUEUE_SIZE", 8),
+        event_clip_enabled=get_env_bool("EVENT_CLIP_ENABLED", True),
         max_frames=get_env_int("MAX_FRAMES", 0),
     )

@@ -26,6 +26,12 @@ class AiPipelineConfig:
     sequence_stride: int
     resize_size: int
     output_video: str | None
+    event_clip_enabled: bool
+    event_clip_pre_frames: int
+    event_clip_post_frames: int
+    event_clip_cooldown_seconds: float
+    event_clip_output_dir: str
+    event_clip_queue_size: int
     max_frames: int
 
 
@@ -44,6 +50,12 @@ def parse_config():
     parser.add_argument("--sequence-stride", type=int, default=env_int("SEQUENCE_STRIDE", 8))
     parser.add_argument("--resize-size", type=int, default=env_int("RESIZE_SIZE", 224))
     parser.add_argument("--output-video", default=os.getenv("OUTPUT_VIDEO"))
+    parser.add_argument("--event-clip-enabled", action=argparse.BooleanOptionalAction, default=os.getenv("EVENT_CLIP_ENABLED", "true").lower() in {"1", "true", "yes", "y", "on"})
+    parser.add_argument("--event-clip-pre-frames", type=int, default=env_int("EVENT_CLIP_PRE_FRAMES", 150))
+    parser.add_argument("--event-clip-post-frames", type=int, default=env_int("EVENT_CLIP_POST_FRAMES", 150))
+    parser.add_argument("--event-clip-cooldown-seconds", type=float, default=env_float("EVENT_CLIP_COOLDOWN_SECONDS", 10))
+    parser.add_argument("--event-clip-output-dir", default=os.getenv("EVENT_CLIP_OUTPUT_DIR", "clips"))
+    parser.add_argument("--event-clip-queue-size", type=int, default=env_int("EVENT_CLIP_QUEUE_SIZE", 8))
     parser.add_argument("--max-frames", type=int, default=env_int("MAX_FRAMES", 0))
     args = parser.parse_args()
     return AiPipelineConfig(**vars(args))
