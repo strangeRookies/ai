@@ -1,0 +1,28 @@
+# Development RTSP server config for MediaMTX.
+#
+# Start with:
+#   mediamtx stream/mediamtx.yml
+#
+# Cameras are published by path name:
+#   rtsp://localhost:8554/cam1
+#   rtsp://localhost:8554/cam2
+#   rtsp://localhost:8554/cam3
+#   rtsp://localhost:8554/cam4
+
+logLevel: info
+
+rtspAddress: :8554
+rtmp: no
+hls: no
+webrtc: no
+srt: no
+
+paths:
+  cam1:
+    source: publisher
+  cam2:
+    source: publisher
+  cam3:
+    source: publisher
+  cam4:
+    source: publisher
