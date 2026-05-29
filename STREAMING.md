@@ -114,3 +114,50 @@ sudo ufw allow 8000/tcp
 ```
 
 Do not put RTSP usernames or passwords in frontend code.
+
+## CPU Inference Feasibility Check
+
+Before moving inference into a backend-side CPU deployment, measure real latency/FPS with the same stream shape used by the dashboard.
+
+Run against the current `cam1` RTSP stream:
+
+```bash
+cd /home/welabs/yolo_training/strange_ai
+source .venv/bin/activate
+python benchmark/cpu_inference_benchmark.py \
+  --input rtsp://localhost:8554/cam1 \
+  --model yolov8n-pose.pt \
+  --device cpu \
+  --imgsz 320 \
+  --max-frames 300 \
+  --target-fps-per-camera 5 \
+  --camera-count 4
+```
+
+Run against a recorded file:
+
+```bash
+python benchmark/cpu_inference_benchmark.py \
+  --input sample_videos/example.mp4 \
+  --model yolov8n-pose.pt \
+  --device cpu \
+  --imgsz 320 \
+  --max-frames 300 \
+  --target-fps-per-camera 5 \
+  --camera-count 4
+```
+
+Read the `recommendation` field:
+
+```text
+cpu_ok_for_configured_camera_count
+  CPU is likely enough for the configured camera count and AI FPS.
+
+cpu_ok_for_fewer_cameras_or_lower_fps
+  CPU can work, but reduce camera count, AI FPS, or image size.
+
+cpu_not_recommended_without_optimization
+  Keep AI worker separate or optimize with ONNX/OpenVINO, lower FPS, or a smaller model.
+```
+
+This benchmark should guide whether `strange_ai` can run beside `strange_back` on a CPU server or should stay on a GPU/AI worker host.
