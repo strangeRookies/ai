@@ -36,6 +36,7 @@ class YoloPoseDetector:
 
             for idx, bbox in enumerate(xyxy):
                 pose_horizontal = _is_pose_horizontal(keypoint_xy, keypoint_conf, idx)
+                keypoints = _extract_keypoints(keypoint_xy, keypoint_conf, idx)
                 detections.append(
                     {
                         "track_id": track_ids[idx] if idx < len(track_ids) else None,
@@ -43,6 +44,8 @@ class YoloPoseDetector:
                         "confidence": float(confs[idx]) if idx < len(confs) else 0.0,
                         "pose_state": "LYING" if pose_horizontal else "UNKNOWN",
                         "pose_horizontal": pose_horizontal,
+                        "keypoints": keypoints,
+                        "keypoint_confidence": _average_keypoint_confidence(keypoints),
                         "model_name": self.model_name,
                     }
                 )
@@ -65,3 +68,26 @@ def _is_pose_horizontal(keypoint_xy, keypoint_conf, person_idx, threshold=0.3):
     torso_dx = abs(float(shoulder_center[0] - hip_center[0]))
     torso_dy = abs(float(shoulder_center[1] - hip_center[1]))
     return torso_dx > 0 and torso_dx / max(torso_dy, 1.0) >= 1.3
+
+
+def _extract_keypoints(keypoint_xy, keypoint_conf, person_idx):
+    if keypoint_xy is None or keypoint_conf is None or person_idx >= keypoint_conf.shape[0]:
+        return None
+    xy = keypoint_xy[person_idx]
+    conf = keypoint_conf[person_idx]
+    keypoints = []
+    for idx in range(min(xy.shape[0], conf.shape[0])):
+        keypoints.append(
+            {
+                "x": round(float(xy[idx][0]), 2),
+                "y": round(float(xy[idx][1]), 2),
+                "confidence": round(float(conf[idx]), 4),
+            }
+        )
+    return keypoints
+
+
+def _average_keypoint_confidence(keypoints):
+    if not keypoints:
+        return None
+    return round(sum(item["confidence"] for item in keypoints) / len(keypoints), 4)

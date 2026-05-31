@@ -167,7 +167,9 @@ CCTV / Sample Video
 -> OpenCV RTSP Reader
 -> Latest-frame Queue
 -> YOLO Pose Detector or Mock Detector
--> Fall Rule Engine
+-> Track Assigner
+-> Per-track Sequence Buffer
+-> Fall Rule State Machine
 -> MQTT safety/events
 -> Spring Boot Backend
 ```
@@ -181,7 +183,9 @@ stream/frame_queue.py
 stream/rtsp_reader.py
 detector/mock_detector.py
 detector/yolo_pose_detector.py
+tracking/simple_tracker.py
 rules/fall_rule.py
+rules/track_sequence.py
 messaging/event_schema.py
 messaging/mqtt_publisher.py
 tests/test_fall_rule.py
@@ -202,6 +206,13 @@ FRAME_QUEUE_SIZE=2
 ALLOW_MOCK_FALLBACK=true
 FALL_MIN_DURATION_SECONDS=1.5
 FALL_DEBOUNCE_SECONDS=10
+FALL_CANDIDATE_THRESHOLD=0.7
+FALL_DECISION_WINDOW=3
+FALL_DECISION_REQUIRED=2
+TRACK_IOU_THRESHOLD=0.3
+TRACK_MAX_MISSING_SECONDS=2
+SEQUENCE_LENGTH=30
+SEQUENCE_MAX_TRACK_AGE_SECONDS=5
 MAX_FRAMES=0
 MQTT_HOST=localhost
 MQTT_PORT=1883
@@ -277,9 +288,23 @@ Expected event shape:
 
 The first stabilized rule is `fall_detected`. It combines bbox aspect ratio, pose-horizontal signal, detector confidence, and a minimum duration threshold before emitting an event. Repeated events for the same track are debounced.
 
+The runtime now follows a track-aware decision flow:
+
+```text
+Detection
+-> SimpleTrackAssigner
+-> PerTrackSequenceBuffer
+-> FallRuleEngine
+-> Event schema v1.0
+```
+
+`SimpleTrackAssigner` is a lightweight IoU-based adapter so detections without native tracker IDs still get stable-enough `track_id` values in local testing. It is intentionally isolated behind `tracking/simple_tracker.py` so ByteTrack can replace it later without changing the event rule or MQTT schema.
+
+`FallRuleEngine` confirms an event only after the candidate score passes the threshold in at least `FALL_DECISION_REQUIRED` of the last `FALL_DECISION_WINDOW` observations and remains active for `FALL_MIN_DURATION_SECONDS`. This keeps the diagram's "2 out of recent 3" decision rule while preserving duration and cooldown safeguards.
+
 TODO:
 
-- Add ByteTrack or another tracker for stable `track_id` across real streams.
+- Replace `SimpleTrackAssigner` with ByteTrack or another production tracker for stable `track_id` across crowded real streams.
 - Expand rule modules for unconscious, bed fall, unauthorized exit, and violence detection.
 - Add RTSP benchmark tooling in `benchmark/benchmark_rtsp.py`.
 - Calibrate thresholds with real non-sensitive sample videos.
