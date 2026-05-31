@@ -87,6 +87,7 @@ def main():
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--max-frames", type=int, default=0)
+    parser.add_argument("--max-rows-per-split", type=int, default=0)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", default="auto")
     args = parser.parse_args()
@@ -97,6 +98,9 @@ def main():
 
     train_rows = load_dataset_rows(args.dataset_csv, split=args.train_split)
     val_rows = load_dataset_rows(args.dataset_csv, split=args.val_split)
+    if args.max_rows_per_split > 0:
+        train_rows = train_rows[: args.max_rows_per_split]
+        val_rows = val_rows[: args.max_rows_per_split]
     if not train_rows:
         raise RuntimeError(f"No rows found for train split={args.train_split}")
     if not val_rows:

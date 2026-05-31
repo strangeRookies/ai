@@ -12,6 +12,8 @@ SEQUENCE_STRIDE="${SEQUENCE_STRIDE:-8}"
 RESIZE_SIZE="${RESIZE_SIZE:-224}"
 FEATURE_SIZE="${FEATURE_SIZE:-32}"
 BATCH_SIZE="${BATCH_SIZE:-32}"
+MAX_FRAMES="${MAX_FRAMES:-0}"
+MAX_ROWS_PER_SPLIT="${MAX_ROWS_PER_SPLIT:-0}"
 
 MODELS=(
   yolov8n.pt
@@ -37,6 +39,8 @@ for MODEL in "${MODELS[@]}"; do
     --resize-size "${RESIZE_SIZE}" \
     --feature-size "${FEATURE_SIZE}" \
     --batch-size "${BATCH_SIZE}" \
+    --max-frames "${MAX_FRAMES}" \
+    --max-rows-per-split "${MAX_ROWS_PER_SPLIT}" \
     --output-dir "${OUT_DIR}"
 done
 
