@@ -348,4 +348,53 @@ Use a CSV containing `video_path,label_path,split`:
 python -m ai.main --dataset-csv datasets/processed/clips_train.csv --split train --detector-mode mock
 ```
 
-Current action classifier is a mock interface returning `Fight/Fall/Normal` style labels. Replace `MockActionClassifier` with a PyTorch video classification model later.
+Train the LSTM action classifier from the same CSV:
+
+```bash
+bash scripts/run_yolov8n_vs_yolo11n_lstm.sh
+```
+
+This writes checkpoints and a comparison table:
+
+```text
+runs/action_lstm/yolov8n/best.pt
+runs/action_lstm/yolo11n/best.pt
+runs/action_lstm/summary.csv
+```
+
+Or run one model manually:
+
+```bash
+python -m ai.action.train_lstm \
+  --dataset-csv datasets/processed/clips_train.csv \
+  --train-split train \
+  --val-split val \
+  --detector-mode yolo \
+  --yolo-model yolov8n.pt \
+  --output-dir runs/action_lstm/yolov8n
+```
+
+Compare another YOLO detector backbone by changing `--yolo-model` and output directory:
+
+```bash
+python -m ai.action.train_lstm \
+  --dataset-csv datasets/processed/clips_train.csv \
+  --train-split train \
+  --val-split val \
+  --detector-mode yolo \
+  --yolo-model yolo11n.pt \
+  --output-dir runs/action_lstm/yolo11n
+```
+
+Run inference with a trained checkpoint:
+
+```bash
+python -m ai.main \
+  --input path/to/video.mp4 \
+  --label path/to/label.json \
+  --detector-mode yolo \
+  --yolo-model yolov8n.pt \
+  --action-model runs/action_lstm/yolov8n/best.pt
+```
+
+If `--action-model` is not provided, the pipeline still falls back to `MockActionClassifier` for integration smoke tests.
