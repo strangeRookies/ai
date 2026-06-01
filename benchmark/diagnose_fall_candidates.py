@@ -268,7 +268,8 @@ def print_diagnosis(rows):
             stats["candidates"] += 1
         stats["reasons"][row["reason"]] = stats["reasons"].get(row["reason"], 0) + 1
     comparison = compare_yolo26_against_other_models(rows)
-    print(json.dumps({"diagnosis_summary": by_model, "cross_model_comparison": comparison}, indent=2, ensure_ascii=False))
+    parsing = summarize_parsing_formats(rows)
+    print(json.dumps({"diagnosis_summary": by_model, "cross_model_comparison": comparison, "parsing_format_summary": parsing}, indent=2, ensure_ascii=False))
     yolo26 = by_model.get("YOLO26n-pose")
     if comparison["other_models_candidate_frames"] and comparison["yolo26_people_frames"] and not comparison["yolo26_candidate_frames"]:
         print(
@@ -284,6 +285,60 @@ def print_diagnosis(rows):
         )
     elif yolo26 and yolo26["people"] == 0:
         print("[diagnosis] YOLO26n produced no person rows in sampled frames; this points to detection/model loading rather than fall-rule incompatibility.", flush=True)
+    yolo26_parsing = parsing.get("YOLO26n-pose", {})
+    if yolo26_parsing.get("warnings"):
+        print(f"[diagnosis] YOLO26n parsing warnings: {', '.join(yolo26_parsing['warnings'])}", flush=True)
+
+
+def summarize_parsing_formats(rows):
+    summary = {}
+    for row in rows:
+        model = row["model_label"]
+        stats = summary.setdefault(
+            model,
+            {
+                "rows": 0,
+                "xyxy_pixel_like_rows": 0,
+                "xyxy_normalized_like_rows": 0,
+                "xyxyn_normalized_like_rows": 0,
+                "keypoints_xy_pixel_like_rows": 0,
+                "keypoints_xyn_normalized_like_rows": 0,
+                "keypoints_conf_shape_examples": [],
+                "warnings": [],
+            },
+        )
+        stats["rows"] += 1
+        report = row.get("format_report") or {}
+        xyxy = report.get("boxes_xyxy_minmax")
+        xyxyn = report.get("boxes_xyxyn_minmax")
+        kxy = report.get("keypoints_xy_minmax")
+        kxyn = report.get("keypoints_xyn_minmax")
+        kconf_shape = report.get("keypoints_conf_shape")
+        if xyxy:
+            if float(xyxy[1]) <= 1.5:
+                stats["xyxy_normalized_like_rows"] += 1
+            else:
+                stats["xyxy_pixel_like_rows"] += 1
+        if xyxyn and 0.0 <= float(xyxyn[0]) and float(xyxyn[1]) <= 1.5:
+            stats["xyxyn_normalized_like_rows"] += 1
+        if kxy:
+            if float(kxy[1]) > 1.5:
+                stats["keypoints_xy_pixel_like_rows"] += 1
+        if kxyn and 0.0 <= float(kxyn[0]) and float(kxyn[1]) <= 1.5:
+            stats["keypoints_xyn_normalized_like_rows"] += 1
+        if kconf_shape and kconf_shape not in stats["keypoints_conf_shape_examples"]:
+            stats["keypoints_conf_shape_examples"].append(kconf_shape)
+
+    for model, stats in summary.items():
+        if stats["xyxy_normalized_like_rows"] > 0:
+            stats["warnings"].append("boxes.xyxy looks normalized; benchmark expects pixel xyxy")
+        if stats["rows"] > 0 and stats["xyxy_pixel_like_rows"] == 0 and stats["xyxy_normalized_like_rows"] == 0:
+            stats["warnings"].append("boxes.xyxy missing in sampled rows")
+        if stats["rows"] > 0 and stats["keypoints_xy_pixel_like_rows"] == 0:
+            stats["warnings"].append("keypoints.xy missing or not pixel-like in sampled rows")
+        if not any(shape and len(shape) == 2 and shape[-1] == 17 for shape in stats["keypoints_conf_shape_examples"]):
+            stats["warnings"].append("keypoints.conf shape does not look like [persons, 17]")
+    return summary
 
 
 def compare_yolo26_against_other_models(rows):
