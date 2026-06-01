@@ -29,7 +29,14 @@ def set_seed(seed):
 def create_detector(mode, yolo_model, conf, iou, imgsz):
     if mode == "mock":
         return MockPersonDetector(conf=conf)
+    if mode == "none":
+        return NoPersonDetector()
     return YoloPersonDetector(yolo_model, conf=conf, iou=iou, imgsz=imgsz)
+
+
+class NoPersonDetector:
+    def detect(self, frame, frame_idx, conf=None):
+        return {"frame_idx": int(frame_idx), "boxes": []}
 
 
 def full_frame_box(frame):
@@ -248,7 +255,7 @@ def main():
     parser.add_argument("--train-split", default="train")
     parser.add_argument("--val-split", default="val")
     parser.add_argument("--output-dir", default="runs/action_lstm")
-    parser.add_argument("--detector-mode", choices=["mock", "yolo"], default="mock")
+    parser.add_argument("--detector-mode", choices=["mock", "yolo", "none"], default="mock")
     parser.add_argument("--yolo-model", default="yolov8n.pt")
     parser.add_argument("--yolo-conf", type=float, default=0.25)
     parser.add_argument("--yolo-retry-conf", type=float, default=0.15)
