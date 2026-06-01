@@ -48,6 +48,7 @@ def parse_args():
     parser.add_argument("--hidden-size", type=int, default=128)
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--detector-conf", type=float, default=0.15, help="YOLO Pose detector confidence threshold.")
     parser.add_argument("--dry-run", action="store_true", help="Generate extractor sequence stats only; skip LSTM training.")
     return parser.parse_args()
 
@@ -66,10 +67,10 @@ def parse_model_specs(raw):
     return specs or MODEL_SPECS
 
 
-def create_pose_detector(mode, model_name, device, imgsz):
+def create_pose_detector(mode, model_name, device, imgsz, conf=0.25):
     if mode == "mock":
         return MockDetector(model_name="mock-pose-detector")
-    return YoloPoseDetector(model_name, device=device, imgsz=imgsz)
+    return YoloPoseDetector(model_name, device=device, imgsz=imgsz, conf=conf)
 
 
 def row_label_id(row):
@@ -182,6 +183,8 @@ def collect_split_sequences(rows, split_name, detector, args):
                     )
         except Exception as exc:
             clip["error"] = str(exc)
+        if clip["frames_processed"] == 0 and not clip["error"]:
+            clip["error"] = "zero_frames_decoded (가능성: 코덱 불일치 또는 비디오 인코딩 오류)"
         clip["zero_sequence"] = clip["generated_sequences"] == 0
         clip_summaries.append(clip)
 
@@ -326,7 +329,7 @@ def write_csv(path, rows):
 
 
 def compare_model(spec, rows, args, output_dir):
-    detector = create_pose_detector(args.detector_mode, spec["model"], args.device, args.imgsz)
+    detector = create_pose_detector(args.detector_mode, spec["model"], args.device, args.imgsz, conf=args.detector_conf)
     model_dir = output_dir / spec["label"]
     model_dir.mkdir(parents=True, exist_ok=True)
     train_x, train_y, train_clips, train_sequences, train_totals = collect_split_sequences(rows, args.train_split, detector, args)
