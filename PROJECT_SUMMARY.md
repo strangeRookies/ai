@@ -409,3 +409,31 @@ python -m ai.main \
 ```
 
 If `--action-model` is not provided, the pipeline still falls back to `MockActionClassifier` for integration smoke tests.
+
+## Dataset Split And 4-Camera Demo Checks
+
+Verify the local fall dataset split ratio and source-video leakage:
+
+```bash
+python scripts/check_dataset_split.py \
+  --metadata-csv ../ai_fall_experiments/data/metadata/metadata.csv
+```
+
+If the ratio or leakage is wrong, write a safe candidate split without overwriting production metadata:
+
+```bash
+python scripts/check_dataset_split.py \
+  --metadata-csv ../ai_fall_experiments/data/metadata/metadata.csv \
+  --write-fixed runs/dataset_split/metadata_stratified.csv
+```
+
+Run the safe 4-camera local dataset dry-run. This uses local/demo RTSP URLs from `configs/demo_4cams.yaml`, reads local dataset videos, prints bbox/event payloads in the summary, and does not contact MQTT/EQMS:
+
+```bash
+python scripts/run_rtsp_demo.py \
+  --config configs/demo_4cams.yaml \
+  --dataset-csv ../ai_fall_experiments/data/metadata/metadata.csv \
+  --dry-run \
+  --detector-mode mock \
+  --max-frames 60
+```

@@ -1,0 +1,21 @@
+cameras:
+  - camera_id: cam_01
+    name: Demo Camera 1
+    rtsp_url: rtsp://localhost:8554/cam1
+    location: Local dataset demo
+    enabled: true
+  - camera_id: cam_02
+    name: Demo Camera 2
+    rtsp_url: rtsp://localhost:8554/cam2
+    location: Local dataset demo
+    enabled: true
+  - camera_id: cam_03
+    name: Demo Camera 3
+    rtsp_url: rtsp://localhost:8554/cam3
+    location: Local dataset demo
+    enabled: true
+  - camera_id: cam_04
+    name: Demo Camera 4
+    rtsp_url: rtsp://localhost:8554/cam4
+    location: Local dataset demo
+    enabled: true
