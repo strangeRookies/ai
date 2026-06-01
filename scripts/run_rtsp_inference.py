@@ -15,10 +15,10 @@ from detector.mock_detector import MockDetector
 from detector.yolo_pose_detector import YoloPoseDetector
 
 
-def create_detector(mode, model, device):
+def create_detector(mode, model, device, imgsz=640):
     if mode == "mock":
         return MockDetector(model_name="mock-pose-detector")
-    return YoloPoseDetector(model, device=device)
+    return YoloPoseDetector(model, device=device, imgsz=imgsz)
 
 
 def create_classifier(action_model, device):
@@ -76,7 +76,7 @@ def ensure_mock_keypoints(detections):
 
 
 def run(args):
-    detector = create_detector(args.detector_mode, args.yolo_model, args.device)
+    detector = create_detector(args.detector_mode, args.yolo_model, args.device, getattr(args, "imgsz", 640))
     classifier, classifier_mode = create_classifier(args.action_model, args.action_device)
     keypoint_buffer = KeypointSequenceBuffer(args.sequence_length, args.sequence_stride)
     crop_buffer = CropSequenceBuffer(args.sequence_length, args.sequence_stride, args.resize_size) if args.action_model else None
@@ -167,6 +167,7 @@ def main():
     parser.add_argument("--overlay-output", default=None)
     parser.add_argument("--yolo-model", default="yolov8n-pose.pt")
     parser.add_argument("--device", default="auto")
+    parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--action-model", default=None)
     parser.add_argument("--action-device", default="auto")
     parser.add_argument("--sequence-length", type=int, default=8)

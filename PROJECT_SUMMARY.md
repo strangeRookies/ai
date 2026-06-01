@@ -105,6 +105,30 @@ benchmark/results/fall_candidate_diagnostics/overlays/<model>/frame_*.jpg
 
 Each row includes bbox `xyxy`, bbox width/height ratio, keypoint coordinates, keypoint confidence, fall-rule torso values, final candidate decision, and a result-format report for checking pixel vs normalized coordinates.
 
+### LSTM Pose Extractor Comparison
+
+Do not eliminate YOLO26n-pose only because `fall_candidate_count` is zero. That value is a rule-based diagnostic. Compare pose models as downstream LSTM keypoint extractors instead:
+
+```bash
+python benchmark/compare_lstm_extractors.py \
+  --metadata-csv ../ai_fall_experiments/data/metadata/metadata.csv \
+  --detector-mode real \
+  --models YOLOv11n-pose:yolo11n-pose.pt,YOLO26n-pose:yolo26n-pose.pt,YOLOv8s-pose:yolov8s-pose.pt \
+  --device 0 \
+  --imgsz 640 \
+  --max-rows-per-split 3 \
+  --max-frames 300 \
+  --epochs 1
+```
+
+For a preprocessing-only smoke test, add `--dry-run`. Results are written under:
+
+```text
+benchmark/results/lstm_extractor_comparison/
+```
+
+The comparison prioritizes Faint recall and stable sequence generation over temporary fall-candidate rule counts. It reports clips processed, person detections, keypoints extracted, generated sequences, zero-sequence clips, keypoint missing rate, fallback usage, LSTM accuracy, precision, recall, F1-score, and confusion matrix.
+
 ## Mock Edge AI MQTT Publisher
 
 `mock_edge_ai.py` publishes random safety event JSON messages to the MQTT topic used by the local development pipeline.

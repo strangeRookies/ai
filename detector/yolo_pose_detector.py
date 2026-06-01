@@ -1,7 +1,8 @@
 class YoloPoseDetector:
-    def __init__(self, model_name, device="auto"):
+    def __init__(self, model_name, device="auto", imgsz=640):
         self.model_name = model_name
         self.device = None if device == "auto" else device
+        self.imgsz = imgsz
         try:
             from ultralytics import YOLO
         except ImportError as exc:
@@ -13,7 +14,7 @@ class YoloPoseDetector:
             raise RuntimeError(f"Failed to load YOLO model '{model_name}': {exc}") from exc
 
     def detect(self, frame):
-        results = self.model.predict(frame, device=self.device, verbose=False)
+        results = self.model.predict(frame, device=self.device, imgsz=self.imgsz, verbose=False)
         detections = []
         for result in results:
             boxes = getattr(result, "boxes", None)

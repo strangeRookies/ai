@@ -148,7 +148,7 @@ class OverlayWorker:
         self.thread.join(timeout=3)
 
     def _run(self):
-        detector = create_detector(self.args.detector_mode, self.args.yolo_model, self.args.device)
+        detector = create_detector(self.args.detector_mode, self.args.yolo_model, self.args.device, self.args.imgsz)
         classifier, _classifier_mode = create_classifier(self.args.action_model, self.args.action_device)
         summary = initial_summary()
         while not self.stop_event.is_set():
@@ -241,6 +241,7 @@ def main():
     parser.add_argument("--detector-mode", choices=["real", "mock"], default="mock")
     parser.add_argument("--yolo-model", default="yolov8n-pose.pt")
     parser.add_argument("--device", default="auto")
+    parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--action-model", default=None)
     parser.add_argument("--action-device", default="auto")
     parser.add_argument("--sequence-length", type=int, default=8)
