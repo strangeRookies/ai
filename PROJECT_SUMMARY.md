@@ -80,6 +80,31 @@ The optional fall candidate rule uses COCO pose shoulder and hip keypoints. A pe
 
 This is a simple screening rule for model comparison, not a final safety decision engine.
 
+### Fall Candidate Diagnostics
+
+If one model reports unexpected `fall_candidate_count` values, inspect the rule inputs on the same sampled frames:
+
+```bash
+python benchmark/diagnose_fall_candidates.py \
+  --video sample_videos/full_demo.mp4 \
+  --models YOLOv8s-pose,YOLOv11n-pose,YOLO26n-pose \
+  --start-frame 7800 \
+  --end-frame 8200 \
+  --samples 10 \
+  --imgsz 640 \
+  --device 0
+```
+
+The diagnostic report writes:
+
+```text
+benchmark/results/fall_candidate_diagnostics/fall_candidate_diagnostics.csv
+benchmark/results/fall_candidate_diagnostics/fall_candidate_diagnostics.json
+benchmark/results/fall_candidate_diagnostics/overlays/<model>/frame_*.jpg
+```
+
+Each row includes bbox `xyxy`, bbox width/height ratio, keypoint coordinates, keypoint confidence, fall-rule torso values, final candidate decision, and a result-format report for checking pixel vs normalized coordinates.
+
 ## Mock Edge AI MQTT Publisher
 
 `mock_edge_ai.py` publishes random safety event JSON messages to the MQTT topic used by the local development pipeline.

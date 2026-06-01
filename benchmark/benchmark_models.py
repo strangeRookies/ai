@@ -190,7 +190,7 @@ def extract_pose_metrics(result, keypoint_conf_threshold):
         if visible.numel() > 0:
             keypoint_confidences.extend(visible.tolist())
 
-        if xy_tensor is not None and is_fall_candidate(xy_tensor[person_idx], kp_conf, keypoint_conf_threshold):
+        if xy_tensor is not None and evaluate_fall_candidate(xy_tensor[person_idx], kp_conf, keypoint_conf_threshold)["candidate"]:
             fall_candidates += 1
 
     return {
@@ -203,23 +203,75 @@ def extract_pose_metrics(result, keypoint_conf_threshold):
 
 
 def is_fall_candidate(keypoints_xy, keypoints_conf, threshold):
+    return evaluate_fall_candidate(keypoints_xy, keypoints_conf, threshold)["candidate"]
+
+
+def evaluate_fall_candidate(keypoints_xy, keypoints_conf, threshold):
     required = [COCO_LEFT_SHOULDER, COCO_RIGHT_SHOULDER, COCO_LEFT_HIP, COCO_RIGHT_HIP]
-    if any(idx >= keypoints_conf.numel() or float(keypoints_conf[idx]) < threshold for idx in required):
-        return False
+    details = {
+        "required_keypoints": required,
+        "threshold": float(threshold),
+        "required_confidences": {},
+        "missing_required": [],
+        "shoulder_center": None,
+        "hip_center": None,
+        "torso_dx": None,
+        "torso_dy": None,
+        "torso_ratio": None,
+        "candidate": False,
+        "reason": "",
+    }
+    for idx in required:
+        if idx >= tensor_len(keypoints_conf):
+            details["missing_required"].append(idx)
+            continue
+        conf = float(keypoints_conf[idx])
+        details["required_confidences"][str(idx)] = conf
+        if conf < threshold:
+            details["missing_required"].append(idx)
+    if details["missing_required"]:
+        details["reason"] = "required_keypoint_below_threshold_or_missing"
+        return details
 
     left_shoulder = keypoints_xy[COCO_LEFT_SHOULDER]
     right_shoulder = keypoints_xy[COCO_RIGHT_SHOULDER]
     left_hip = keypoints_xy[COCO_LEFT_HIP]
     right_hip = keypoints_xy[COCO_RIGHT_HIP]
 
-    shoulder_center = (left_shoulder + right_shoulder) / 2
-    hip_center = (left_hip + right_hip) / 2
+    shoulder_center = midpoint_xy(left_shoulder, right_shoulder)
+    hip_center = midpoint_xy(left_hip, right_hip)
     torso_dx = abs(float(shoulder_center[0] - hip_center[0]))
     torso_dy = abs(float(shoulder_center[1] - hip_center[1]))
+    torso_ratio = torso_dx / max(torso_dy, 1.0) if torso_dx > 0 else 0.0
+
+    details.update(
+        {
+            "shoulder_center": [float(shoulder_center[0]), float(shoulder_center[1])],
+            "hip_center": [float(hip_center[0]), float(hip_center[1])],
+            "torso_dx": torso_dx,
+            "torso_dy": torso_dy,
+            "torso_ratio": torso_ratio,
+        }
+    )
 
     if torso_dx <= 0:
-        return False
-    return torso_dx / max(torso_dy, 1.0) >= 1.3
+        details["reason"] = "zero_horizontal_torso_delta"
+        return details
+    details["candidate"] = torso_ratio >= 1.3
+    details["reason"] = "torso_ratio_pass" if details["candidate"] else "torso_ratio_below_1.3"
+    return details
+
+
+def tensor_len(value):
+    if hasattr(value, "numel"):
+        return int(value.numel())
+    return len(value)
+
+
+def midpoint_xy(first, second):
+    first_x, first_y = float(first[0]), float(first[1])
+    second_x, second_y = float(second[0]), float(second[1])
+    return ((first_x + second_x) / 2.0, (first_y + second_y) / 2.0)
 
 
 def mean_or_zero(values):
