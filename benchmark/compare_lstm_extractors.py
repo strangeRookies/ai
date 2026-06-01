@@ -148,7 +148,9 @@ def collect_split_sequences(rows, split_name, detector, args):
         try:
             with VideoReader(video_path) as reader:
                 start_frame = int(row.get("start_frame") or 0)
-                if start_frame > 0 and getattr(reader, "cap", None) is not None:
+                # 경로에 processed 또는 clips가 있으면 잘려진 32프레임짜리 클립이므로 점프하지 않습니다.
+                is_processed_clip = "processed" in str(video_path).lower() or "clips" in str(video_path).lower()
+                if start_frame > 0 and not is_processed_clip and getattr(reader, "cap", None) is not None:
                     reader.cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
                     reader.frame_idx = start_frame
                 while True:
