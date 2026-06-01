@@ -432,6 +432,19 @@ python scripts/run_dataset_rtsp_verification.py \
 
 The combined report is written to `runs/verification/final_summary.json`.
 
+Run a dataset pose/keypoint sequence dry-run without training:
+
+```bash
+python scripts/run_dataset_evaluation.py \
+  --metadata-csv ../ai_fall_experiments/data/metadata/metadata.csv \
+  --detector-mode mock \
+  --max-rows-per-split 2 \
+  --max-frames 60 \
+  --output runs/verification/dataset_evaluation_summary.json
+```
+
+This reports selected-row class counts, person bbox detections, keypoint extraction count, generated keypoint sequence count, zero-sequence clips, and fallback crop usage ratio.
+
 If the ratio or leakage is wrong, write a safe candidate split without overwriting production metadata:
 
 ```bash
