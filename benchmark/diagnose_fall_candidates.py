@@ -267,16 +267,78 @@ def print_diagnosis(rows):
         if row["candidate"]:
             stats["candidates"] += 1
         stats["reasons"][row["reason"]] = stats["reasons"].get(row["reason"], 0) + 1
-    print(json.dumps({"diagnosis_summary": by_model}, indent=2, ensure_ascii=False))
+    comparison = compare_yolo26_against_other_models(rows)
+    print(json.dumps({"diagnosis_summary": by_model, "cross_model_comparison": comparison}, indent=2, ensure_ascii=False))
     yolo26 = by_model.get("YOLO26n-pose")
-    if yolo26 and yolo26["people"] > 0 and yolo26["candidates"] == 0:
+    if comparison["other_models_candidate_frames"] and comparison["yolo26_people_frames"] and not comparison["yolo26_candidate_frames"]:
+        print(
+            "[diagnosis] Other models produced fall candidates on sampled frames, while YOLO26n detected people but never passed the current torso-ratio rule. "
+            "This points to rule/model-output incompatibility or different keypoint geometry rather than a simple missing-detection issue.",
+            flush=True,
+        )
+    elif yolo26 and yolo26["people"] > 0 and yolo26["candidates"] == 0:
         print(
             "[diagnosis] YOLO26n detected people/keypoints in sampled frames, but the torso-ratio fall rule never passed. "
-            "Inspect fall_rule.torso_ratio and required_confidences to decide whether the rule is too model-specific.",
+            "If other models also have zero candidates, the sampled section may not satisfy the current rule.",
             flush=True,
         )
     elif yolo26 and yolo26["people"] == 0:
         print("[diagnosis] YOLO26n produced no person rows in sampled frames; this points to detection/model loading rather than fall-rule incompatibility.", flush=True)
+
+
+def compare_yolo26_against_other_models(rows):
+    by_frame = {}
+    for row in rows:
+        frame = by_frame.setdefault(row["frame_idx"], {})
+        model = frame.setdefault(row["model_label"], {"people": 0, "candidate": False, "reasons": set(), "torso_ratios": []})
+        if row["person_idx"] is not None:
+            model["people"] += 1
+        if row["candidate"]:
+            model["candidate"] = True
+        if row.get("reason"):
+            model["reasons"].add(row["reason"])
+        torso_ratio = row.get("fall_rule", {}).get("torso_ratio")
+        if torso_ratio is not None:
+            model["torso_ratios"].append(float(torso_ratio))
+
+    other_candidate_frames = []
+    yolo26_people_frames = []
+    yolo26_candidate_frames = []
+    yolo26_false_while_other_true = []
+    yolo26_missing_while_other_true = []
+    frame_summaries = []
+    for frame_idx, models in sorted(by_frame.items()):
+        yolo26 = models.get("YOLO26n-pose", {"people": 0, "candidate": False, "reasons": set(), "torso_ratios": []})
+        other_candidate = any(label != "YOLO26n-pose" and item["candidate"] for label, item in models.items())
+        if other_candidate:
+            other_candidate_frames.append(frame_idx)
+        if yolo26["people"] > 0:
+            yolo26_people_frames.append(frame_idx)
+        if yolo26["candidate"]:
+            yolo26_candidate_frames.append(frame_idx)
+        if other_candidate and yolo26["people"] > 0 and not yolo26["candidate"]:
+            yolo26_false_while_other_true.append(frame_idx)
+        if other_candidate and yolo26["people"] == 0:
+            yolo26_missing_while_other_true.append(frame_idx)
+        frame_summaries.append(
+            {
+                "frame_idx": frame_idx,
+                "other_model_candidate": other_candidate,
+                "yolo26_people": yolo26["people"],
+                "yolo26_candidate": yolo26["candidate"],
+                "yolo26_reasons": sorted(yolo26["reasons"]),
+                "yolo26_torso_ratios": yolo26["torso_ratios"],
+            }
+        )
+
+    return {
+        "other_models_candidate_frames": other_candidate_frames,
+        "yolo26_people_frames": yolo26_people_frames,
+        "yolo26_candidate_frames": yolo26_candidate_frames,
+        "yolo26_false_while_other_model_true_frames": yolo26_false_while_other_true,
+        "yolo26_missing_while_other_model_true_frames": yolo26_missing_while_other_true,
+        "per_frame": frame_summaries,
+    }
 
 
 def main():
