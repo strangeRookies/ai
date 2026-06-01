@@ -7,7 +7,9 @@ VAL_SPLIT="${VAL_SPLIT:-val}"
 DETECTOR_MODE="${DETECTOR_MODE:-yolo}"
 DEVICE="${DEVICE:-auto}"
 YOLO_CONF="${YOLO_CONF:-0.15}"
+YOLO_RETRY_CONF="${YOLO_RETRY_CONF:-0.10}"
 YOLO_IOU="${YOLO_IOU:-0.5}"
+IMGSZ="${IMGSZ:-640}"
 FALLBACK_FULL_FRAME="${FALLBACK_FULL_FRAME:-true}"
 EPOCHS="${EPOCHS:-20}"
 SEQUENCE_LENGTH="${SEQUENCE_LENGTH:-16}"
@@ -41,7 +43,9 @@ for MODEL in "${MODELS[@]}"; do
     --detector-mode "${DETECTOR_MODE}" \
     --yolo-model "${MODEL}" \
     --yolo-conf "${YOLO_CONF}" \
+    --yolo-retry-conf "${YOLO_RETRY_CONF}" \
     --yolo-iou "${YOLO_IOU}" \
+    --imgsz "${IMGSZ}" \
     --device "${DEVICE}" \
     --epochs "${EPOCHS}" \
     --sequence-length "${SEQUENCE_LENGTH}" \

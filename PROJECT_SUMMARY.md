@@ -361,6 +361,7 @@ DATASET_CSV=../ai_fall_experiments/data/metadata/metadata.csv MAX_ROWS_PER_SPLIT
 ```
 
 If YOLO does not find a person in a short demo clip, the training script uses the whole frame as a fallback crop by default. Disable that behavior with `FALLBACK_FULL_FRAME=false`.
+The preprocessing step uses annotation `event_frame` ranges first when available, retries YOLO once with a lower confidence threshold, and writes detector/fallback metadata for every generated sequence.
 
 This writes checkpoints and a comparison table:
 
@@ -368,6 +369,8 @@ This writes checkpoints and a comparison table:
 runs/action_lstm/yolov8n/best.pt
 runs/action_lstm/yolo11n/best.pt
 runs/action_lstm/summary.csv
+runs/action_lstm/<model>/preprocess_sequences_train.csv
+runs/action_lstm/<model>/preprocess_summary_train.json
 ```
 
 Or run one model manually:

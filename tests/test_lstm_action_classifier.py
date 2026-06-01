@@ -3,7 +3,7 @@ import unittest
 import numpy as np
 
 from ai.action.classifier import crops_to_features
-from ai.action.train_lstm import load_training_rows
+from ai.action.train_lstm import load_training_rows, summarize_metadata, target_ranges_for_row
 
 
 class LSTMActionClassifierTest(unittest.TestCase):
@@ -35,6 +35,48 @@ class LSTMActionClassifierTest(unittest.TestCase):
 
         self.assertEqual(rows[0]["video_path"], "clip_a.mp4")
         self.assertEqual(rows[0]["label"], 1)
+
+    def test_event_frame_range_is_preferred(self):
+        import json
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            label_path = Path(tmp) / "label.json"
+            label_path.write_text(
+                json.dumps(
+                    {
+                        "metadata": {"file_name": "clip.mp4", "frame_count": 100},
+                        "annotations": {"event_class": "Faint", "event_frame": [[20, 40]]},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            row = {"label_path": str(label_path), "label": 1, "start_frame": 0, "end_frame": 99}
+
+            ranges = target_ranges_for_row(row)
+
+        self.assertEqual(ranges, [(20, 40, True)])
+
+    def test_preprocess_summary_reports_fallback_and_zero_sequence(self):
+        metadata = [
+            {
+                "crop_source": "fallback_full_frame",
+                "used_event_frame": True,
+            }
+        ]
+        clips = [
+            {"sequences_generated": 1, "skipped_frames_no_person": 2},
+            {"sequences_generated": 0, "skipped_frames_no_person": 3},
+        ]
+
+        summary = summarize_metadata(metadata, clips)
+
+        self.assertEqual(summary["total_sequences_generated"], 1)
+        self.assertEqual(summary["sequences_from_event_frame_ranges"], 1)
+        self.assertEqual(summary["sequences_using_fallback_full_frame_crops"], 1)
+        self.assertEqual(summary["zero_sequence_clips"], 1)
+        self.assertEqual(summary["skipped_frames_due_to_no_person"], 5)
 
 
 if __name__ == "__main__":

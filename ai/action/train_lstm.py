@@ -26,10 +26,10 @@ def set_seed(seed):
     torch.cuda.manual_seed_all(seed)
 
 
-def create_detector(mode, yolo_model, conf, iou):
+def create_detector(mode, yolo_model, conf, iou, imgsz):
     if mode == "mock":
         return MockPersonDetector(conf=conf)
-    return YoloPersonDetector(yolo_model, conf=conf, iou=iou)
+    return YoloPersonDetector(yolo_model, conf=conf, iou=iou, imgsz=imgsz)
 
 
 def full_frame_box(frame):
@@ -48,29 +48,118 @@ def load_training_rows(csv_path, split=None):
             if not video_path:
                 continue
             label_value = row.get("label")
+            annotation_path = row.get("label_path") or row.get("annotation_path", "")
             rows.append(
                 {
+                    "clip_id": row.get("clip_id") or Path(video_path).stem,
                     "video_path": video_path,
-                    "label_path": row.get("label_path", ""),
+                    "label_path": annotation_path,
                     "label": int(label_value) if label_value not in (None, "") else None,
+                    "label_name": row.get("label_name", ""),
+                    "event_class": row.get("event_class", ""),
+                    "start_frame": int(row.get("start_frame", 0) or 0),
+                    "end_frame": int(row.get("end_frame", 0) or 0),
                     "split": row.get("split", split or ""),
                 }
             )
     return rows
 
 
+def load_row_label(row):
+    label_path = row.get("label_path")
+    if label_path and Path(label_path).exists():
+        try:
+            return load_event_label(label_path)
+        except Exception:
+            return None
+    return None
+
+
 def row_is_active(row, frame_idx):
     if row.get("label") is not None:
         return int(row["label"]) == 1
-    return load_event_label(row["label_path"]).is_active(frame_idx)
+    label = load_row_label(row)
+    return bool(label and label.is_active(frame_idx))
 
 
-def collect_sequences(rows, args):
+def row_label_name(row):
+    if row.get("label_name"):
+        return row["label_name"]
+    if row.get("event_class"):
+        return row["event_class"]
+    return "Faint" if int(row.get("label") or 0) == 1 else "Normal"
+
+
+def target_ranges_for_row(row):
+    label = load_row_label(row)
+    if label and label.event_frames:
+        return [(max(0, int(start)), max(0, int(end)), True) for start, end in label.event_frames]
+    if int(row.get("label") or 0) == 1 and row.get("start_frame") is not None and row.get("end_frame"):
+        return [(max(0, int(row["start_frame"])), max(0, int(row["end_frame"])), False)]
+    return [(0, None, False)]
+
+
+def box_confidence(box):
+    return float(box.get("score", 0.0)) if box else None
+
+
+def detect_person(detector, frame, frame_idx, args):
+    detection = detector.detect(frame, frame_idx)
+    if detection["boxes"]:
+        return detection, False
+    if args.detector_mode == "yolo" and args.yolo_retry_conf < args.yolo_conf:
+        retry = detector.detect(frame, frame_idx, conf=args.yolo_retry_conf)
+        if retry["boxes"]:
+            return retry, True
+    return detection, False
+
+
+def summarize_metadata(sequence_metadata, clip_summaries):
+    total_sequences = len(sequence_metadata)
+    fallback_sequences = sum(1 for item in sequence_metadata if item["crop_source"] == "fallback_full_frame")
+    yolo_sequences = sum(1 for item in sequence_metadata if item["crop_source"] == "yolo_person_box")
+    event_sequences = sum(1 for item in sequence_metadata if item["used_event_frame"])
+    skipped_frames = sum(item.get("skipped_frames_no_person", 0) for item in clip_summaries)
+    zero_sequence_clips = sum(1 for item in clip_summaries if item["sequences_generated"] == 0)
+    return {
+        "total_clips_processed": len(clip_summaries),
+        "total_sequences_generated": total_sequences,
+        "sequences_from_event_frame_ranges": event_sequences,
+        "sequences_using_yolo_person_boxes": yolo_sequences,
+        "sequences_using_fallback_full_frame_crops": fallback_sequences,
+        "skipped_frames_due_to_no_person": skipped_frames,
+        "skipped_clips_due_to_no_person": zero_sequence_clips,
+        "zero_sequence_clips": zero_sequence_clips,
+        "fallback_ratio": round(fallback_sequences / total_sequences, 4) if total_sequences else 0.0,
+    }
+
+
+def write_preprocess_outputs(output_dir, split_name, sequence_metadata, clip_summaries, summary):
+    output_dir.mkdir(parents=True, exist_ok=True)
+    metadata_path = output_dir / f"preprocess_sequences_{split_name}.csv"
+    if sequence_metadata:
+        with metadata_path.open("w", encoding="utf-8", newline="") as fp:
+            writer = csv.DictWriter(fp, fieldnames=list(sequence_metadata[0].keys()))
+            writer.writeheader()
+            writer.writerows(sequence_metadata)
+    else:
+        metadata_path.write_text("", encoding="utf-8")
+    (output_dir / f"preprocess_clips_{split_name}.json").write_text(json.dumps(clip_summaries, indent=2), encoding="utf-8")
+    (output_dir / f"preprocess_summary_{split_name}.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+
+
+def collect_sequences(rows, args, split_name, output_dir):
     x_rows = []
     y_rows = []
-    detector = create_detector(args.detector_mode, args.yolo_model, args.yolo_conf, args.yolo_iou)
+    sequence_metadata = []
+    clip_summaries = []
+    detector = create_detector(args.detector_mode, args.yolo_model, args.yolo_conf, args.yolo_iou, args.imgsz)
     for row in rows:
         buffer = CropSequenceBuffer(args.sequence_length, args.sequence_stride, args.resize_size)
+        ranges = target_ranges_for_row(row)
+        clip_generated = 0
+        clip_skipped = 0
+        current_source_counts = {"yolo_person_box": 0, "fallback_full_frame": 0, "skipped_no_person": 0}
         with VideoReader(row["video_path"]) as reader:
             while True:
                 packet = reader.read()
@@ -78,17 +167,65 @@ def collect_sequences(rows, args):
                     break
                 if args.max_frames > 0 and packet.frame_idx >= args.max_frames:
                     break
-                detection = detector.detect(packet.frame, packet.frame_idx)
-                if args.fallback_full_frame and not detection["boxes"]:
+                active_ranges = [(start, end, used_event) for start, end, used_event in ranges if packet.frame_idx >= start and (end is None or packet.frame_idx <= end)]
+                if not active_ranges:
+                    continue
+                range_start, range_end, used_event_frame = active_ranges[0]
+                detection, retried = detect_person(detector, packet.frame, packet.frame_idx, args)
+                detected_person = bool(detection["boxes"])
+                crop_source = "yolo_person_box" if detected_person else "skipped_no_person"
+                if args.fallback_full_frame and not detected_person:
                     detection["boxes"] = [full_frame_box(packet.frame)]
+                    crop_source = "fallback_full_frame"
+                elif not detected_person:
+                    clip_skipped += 1
+                    current_source_counts["skipped_no_person"] += 1
+                    continue
                 sequence = buffer.add(packet.frame_idx, packet.frame, detection["boxes"])
                 if sequence is None:
                     continue
                 x_rows.append(crops_to_features(sequence["crops"], args.feature_size))
                 y_rows.append(1 if row_is_active(row, sequence["end_frame"]) else 0)
+                clip_generated += 1
+                current_source_counts[crop_source] += 1
+                sequence_metadata.append(
+                    {
+                        "clip_id": row.get("clip_id") or Path(row["video_path"]).stem,
+                        "video_filename": Path(row["video_path"]).name,
+                        "label": row.get("label"),
+                        "event_class": row_label_name(row),
+                        "frame_start": sequence["start_frame"],
+                        "frame_end": sequence["end_frame"],
+                        "target_range_start": range_start,
+                        "target_range_end": "" if range_end is None else range_end,
+                        "detected_person": detected_person,
+                        "crop_source": crop_source,
+                        "detector_confidence": "" if not detection["boxes"] else box_confidence(detection["boxes"][0]),
+                        "used_event_frame": used_event_frame,
+                        "retried_lower_conf": retried,
+                    }
+                )
+        clip_summaries.append(
+            {
+                "clip_id": row.get("clip_id") or Path(row["video_path"]).stem,
+                "video_filename": Path(row["video_path"]).name,
+                "label": row.get("label"),
+                "event_class": row_label_name(row),
+                "target_ranges": ranges,
+                "sequences_generated": clip_generated,
+                "skipped_frames_no_person": clip_skipped,
+                "source_counts": current_source_counts,
+                "zero_sequence": clip_generated == 0,
+            }
+        )
+    summary = summarize_metadata(sequence_metadata, clip_summaries)
+    write_preprocess_outputs(output_dir, split_name, sequence_metadata, clip_summaries, summary)
+    print(f"[preprocess:{split_name}] {json.dumps(summary, ensure_ascii=False)}", flush=True)
+    if summary["fallback_ratio"] >= args.high_fallback_ratio:
+        print("High fallback ratio detected. Detector recall must be improved before trusting model accuracy.", flush=True)
     if not x_rows:
         raise RuntimeError("No training sequences were generated. Check videos, labels, and detector settings.")
-    return np.stack(x_rows).astype(np.float32), np.asarray(y_rows, dtype=np.int64)
+    return np.stack(x_rows).astype(np.float32), np.asarray(y_rows, dtype=np.int64), summary
 
 
 def evaluate(model, loader, device):
@@ -106,16 +243,6 @@ def evaluate(model, loader, device):
 
 def main():
     global torch, nn, DataLoader, TensorDataset
-    import torch as torch_module
-    from torch import nn as nn_module
-    from torch.utils.data import DataLoader as data_loader_cls
-    from torch.utils.data import TensorDataset as tensor_dataset_cls
-
-    torch = torch_module
-    nn = nn_module
-    DataLoader = data_loader_cls
-    TensorDataset = tensor_dataset_cls
-
     parser = argparse.ArgumentParser(description="Train an LSTM action classifier from event-frame videos.")
     parser.add_argument("--dataset-csv", required=True)
     parser.add_argument("--train-split", default="train")
@@ -123,9 +250,12 @@ def main():
     parser.add_argument("--output-dir", default="runs/action_lstm")
     parser.add_argument("--detector-mode", choices=["mock", "yolo"], default="mock")
     parser.add_argument("--yolo-model", default="yolov8n.pt")
-    parser.add_argument("--yolo-conf", type=float, default=0.35)
+    parser.add_argument("--yolo-conf", type=float, default=0.25)
+    parser.add_argument("--yolo-retry-conf", type=float, default=0.15)
     parser.add_argument("--yolo-iou", type=float, default=0.5)
+    parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--fallback-full-frame", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--high-fallback-ratio", type=float, default=0.5)
     parser.add_argument("--sequence-length", type=int, default=16)
     parser.add_argument("--sequence-stride", type=int, default=8)
     parser.add_argument("--resize-size", type=int, default=224)
@@ -140,9 +270,21 @@ def main():
     parser.add_argument("--max-rows-per-split", type=int, default=0)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", default="auto")
+    parser.add_argument("--dry-run-preprocess", action="store_true")
     args = parser.parse_args()
 
-    set_seed(args.seed)
+    if not args.dry_run_preprocess:
+        import torch as torch_module
+        from torch import nn as nn_module
+        from torch.utils.data import DataLoader as data_loader_cls
+        from torch.utils.data import TensorDataset as tensor_dataset_cls
+
+        torch = torch_module
+        nn = nn_module
+        DataLoader = data_loader_cls
+        TensorDataset = tensor_dataset_cls
+
+        set_seed(args.seed)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -161,8 +303,11 @@ def main():
     if not val_rows:
         raise RuntimeError(f"No rows found for val split={args.val_split}")
 
-    train_x, train_y = collect_sequences(train_rows, args)
-    val_x, val_y = collect_sequences(val_rows, args)
+    train_x, train_y, train_summary = collect_sequences(train_rows, args, "train", output_dir)
+    val_x, val_y, val_summary = collect_sequences(val_rows, args, "val", output_dir)
+    if args.dry_run_preprocess:
+        print("[train-lstm] dry-run preprocess complete")
+        return
     train_loader = DataLoader(TensorDataset(torch.from_numpy(train_x), torch.from_numpy(train_y)), batch_size=args.batch_size, shuffle=True)
     val_loader = DataLoader(TensorDataset(torch.from_numpy(val_x), torch.from_numpy(val_y)), batch_size=args.batch_size)
 
@@ -210,6 +355,7 @@ def main():
                     "feature_size": args.feature_size,
                     "sequence_length": args.sequence_length,
                     "best_val_acc": best_acc,
+                    "preprocess_summary": {"train": train_summary, "val": val_summary},
                 },
                 output_dir / "best.pt",
             )
