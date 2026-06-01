@@ -488,6 +488,24 @@ python scripts/run_rtsp_inference.py \
 
 `serve_mjpeg.py` remains a raw RTSP-to-MJPEG stream server. It does not run YOLO/LSTM or draw overlays. The AI dry-run scripts above are the current local inference/event-output path.
 
+To view the actual cam1 video with AI overlays in a browser, run the separate local overlay server. This keeps the working raw MJPEG stream untouched:
+
+```bash
+python scripts/serve_ai_overlay.py \
+  --rtsp-url rtsp://localhost:8554/cam1 \
+  --detector-mode mock \
+  --port 8010 \
+  --print-events
+```
+
+Open:
+
+```text
+http://localhost:8010/stream
+```
+
+The overlay shows person bbox, skeleton/keypoints when present, current Normal/Faint-style action label, confidence, frame count, bbox count, keypoint count, sequence count, prediction count, and event count. Use `--detector-mode real --yolo-model yolov8n-pose.pt` when YOLO Pose dependencies and model files are available.
+
 The dry-run prints an RTSP publish plan using local-only URLs. To actually publish the four local videos to MediaMTX on the GPU PC, start the local RTSP server first, then opt in explicitly:
 
 ```bash
