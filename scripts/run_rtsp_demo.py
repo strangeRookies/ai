@@ -17,15 +17,33 @@ from ai.streams.video_reader import VideoReader
 def read_dataset_videos(path, limit):
     if not path or not Path(path).exists():
         return []
+    metadata_path = Path(path).resolve()
+    base_dirs = [Path.cwd(), metadata_path.parent, metadata_path.parent.parent, metadata_path.parent.parent.parent]
     videos = []
     with Path(path).open("r", encoding="utf-8-sig", newline="") as fp:
         for row in csv.DictReader(fp):
             video = row.get("video_path") or row.get("clip_path")
-            if video and Path(video).exists():
-                videos.append(video)
+            resolved = resolve_existing_video(video, base_dirs)
+            if resolved:
+                videos.append(str(resolved))
             if len(videos) >= limit:
                 break
     return videos
+
+
+def resolve_existing_video(video, base_dirs):
+    if not video:
+        return None
+    raw = Path(video)
+    if raw.exists():
+        return raw.resolve()
+    if raw.is_absolute():
+        return None
+    for base_dir in base_dirs:
+        candidate = base_dir / raw
+        if candidate.exists():
+            return candidate.resolve()
+    return None
 
 
 def load_config(path):
@@ -86,7 +104,9 @@ def process_camera(camera, video_path, args):
         "input_mode": "rtsp" if args.read_from_rtsp else "local_file",
         "frames_processed": 0,
         "bbox_detections": 0,
+        "keypoints_extracted": 0,
         "generated_sequences": 0,
+        "lstm_predictions": 0,
         "events_generated": 0,
         "decoding_errors": 0,
         "sample_event": None,
@@ -104,6 +124,7 @@ def process_camera(camera, video_path, args):
                 boxes = detection["boxes"]
                 summary["frames_processed"] += 1
                 summary["bbox_detections"] += len(boxes)
+                summary["keypoints_extracted"] += sum(1 for box in boxes if box.get("keypoints"))
                 sequence = sequence_buffer.add(packet.frame_idx, packet.frame, boxes)
                 if sequence is None:
                     continue
@@ -111,6 +132,7 @@ def process_camera(camera, video_path, args):
                 prediction = classifier.predict(sequence)
                 if not prediction:
                     continue
+                summary["lstm_predictions"] += 1
                 payload = build_event_payload(
                     camera_id=camera["camera_id"],
                     frame_idx=packet.frame_idx,
@@ -216,7 +238,9 @@ def main():
         "totals": {
             "frames_processed": sum(item["frames_processed"] for item in results),
             "bbox_detections": sum(item["bbox_detections"] for item in results),
+            "keypoints_extracted": sum(item["keypoints_extracted"] for item in results),
             "generated_sequences": sum(item["generated_sequences"] for item in results),
+            "lstm_predictions": sum(item["lstm_predictions"] for item in results),
             "events_generated": sum(item["events_generated"] for item in results),
             "failed_cameras": sum(1 for item in results if item["decoding_errors"]),
         },

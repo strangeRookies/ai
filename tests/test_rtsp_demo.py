@@ -44,6 +44,24 @@ class RtspDemoTest(unittest.TestCase):
 
         self.assertEqual(len(videos), 1)
 
+    def test_read_dataset_videos_resolves_paths_from_metadata_project_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            video = root / "data" / "clips" / "sample.avi"
+            video.parent.mkdir(parents=True)
+            video.write_bytes(b"placeholder")
+            metadata_dir = root / "data" / "metadata"
+            metadata_dir.mkdir(parents=True)
+            metadata = metadata_dir / "metadata.csv"
+            with metadata.open("w", encoding="utf-8", newline="") as fp:
+                writer = csv.DictWriter(fp, fieldnames=["clip_path"])
+                writer.writeheader()
+                writer.writerow({"clip_path": "data/clips/sample.avi"})
+
+            videos = read_dataset_videos(metadata, 1)
+
+        self.assertEqual(len(videos), 1)
+
     def test_publisher_command_uses_local_rtsp_path(self):
         command = publisher_command("sample.mp4", {"rtsp_url": "rtsp://localhost:8554/cam3"})
 
@@ -77,6 +95,8 @@ class RtspDemoTest(unittest.TestCase):
 
         self.assertEqual(summary["input_mode"], "local_file")
         self.assertEqual(summary["frames_processed"], 3)
+        self.assertIn("keypoints_extracted", summary)
+        self.assertIn("lstm_predictions", summary)
 
 
 if __name__ == "__main__":

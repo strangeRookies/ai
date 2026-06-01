@@ -451,6 +451,30 @@ python scripts/run_rtsp_demo.py \
   --max-frames 60
 ```
 
+Run a single-camera RTSP AI inference dry-run against the local MediaMTX cam1 stream:
+
+```bash
+python scripts/run_rtsp_inference.py \
+  --rtsp-url rtsp://localhost:8554/cam1 \
+  --detector-mode mock \
+  --dry-run \
+  --max-frames 60 \
+  --output runs/verification/rtsp_cam1_inference.json
+```
+
+Use the real YOLO pose detector when the pose model and dependencies are available:
+
+```bash
+python scripts/run_rtsp_inference.py \
+  --rtsp-url rtsp://localhost:8554/cam1 \
+  --detector-mode real \
+  --yolo-model yolov8n-pose.pt \
+  --dry-run \
+  --max-frames 60
+```
+
+`serve_mjpeg.py` remains a raw RTSP-to-MJPEG stream server. It does not run YOLO/LSTM or draw overlays. The AI dry-run scripts above are the current local inference/event-output path.
+
 The dry-run prints an RTSP publish plan using local-only URLs. To actually publish the four local videos to MediaMTX on the GPU PC, start the local RTSP server first, then opt in explicitly:
 
 ```bash

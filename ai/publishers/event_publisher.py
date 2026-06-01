@@ -18,6 +18,8 @@ def build_event_payload(camera_id, frame_idx, timestamp, event_type, score, boxe
         "timestamp": float(timestamp),
         "event_type": event_type,
         "score": float(score),
+        "confidence": float(score),
         "boxes": boxes,
+        "bbox": boxes[0] if boxes else None,
         "snapshot_path": snapshot_path,
     }
