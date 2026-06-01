@@ -360,6 +360,8 @@ For a quick demo run, limit rows, frames, and epochs:
 DATASET_CSV=../ai_fall_experiments/data/metadata/metadata.csv MAX_ROWS_PER_SPLIT=3 MAX_FRAMES=120 EPOCHS=1 bash scripts/run_yolov8n_vs_yolo11n_lstm.sh
 ```
 
+If YOLO does not find a person in a short demo clip, the training script uses the whole frame as a fallback crop by default. Disable that behavior with `FALLBACK_FULL_FRAME=false`.
+
 This writes checkpoints and a comparison table:
 
 ```text

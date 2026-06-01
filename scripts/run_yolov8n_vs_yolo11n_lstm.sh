@@ -6,6 +6,9 @@ TRAIN_SPLIT="${TRAIN_SPLIT:-train}"
 VAL_SPLIT="${VAL_SPLIT:-val}"
 DETECTOR_MODE="${DETECTOR_MODE:-yolo}"
 DEVICE="${DEVICE:-auto}"
+YOLO_CONF="${YOLO_CONF:-0.15}"
+YOLO_IOU="${YOLO_IOU:-0.5}"
+FALLBACK_FULL_FRAME="${FALLBACK_FULL_FRAME:-true}"
 EPOCHS="${EPOCHS:-20}"
 SEQUENCE_LENGTH="${SEQUENCE_LENGTH:-16}"
 SEQUENCE_STRIDE="${SEQUENCE_STRIDE:-8}"
@@ -22,6 +25,11 @@ MODELS=(
 
 mkdir -p runs/action_lstm
 
+FALLBACK_FLAG="--fallback-full-frame"
+if [ "${FALLBACK_FULL_FRAME}" = "false" ] || [ "${FALLBACK_FULL_FRAME}" = "0" ]; then
+  FALLBACK_FLAG="--no-fallback-full-frame"
+fi
+
 for MODEL in "${MODELS[@]}"; do
   MODEL_NAME="${MODEL%.pt}"
   OUT_DIR="runs/action_lstm/${MODEL_NAME}"
@@ -32,6 +40,8 @@ for MODEL in "${MODELS[@]}"; do
     --val-split "${VAL_SPLIT}" \
     --detector-mode "${DETECTOR_MODE}" \
     --yolo-model "${MODEL}" \
+    --yolo-conf "${YOLO_CONF}" \
+    --yolo-iou "${YOLO_IOU}" \
     --device "${DEVICE}" \
     --epochs "${EPOCHS}" \
     --sequence-length "${SEQUENCE_LENGTH}" \
@@ -41,6 +51,7 @@ for MODEL in "${MODELS[@]}"; do
     --batch-size "${BATCH_SIZE}" \
     --max-frames "${MAX_FRAMES}" \
     --max-rows-per-split "${MAX_ROWS_PER_SPLIT}" \
+    "${FALLBACK_FLAG}" \
     --output-dir "${OUT_DIR}"
 done
 

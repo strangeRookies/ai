@@ -32,6 +32,11 @@ def create_detector(mode, yolo_model, conf, iou):
     return YoloPersonDetector(yolo_model, conf=conf, iou=iou)
 
 
+def full_frame_box(frame):
+    height, width = frame.shape[:2]
+    return {"x1": 0.0, "y1": 0.0, "x2": float(width), "y2": float(height), "score": 0.0, "class_name": "fallback_frame"}
+
+
 def load_training_rows(csv_path, split=None):
     rows = []
     with open(csv_path, "r", encoding="utf-8-sig", newline="") as fp:
@@ -74,6 +79,8 @@ def collect_sequences(rows, args):
                 if args.max_frames > 0 and packet.frame_idx >= args.max_frames:
                     break
                 detection = detector.detect(packet.frame, packet.frame_idx)
+                if args.fallback_full_frame and not detection["boxes"]:
+                    detection["boxes"] = [full_frame_box(packet.frame)]
                 sequence = buffer.add(packet.frame_idx, packet.frame, detection["boxes"])
                 if sequence is None:
                     continue
@@ -118,6 +125,7 @@ def main():
     parser.add_argument("--yolo-model", default="yolov8n.pt")
     parser.add_argument("--yolo-conf", type=float, default=0.35)
     parser.add_argument("--yolo-iou", type=float, default=0.5)
+    parser.add_argument("--fallback-full-frame", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--sequence-length", type=int, default=16)
     parser.add_argument("--sequence-stride", type=int, default=8)
     parser.add_argument("--resize-size", type=int, default=224)
