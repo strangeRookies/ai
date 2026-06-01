@@ -419,6 +419,18 @@ python scripts/check_dataset_split.py \
   --metadata-csv ../ai_fall_experiments/data/metadata/metadata.csv
 ```
 
+Run split verification and the 4-camera dry-run together:
+
+```bash
+python scripts/run_dataset_rtsp_verification.py \
+  --metadata-csv ../ai_fall_experiments/data/metadata/metadata.csv \
+  --config configs/demo_4cams.yaml \
+  --detector-mode mock \
+  --max-frames 60
+```
+
+The combined report is written to `runs/verification/final_summary.json`.
+
 If the ratio or leakage is wrong, write a safe candidate split without overwriting production metadata:
 
 ```bash
