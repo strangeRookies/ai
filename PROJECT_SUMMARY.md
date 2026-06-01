@@ -447,5 +447,6 @@ python scripts/run_rtsp_demo.py \
   --dataset-csv ../ai_fall_experiments/data/metadata/metadata.csv \
   --dry-run \
   --start-rtsp-publishers \
+  --read-from-rtsp \
   --max-frames 60
 ```

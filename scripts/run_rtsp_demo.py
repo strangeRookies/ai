@@ -76,11 +76,14 @@ def process_camera(camera, video_path, args):
     detector = create_detector(args.detector_mode, args.yolo_model, args.yolo_conf, args.yolo_iou, args.imgsz)
     classifier = MockActionClassifier(default_label="Faint", score=0.80)
     sequence_buffer = CropSequenceBuffer(args.sequence_length, args.sequence_stride, args.resize_size)
+    input_uri = camera["rtsp_url"] if args.read_from_rtsp else video_path
     summary = {
         "camera_id": camera["camera_id"],
         "name": camera.get("name", ""),
         "rtsp_url": camera["rtsp_url"],
         "local_video": video_path,
+        "input_uri": input_uri,
+        "input_mode": "rtsp" if args.read_from_rtsp else "local_file",
         "frames_processed": 0,
         "bbox_detections": 0,
         "generated_sequences": 0,
@@ -90,7 +93,7 @@ def process_camera(camera, video_path, args):
         "alert_delivery_result": "local_log_dry_run" if args.dry_run else "local_log",
     }
     try:
-        with VideoReader(video_path) as reader:
+        with VideoReader(input_uri) as reader:
             while True:
                 packet = reader.read()
                 if packet is None:
@@ -169,6 +172,8 @@ def main():
     parser.add_argument("--sequence-stride", type=int, default=4)
     parser.add_argument("--resize-size", type=int, default=224)
     parser.add_argument("--start-rtsp-publishers", action="store_true")
+    parser.add_argument("--read-from-rtsp", action="store_true")
+    parser.add_argument("--output", default=None)
     args = parser.parse_args()
 
     config = load_config(args.config)
@@ -189,6 +194,8 @@ def main():
     publisher_processes = []
     if args.start_rtsp_publishers:
         publisher_processes = start_publishers(cameras, videos)
+    if args.read_from_rtsp and not args.start_rtsp_publishers:
+        print("[rtsp-demo] WARNING: --read-from-rtsp was set without --start-rtsp-publishers. Expect existing RTSP feeds.", file=sys.stderr)
 
     results = []
     try:
@@ -200,6 +207,7 @@ def main():
     final = {
         "config": args.config,
         "dry_run": args.dry_run,
+        "read_from_rtsp": args.read_from_rtsp,
         "rtsp_publish_plan": publish_plan,
         "rtsp_streams_configured": len(cameras),
         "rtsp_streams_started": len(publisher_processes),
@@ -213,6 +221,10 @@ def main():
             "failed_cameras": sum(1 for item in results if item["decoding_errors"]),
         },
     }
+    if args.output:
+        output_path = Path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(json.dumps(final, indent=2, ensure_ascii=False), encoding="utf-8")
     print(json.dumps(final, indent=2, ensure_ascii=False))
 
 

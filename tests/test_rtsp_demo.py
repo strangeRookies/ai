@@ -5,7 +5,9 @@ from pathlib import Path
 
 import numpy as np
 
-from scripts.run_rtsp_demo import load_demo_camera_yaml_without_pyyaml, publisher_command, read_dataset_videos
+from argparse import Namespace
+
+from scripts.run_rtsp_demo import load_demo_camera_yaml_without_pyyaml, process_camera, publisher_command, read_dataset_videos
 
 
 class RtspDemoTest(unittest.TestCase):
@@ -46,6 +48,35 @@ class RtspDemoTest(unittest.TestCase):
         command = publisher_command("sample.mp4", {"rtsp_url": "rtsp://localhost:8554/cam3"})
 
         self.assertEqual(command, ["bash", "scripts/publish_sample_video.sh", "sample.mp4", "cam3"])
+
+    def test_process_camera_records_local_input_mode(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            video = root / "sample.avi"
+            import cv2
+
+            writer = cv2.VideoWriter(str(video), cv2.VideoWriter_fourcc(*"MJPG"), 10.0, (32, 32))
+            for _ in range(4):
+                writer.write(np.zeros((32, 32, 3), dtype=np.uint8))
+            writer.release()
+            args = Namespace(
+                detector_mode="mock",
+                yolo_model="yolov8n.pt",
+                yolo_conf=0.25,
+                yolo_iou=0.5,
+                imgsz=640,
+                sequence_length=2,
+                sequence_stride=1,
+                resize_size=32,
+                dry_run=True,
+                max_frames=3,
+                read_from_rtsp=False,
+            )
+
+            summary = process_camera({"camera_id": "cam_01", "name": "Demo", "rtsp_url": "rtsp://localhost:8554/cam1"}, str(video), args)
+
+        self.assertEqual(summary["input_mode"], "local_file")
+        self.assertEqual(summary["frames_processed"], 3)
 
 
 if __name__ == "__main__":
