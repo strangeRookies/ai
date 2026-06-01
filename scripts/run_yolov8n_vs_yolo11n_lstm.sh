@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DATASET_CSV="${DATASET_CSV:-datasets/processed/clips_train.csv}"
+DATASET_CSV="${DATASET_CSV:-../ai_fall_experiments/data/metadata/metadata.csv}"
 TRAIN_SPLIT="${TRAIN_SPLIT:-train}"
 VAL_SPLIT="${VAL_SPLIT:-val}"
 DETECTOR_MODE="${DETECTOR_MODE:-yolo}"

@@ -357,7 +357,7 @@ bash scripts/run_yolov8n_vs_yolo11n_lstm.sh
 For a quick demo run, limit rows, frames, and epochs:
 
 ```bash
-MAX_ROWS_PER_SPLIT=3 MAX_FRAMES=120 EPOCHS=1 bash scripts/run_yolov8n_vs_yolo11n_lstm.sh
+DATASET_CSV=../ai_fall_experiments/data/metadata/metadata.csv MAX_ROWS_PER_SPLIT=3 MAX_FRAMES=120 EPOCHS=1 bash scripts/run_yolov8n_vs_yolo11n_lstm.sh
 ```
 
 This writes checkpoints and a comparison table:

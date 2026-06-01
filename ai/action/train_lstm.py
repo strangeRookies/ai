@@ -1,18 +1,22 @@
 import argparse
+import csv
 import json
 import random
 from pathlib import Path
 
 import numpy as np
-import torch
-from torch import nn
-from torch.utils.data import DataLoader, TensorDataset
 
 from ai.action.classifier import LSTMActionModel, crops_to_features
 from ai.action.sequence_buffer import CropSequenceBuffer
 from ai.detection.yolo_person_detector import MockPersonDetector, YoloPersonDetector
-from ai.labels.event_label_loader import load_dataset_rows, load_event_label
+from ai.labels.event_label_loader import load_event_label
 from ai.streams.video_reader import VideoReader
+
+
+torch = None
+nn = None
+DataLoader = None
+TensorDataset = None
 
 
 def set_seed(seed):
@@ -28,12 +32,39 @@ def create_detector(mode, yolo_model, conf, iou):
     return YoloPersonDetector(yolo_model, conf=conf, iou=iou)
 
 
+def load_training_rows(csv_path, split=None):
+    rows = []
+    with open(csv_path, "r", encoding="utf-8-sig", newline="") as fp:
+        reader = csv.DictReader(fp)
+        for row in reader:
+            if split and row.get("split") and row.get("split") != split:
+                continue
+            video_path = row.get("video_path") or row.get("clip_path")
+            if not video_path:
+                continue
+            label_value = row.get("label")
+            rows.append(
+                {
+                    "video_path": video_path,
+                    "label_path": row.get("label_path", ""),
+                    "label": int(label_value) if label_value not in (None, "") else None,
+                    "split": row.get("split", split or ""),
+                }
+            )
+    return rows
+
+
+def row_is_active(row, frame_idx):
+    if row.get("label") is not None:
+        return int(row["label"]) == 1
+    return load_event_label(row["label_path"]).is_active(frame_idx)
+
+
 def collect_sequences(rows, args):
     x_rows = []
     y_rows = []
     detector = create_detector(args.detector_mode, args.yolo_model, args.yolo_conf, args.yolo_iou)
     for row in rows:
-        label = load_event_label(row["label_path"])
         buffer = CropSequenceBuffer(args.sequence_length, args.sequence_stride, args.resize_size)
         with VideoReader(row["video_path"]) as reader:
             while True:
@@ -47,7 +78,7 @@ def collect_sequences(rows, args):
                 if sequence is None:
                     continue
                 x_rows.append(crops_to_features(sequence["crops"], args.feature_size))
-                y_rows.append(1 if label.is_active(sequence["end_frame"]) else 0)
+                y_rows.append(1 if row_is_active(row, sequence["end_frame"]) else 0)
     if not x_rows:
         raise RuntimeError("No training sequences were generated. Check videos, labels, and detector settings.")
     return np.stack(x_rows).astype(np.float32), np.asarray(y_rows, dtype=np.int64)
@@ -67,6 +98,17 @@ def evaluate(model, loader, device):
 
 
 def main():
+    global torch, nn, DataLoader, TensorDataset
+    import torch as torch_module
+    from torch import nn as nn_module
+    from torch.utils.data import DataLoader as data_loader_cls
+    from torch.utils.data import TensorDataset as tensor_dataset_cls
+
+    torch = torch_module
+    nn = nn_module
+    DataLoader = data_loader_cls
+    TensorDataset = tensor_dataset_cls
+
     parser = argparse.ArgumentParser(description="Train an LSTM action classifier from event-frame videos.")
     parser.add_argument("--dataset-csv", required=True)
     parser.add_argument("--train-split", default="train")
@@ -96,8 +138,13 @@ def main():
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    train_rows = load_dataset_rows(args.dataset_csv, split=args.train_split)
-    val_rows = load_dataset_rows(args.dataset_csv, split=args.val_split)
+    train_rows = load_training_rows(args.dataset_csv, split=args.train_split)
+    val_rows = load_training_rows(args.dataset_csv, split=args.val_split)
+    if not val_rows and args.val_split != args.train_split:
+        all_rows = load_training_rows(args.dataset_csv, split=None)
+        split_at = max(1, int(len(all_rows) * 0.8))
+        train_rows = all_rows[:split_at]
+        val_rows = all_rows[split_at:] or all_rows[-1:]
     if args.max_rows_per_split > 0:
         train_rows = train_rows[: args.max_rows_per_split]
         val_rows = val_rows[: args.max_rows_per_split]
