@@ -133,13 +133,21 @@ def main():
         "leakage_count": len(leaked),
         "leakage_examples": dict(list(leaked.items())[:5]),
     }
-    print(json.dumps(result, indent=2, ensure_ascii=False))
 
     if (not result["ratio_ok_approx"] or leaked) and args.write_fixed:
         fixed = stratified_group_split(read_rows(args.metadata_csv), seed=args.seed)
         write_rows(args.write_fixed, fixed)
         fixed_summary = summarize(fixed)
-        print(json.dumps({"fixed_output": args.write_fixed, "summary": fixed_summary}, indent=2, ensure_ascii=False))
+        fixed_leaked = leakage_report(fixed)
+        result["fixed_candidate"] = {
+            "output_csv": args.write_fixed,
+            "summary": fixed_summary,
+            "ratio_ok_approx": approximately_ok(fixed_summary),
+            "leakage_count": len(fixed_leaked),
+            "leakage_examples": dict(list(fixed_leaked.items())[:5]),
+        }
+
+    print(json.dumps(result, indent=2, ensure_ascii=False))
 
 
 if __name__ == "__main__":

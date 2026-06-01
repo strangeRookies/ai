@@ -1,4 +1,7 @@
 import csv
+import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -38,6 +41,39 @@ class DatasetSplitCheckTest(unittest.TestCase):
 
         self.assertEqual(leakage, {})
         self.assertTrue(all(row.get("split") in {"train", "test", "val"} for row in fixed))
+
+    def test_cli_write_fixed_outputs_single_json_with_candidate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            metadata = root / "metadata.csv"
+            fixed = root / "fixed.csv"
+            rows = [
+                {"clip_id": "a1", "source_video": "a.mp4", "label": "1", "label_name": "Faint", "split": "train"},
+                {"clip_id": "a2", "source_video": "a.mp4", "label": "1", "label_name": "Faint", "split": "test"},
+                {"clip_id": "b1", "source_video": "b.mp4", "label": "0", "label_name": "Normal", "split": "val"},
+            ]
+            with metadata.open("w", encoding="utf-8", newline="") as fp:
+                writer = csv.DictWriter(fp, fieldnames=list(rows[0].keys()))
+                writer.writeheader()
+                writer.writerows(rows)
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/check_dataset_split.py",
+                    "--metadata-csv",
+                    str(metadata),
+                    "--write-fixed",
+                    str(fixed),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            payload = json.loads(completed.stdout)
+            self.assertTrue(fixed.exists())
+
+        self.assertIn("fixed_candidate", payload)
 
 
 if __name__ == "__main__":

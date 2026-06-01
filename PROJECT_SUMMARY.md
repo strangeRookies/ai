@@ -426,7 +426,8 @@ python scripts/run_dataset_rtsp_verification.py \
   --metadata-csv ../ai_fall_experiments/data/metadata/metadata.csv \
   --config configs/demo_4cams.yaml \
   --detector-mode mock \
-  --max-frames 60
+  --max-frames 60 \
+  --write-fixed-split runs/dataset_split/metadata_stratified.csv
 ```
 
 The combined report is written to `runs/verification/final_summary.json`.

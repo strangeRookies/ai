@@ -22,6 +22,7 @@ def main():
     parser.add_argument("--detector-mode", choices=["mock", "yolo"], default="mock")
     parser.add_argument("--sequence-length", type=int, default=8)
     parser.add_argument("--sequence-stride", type=int, default=4)
+    parser.add_argument("--write-fixed-split", default=None)
     parser.add_argument("--start-rtsp-publishers", action="store_true")
     parser.add_argument("--read-from-rtsp", action="store_true")
     args = parser.parse_args()
@@ -36,6 +37,8 @@ def main():
         "--metadata-csv",
         args.metadata_csv,
     ]
+    if args.write_fixed_split:
+        split_command.extend(["--write-fixed", args.write_fixed_split])
     rtsp_command = [
         sys.executable,
         "scripts/run_rtsp_demo.py",
