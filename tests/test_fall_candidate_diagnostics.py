@@ -20,7 +20,7 @@ class FallCandidateDiagnosticsTest(unittest.TestCase):
                 "person_idx": 0,
                 "candidate": False,
                 "reason": "torso_ratio_below_1.3",
-                "fall_rule": {"torso_ratio": 0.9},
+                "fall_rule": {"torso_ratio": 0.9, "torso_angle_degrees": 48.0},
             },
         ]
 
@@ -31,6 +31,7 @@ class FallCandidateDiagnosticsTest(unittest.TestCase):
         self.assertEqual(comparison["yolo26_candidate_frames"], [])
         self.assertEqual(comparison["yolo26_false_while_other_model_true_frames"], [10])
         self.assertEqual(comparison["yolo26_missing_while_other_model_true_frames"], [])
+        self.assertEqual(comparison["per_frame"][0]["yolo26_torso_angles_degrees"], [48.0])
 
     def test_compare_yolo26_flags_missing_detection_when_others_candidate(self):
         rows = [

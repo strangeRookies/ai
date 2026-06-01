@@ -1,5 +1,6 @@
 import argparse
 import csv
+import math
 import statistics
 import sys
 import time
@@ -218,6 +219,14 @@ def evaluate_fall_candidate(keypoints_xy, keypoints_conf, threshold):
         "torso_dx": None,
         "torso_dy": None,
         "torso_ratio": None,
+        "torso_angle_degrees": None,
+        "torso_center": None,
+        "torso_center_y": None,
+        "uses_bbox_ratio": False,
+        "uses_center_height": False,
+        "uses_torso_angle": False,
+        "uses_torso_ratio": True,
+        "uses_confidence_threshold": True,
         "candidate": False,
         "reason": "",
     }
@@ -243,6 +252,8 @@ def evaluate_fall_candidate(keypoints_xy, keypoints_conf, threshold):
     torso_dx = abs(float(shoulder_center[0] - hip_center[0]))
     torso_dy = abs(float(shoulder_center[1] - hip_center[1]))
     torso_ratio = torso_dx / max(torso_dy, 1.0) if torso_dx > 0 else 0.0
+    torso_angle_degrees = math.degrees(math.atan2(torso_dy, torso_dx)) if torso_dx > 0 else 90.0
+    torso_center = ((shoulder_center[0] + hip_center[0]) / 2.0, (shoulder_center[1] + hip_center[1]) / 2.0)
 
     details.update(
         {
@@ -251,6 +262,9 @@ def evaluate_fall_candidate(keypoints_xy, keypoints_conf, threshold):
             "torso_dx": torso_dx,
             "torso_dy": torso_dy,
             "torso_ratio": torso_ratio,
+            "torso_angle_degrees": torso_angle_degrees,
+            "torso_center": [float(torso_center[0]), float(torso_center[1])],
+            "torso_center_y": float(torso_center[1]),
         }
     )
 

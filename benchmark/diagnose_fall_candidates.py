@@ -157,6 +157,8 @@ def analyze_result(result, frame_idx, model_label, loaded_name, threshold):
             fall_rule = {"candidate": False, "reason": "missing_keypoint_tensor"}
             keypoint_coordinates = []
             keypoint_confidence = []
+        fall_rule["bbox_width_height_ratio"] = bbox_wh_ratio
+        fall_rule["bbox_center_y"] = ((float(bbox[1]) + float(bbox[3])) / 2.0) if bbox else None
 
         rows.append(
             {
@@ -208,7 +210,11 @@ def draw_overlay(frame, rows, model_label, frame_idx, output_path):
             x1, y1, x2, y2 = map(int, bbox)
             color = (0, 0, 255) if row["candidate"] else (0, 255, 0)
             cv2.rectangle(image, (x1, y1), (x2, y2), color, 2)
-            text = f"{model_label} cand={row['candidate']} ratio={_fmt(row['fall_rule'].get('torso_ratio'))}"
+            text = (
+                f"{model_label} cand={row['candidate']} "
+                f"ratio={_fmt(row['fall_rule'].get('torso_ratio'))} "
+                f"angle={_fmt(row['fall_rule'].get('torso_angle_degrees'))}"
+            )
             cv2.putText(image, text, (x1, max(20, y1 - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2, cv2.LINE_AA)
         keypoints = row.get("keypoint_coordinates") or []
         confs = row.get("keypoint_confidence") or []
@@ -345,7 +351,7 @@ def compare_yolo26_against_other_models(rows):
     by_frame = {}
     for row in rows:
         frame = by_frame.setdefault(row["frame_idx"], {})
-        model = frame.setdefault(row["model_label"], {"people": 0, "candidate": False, "reasons": set(), "torso_ratios": []})
+        model = frame.setdefault(row["model_label"], {"people": 0, "candidate": False, "reasons": set(), "torso_ratios": [], "torso_angles": []})
         if row["person_idx"] is not None:
             model["people"] += 1
         if row["candidate"]:
@@ -355,6 +361,9 @@ def compare_yolo26_against_other_models(rows):
         torso_ratio = row.get("fall_rule", {}).get("torso_ratio")
         if torso_ratio is not None:
             model["torso_ratios"].append(float(torso_ratio))
+        torso_angle = row.get("fall_rule", {}).get("torso_angle_degrees")
+        if torso_angle is not None:
+            model["torso_angles"].append(float(torso_angle))
 
     other_candidate_frames = []
     yolo26_people_frames = []
@@ -363,7 +372,7 @@ def compare_yolo26_against_other_models(rows):
     yolo26_missing_while_other_true = []
     frame_summaries = []
     for frame_idx, models in sorted(by_frame.items()):
-        yolo26 = models.get("YOLO26n-pose", {"people": 0, "candidate": False, "reasons": set(), "torso_ratios": []})
+        yolo26 = models.get("YOLO26n-pose", {"people": 0, "candidate": False, "reasons": set(), "torso_ratios": [], "torso_angles": []})
         other_candidate = any(label != "YOLO26n-pose" and item["candidate"] for label, item in models.items())
         if other_candidate:
             other_candidate_frames.append(frame_idx)
@@ -383,6 +392,7 @@ def compare_yolo26_against_other_models(rows):
                 "yolo26_candidate": yolo26["candidate"],
                 "yolo26_reasons": sorted(yolo26["reasons"]),
                 "yolo26_torso_ratios": yolo26["torso_ratios"],
+                "yolo26_torso_angles_degrees": yolo26["torso_angles"],
             }
         )
 

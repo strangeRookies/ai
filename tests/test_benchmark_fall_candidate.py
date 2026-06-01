@@ -17,6 +17,12 @@ class BenchmarkFallCandidateTest(unittest.TestCase):
         self.assertTrue(details["candidate"])
         self.assertEqual(details["reason"], "torso_ratio_pass")
         self.assertGreater(details["torso_ratio"], 1.3)
+        self.assertLess(details["torso_angle_degrees"], 45.0)
+        self.assertFalse(details["uses_bbox_ratio"])
+        self.assertFalse(details["uses_center_height"])
+        self.assertFalse(details["uses_torso_angle"])
+        self.assertTrue(details["uses_torso_ratio"])
+        self.assertTrue(details["uses_confidence_threshold"])
         self.assertTrue(is_fall_candidate(keypoints, conf, 0.3))
 
     def test_fall_candidate_reports_low_required_confidence(self):
