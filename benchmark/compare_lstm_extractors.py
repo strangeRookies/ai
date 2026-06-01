@@ -147,6 +147,10 @@ def collect_split_sequences(rows, split_name, detector, args):
         shape_buffer = []
         try:
             with VideoReader(video_path) as reader:
+                start_frame = int(row.get("start_frame") or 0)
+                if start_frame > 0 and getattr(reader, "cap", None) is not None:
+                    reader.cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+                    reader.frame_idx = start_frame
                 while True:
                     packet = reader.read()
                     if packet is None:
