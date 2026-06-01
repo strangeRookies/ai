@@ -1,6 +1,7 @@
 import argparse
 import csv
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -127,6 +128,32 @@ def process_camera(camera, video_path, args):
     return summary
 
 
+def rtsp_path(rtsp_url):
+    return rtsp_url.rstrip("/").split("/")[-1]
+
+
+def publisher_command(video_path, camera):
+    return ["bash", "scripts/publish_sample_video.sh", video_path, rtsp_path(camera["rtsp_url"])]
+
+
+def start_publishers(cameras, videos):
+    processes = []
+    for camera, video in zip(cameras, videos):
+        processes.append(subprocess.Popen(publisher_command(video, camera)))
+    return processes
+
+
+def stop_publishers(processes):
+    for process in processes:
+        if process.poll() is None:
+            process.terminate()
+    for process in processes:
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+
+
 def main():
     parser = argparse.ArgumentParser(description="Run a safe local 4-camera RTSP demo dry-run.")
     parser.add_argument("--config", default="configs/demo_4cams.yaml")
@@ -141,6 +168,7 @@ def main():
     parser.add_argument("--sequence-length", type=int, default=8)
     parser.add_argument("--sequence-stride", type=int, default=4)
     parser.add_argument("--resize-size", type=int, default=224)
+    parser.add_argument("--start-rtsp-publishers", action="store_true")
     args = parser.parse_args()
 
     config = load_config(args.config)
@@ -149,15 +177,32 @@ def main():
     if len(videos) < len(cameras):
         raise RuntimeError(f"Need {len(cameras)} local videos, found {len(videos)} in {args.dataset_csv}")
 
+    publish_plan = [
+        {
+            "camera_id": camera["camera_id"],
+            "rtsp_url": camera["rtsp_url"],
+            "local_video": video,
+            "command": " ".join(publisher_command(video, camera)),
+        }
+        for camera, video in zip(cameras, videos)
+    ]
+    publisher_processes = []
+    if args.start_rtsp_publishers:
+        publisher_processes = start_publishers(cameras, videos)
+
     results = []
-    for camera, video in zip(cameras, videos):
-        results.append(process_camera(camera, video, args))
+    try:
+        for camera, video in zip(cameras, videos):
+            results.append(process_camera(camera, video, args))
+    finally:
+        stop_publishers(publisher_processes)
 
     final = {
         "config": args.config,
         "dry_run": args.dry_run,
+        "rtsp_publish_plan": publish_plan,
         "rtsp_streams_configured": len(cameras),
-        "rtsp_streams_started": 0 if args.dry_run else len(cameras),
+        "rtsp_streams_started": len(publisher_processes),
         "messaging_architecture": "local_log_dry_run; MQTT/EQMS path not contacted",
         "cameras": results,
         "totals": {

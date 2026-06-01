@@ -437,3 +437,15 @@ python scripts/run_rtsp_demo.py \
   --detector-mode mock \
   --max-frames 60
 ```
+
+The dry-run prints an RTSP publish plan using local-only URLs. To actually publish the four local videos to MediaMTX on the GPU PC, start the local RTSP server first, then opt in explicitly:
+
+```bash
+./scripts/run_rtsp_server.sh
+python scripts/run_rtsp_demo.py \
+  --config configs/demo_4cams.yaml \
+  --dataset-csv ../ai_fall_experiments/data/metadata/metadata.csv \
+  --dry-run \
+  --start-rtsp-publishers \
+  --max-frames 60
+```
