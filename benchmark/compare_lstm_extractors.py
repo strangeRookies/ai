@@ -60,6 +60,8 @@ def parse_args():
     parser.add_argument("--no-cpu-fallback", action="store_true", help="Fail LSTM training when CUDA is requested but unavailable.")
     parser.add_argument("--prefilter-normal-clips", action="store_true", help="Use the first configured detector to keep Normal clip candidates only when person/keypoint signal is present.")
     parser.add_argument("--prefilter-max-frames", type=int, default=120, help="Maximum frames per Normal candidate during prefiltering.")
+    parser.add_argument("--audit-thresholds", default="0.3,0.4,0.5,0.6,0.7", help="Comma-separated Faint probability thresholds for prediction audit.")
+    parser.add_argument("--repeat-seeds", type=int, default=1, help="Train/evaluate LSTM repeatedly for N deterministic seeds and report recall/F1 mean/std.")
     return parser.parse_args()
 
 
@@ -431,19 +433,27 @@ def summarize_split(rows, y_rows, totals, requested_class_counts=None):
     }
 
 
-def train_and_evaluate(train_x, train_y, eval_x, eval_y, args, output_dir):
+def parse_thresholds(raw):
+    thresholds = []
+    for item in str(raw).split(","):
+        item = item.strip()
+        if not item:
+            continue
+        thresholds.append(round(float(item), 6))
+    return thresholds or [0.5]
+
+
+def train_and_evaluate(train_x, train_y, eval_x, eval_y, eval_sequences, args, output_dir):
     import torch
-    from torch import nn
     from torch.utils.data import DataLoader, TensorDataset
 
-    set_seed(args.seed, torch)
     resolved_device = normalize_torch_device(args.device, torch, no_cpu_fallback=args.no_cpu_fallback)
     device = torch.device(resolved_device)
     train_tensor = torch.from_numpy(np.stack(train_x).astype(np.float32))
     train_labels = torch.from_numpy(np.asarray(train_y, dtype=np.int64))
     eval_tensor = torch.from_numpy(np.stack(eval_x).astype(np.float32))
     eval_labels = torch.from_numpy(np.asarray(eval_y, dtype=np.int64))
-    train_loader = DataLoader(TensorDataset(train_tensor, train_labels), batch_size=args.batch_size, shuffle=True)
+    train_dataset = TensorDataset(train_tensor, train_labels)
     eval_loader = DataLoader(TensorDataset(eval_tensor, eval_labels), batch_size=args.batch_size)
     model_config = {
         "input_size": int(train_tensor.shape[-1]),
@@ -452,6 +462,40 @@ def train_and_evaluate(train_x, train_y, eval_x, eval_y, args, output_dir):
         "num_classes": 2,
         "dropout": 0.0,
     }
+    thresholds = parse_thresholds(args.audit_thresholds)
+    seed_metrics = []
+    base_metrics = None
+    repeat_count = max(1, int(args.repeat_seeds))
+    for offset in range(repeat_count):
+        seed = int(args.seed) + offset
+        set_seed(seed, torch)
+        generator = torch.Generator()
+        generator.manual_seed(seed)
+        train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, generator=generator)
+        current_metrics = train_single_lstm(
+            train_loader=train_loader,
+            eval_loader=eval_loader,
+            model_config=model_config,
+            device=device,
+            args=args,
+            output_dir=output_dir if offset == 0 else None,
+            thresholds=thresholds,
+            eval_sequences=eval_sequences,
+        )
+        seed_metrics.append({"seed": seed, "faint_recall": current_metrics.get("recall"), "f1_score": current_metrics.get("f1_score")})
+        if offset == 0:
+            base_metrics = current_metrics
+    metrics = base_metrics or empty_metrics()
+    metrics["torch_device"] = str(device)
+    metrics["warnings"] = torch_device_warnings(args.device, torch, resolved_device)
+    metrics["repeated_seed_audit"] = repeated_seed_audit(seed_metrics)
+    return metrics
+
+
+def train_single_lstm(train_loader, eval_loader, model_config, device, args, output_dir, thresholds, eval_sequences):
+    import torch
+    from torch import nn
+
     model = LSTMActionModel(**model_config).model.to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
     criterion = nn.CrossEntropyLoss()
@@ -472,12 +516,23 @@ def train_and_evaluate(train_x, train_y, eval_x, eval_y, args, output_dir):
         metrics = evaluate_lstm(model, eval_loader, device)
         record = {"epoch": epoch, "train_loss": total_loss / max(1, total), **metrics}
         history.append(record)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    torch.save({"model_state": model.state_dict(), "model_config": model_config, "classes": ["Normal", "Faint"]}, output_dir / "best.pt")
-    (output_dir / "history.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
-    metrics = history[-1] if history else empty_metrics()
-    metrics["torch_device"] = str(device)
-    metrics["warnings"] = torch_device_warnings(args.device, torch, resolved_device)
+    if output_dir is not None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        torch.save({"model_state": model.state_dict(), "model_config": model_config, "classes": ["Normal", "Faint"]}, output_dir / "best.pt")
+        (output_dir / "history.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
+    metrics = evaluate_lstm(model, eval_loader, device, include_probabilities=True)
+    predictions = metrics.pop("predictions", [])
+    metrics["threshold_audit"] = threshold_audit_metrics(
+        [row["true_id"] for row in predictions],
+        [row["faint_prob"] for row in predictions],
+        thresholds,
+    )
+    metrics["prediction_counts"] = prediction_counts([row["pred_id"] for row in predictions])
+    metrics["prediction_rows"] = prediction_audit_rows(
+        [row["true_id"] for row in predictions],
+        [[row["normal_prob"], row["faint_prob"]] for row in predictions],
+        eval_sequences,
+    )
     return metrics
 
 
@@ -510,19 +565,99 @@ def torch_device_warnings(device_arg, torch_module, resolved_device):
     return []
 
 
-def evaluate_lstm(model, loader, device):
+def evaluate_lstm(model, loader, device, include_probabilities=False):
     import torch
 
     model.eval()
     y_true = []
     y_pred = []
+    predictions = []
     with torch.no_grad():
         for x_batch, y_batch in loader:
             logits = model(x_batch.to(device))
-            pred = logits.argmax(dim=1).cpu().tolist()
+            probs = torch.softmax(logits, dim=1).cpu()
+            pred = probs.argmax(dim=1).tolist()
             y_pred.extend(pred)
-            y_true.extend(y_batch.cpu().tolist())
-    return classification_metrics(y_true, y_pred)
+            true_batch = y_batch.cpu().tolist()
+            y_true.extend(true_batch)
+            if include_probabilities:
+                for truth, predicted, prob_row in zip(true_batch, pred, probs.tolist()):
+                    predictions.append(
+                        {
+                            "true_id": int(truth),
+                            "pred_id": int(predicted),
+                            "normal_prob": round(float(prob_row[0]), 6),
+                            "faint_prob": round(float(prob_row[1]), 6),
+                        }
+                    )
+    metrics = classification_metrics(y_true, y_pred)
+    if include_probabilities:
+        metrics["predictions"] = predictions
+    return metrics
+
+
+def prediction_audit_rows(y_true, probabilities, sequence_rows=None):
+    rows = []
+    sequence_rows = sequence_rows or []
+    for index, (truth, probs) in enumerate(zip(y_true, probabilities)):
+        normal_prob = round(float(probs[0]), 6)
+        faint_prob = round(float(probs[1]), 6)
+        pred_id = 1 if faint_prob > normal_prob else 0
+        sequence = sequence_rows[index] if index < len(sequence_rows) else {}
+        rows.append(
+            {
+                "sequence_index": index,
+                "clip_id": sequence.get("clip_id", ""),
+                "frame_start": sequence.get("frame_start", ""),
+                "frame_end": sequence.get("frame_end", ""),
+                "true_label": ID_TO_CLASS[int(truth)],
+                "pred_label": ID_TO_CLASS[pred_id],
+                "normal_prob": normal_prob,
+                "faint_prob": faint_prob,
+            }
+        )
+    return rows
+
+
+def prediction_counts(y_pred):
+    counts = Counter(ID_TO_CLASS[int(label)] for label in y_pred)
+    return {"Normal": counts.get("Normal", 0), "Faint": counts.get("Faint", 0)}
+
+
+def threshold_audit_metrics(y_true, faint_probs, thresholds):
+    rows = []
+    for threshold in thresholds:
+        y_pred = [1 if float(prob) >= float(threshold) else 0 for prob in faint_probs]
+        metrics = classification_metrics(y_true, y_pred)
+        rows.append(
+            {
+                "threshold": round(float(threshold), 6),
+                "faint_recall": metrics["recall"],
+                "f1_score": metrics["f1_score"],
+                "precision": metrics["precision"],
+                "predicted_normal": prediction_counts(y_pred)["Normal"],
+                "predicted_faint": prediction_counts(y_pred)["Faint"],
+            }
+        )
+    return rows
+
+
+def repeated_seed_audit(seed_metrics):
+    valid = [item for item in seed_metrics if item.get("faint_recall") is not None and item.get("f1_score") is not None]
+    enabled = len(seed_metrics) > 1
+    if not valid:
+        return {"enabled": enabled, "seeds": [item["seed"] for item in seed_metrics]}
+    recalls = np.asarray([float(item["faint_recall"]) for item in valid], dtype=np.float64)
+    f1_scores = np.asarray([float(item["f1_score"]) for item in valid], dtype=np.float64)
+    return {
+        "enabled": enabled,
+        "seeds": [item["seed"] for item in seed_metrics],
+        "faint_recall_mean": round(float(recalls.mean()), 6),
+        "faint_recall_std": round(float(recalls.std(ddof=0)), 6),
+        "f1_score_mean": round(float(f1_scores.mean()), 6),
+        "f1_score_std": round(float(f1_scores.std(ddof=0)), 6),
+        "runs": seed_metrics,
+    }
 
 
 def classification_metrics(y_true, y_pred):
@@ -580,6 +715,9 @@ def empty_metrics(reason="not_run"):
         "per_class_metrics": {},
         "train_sequence_class_counts": {"Normal": 0, "Faint": 0},
         "eval_sequence_class_counts": {"Normal": 0, "Faint": 0},
+        "prediction_counts": {"Normal": 0, "Faint": 0},
+        "threshold_audit": [],
+        "repeated_seed_audit": {"enabled": False, "seeds": []},
         "torch_device": None,
         "warnings": [],
     }
@@ -650,7 +788,7 @@ def compare_model(spec, rows, args, output_dir, selected_class_counts):
             metrics = empty_metrics(readiness_status)
         else:
             try:
-                metrics = train_and_evaluate(train_x, train_y, eval_x, eval_y, args, model_dir)
+                metrics = train_and_evaluate(train_x, train_y, eval_x, eval_y, eval_sequences, args, model_dir)
                 metrics["status"] = "OK"
             except CpuFallbackDisabledError:
                 raise
@@ -660,6 +798,10 @@ def compare_model(spec, rows, args, output_dir, selected_class_counts):
     metrics["eval_sequence_class_counts"] = eval_sequence_counts
     runtime_seconds = round(time.perf_counter() - started, 4)
     write_confusion_matrix_csv(model_dir / "confusion_matrix.csv", metrics.get("confusion_matrix", {}))
+    prediction_rows = metrics.pop("prediction_rows", [])
+    write_csv(model_dir / "eval_predictions.csv", prediction_rows)
+    write_csv(model_dir / "threshold_audit.csv", metrics.get("threshold_audit", []))
+    (model_dir / "repeated_seed_audit.json").write_text(json.dumps(metrics.get("repeated_seed_audit", {}), indent=2, ensure_ascii=False), encoding="utf-8")
     summary = {
         "model_label": spec["label"],
         "pose_model": spec["model"] if args.detector_mode == "real" else "mock",
@@ -732,6 +874,8 @@ def write_final_summary(output_dir, summaries, selected_class_counts=None):
                 "precision": metrics.get("precision"),
                 "recall": metrics.get("recall"),
                 "f1_score": metrics.get("f1_score"),
+                "predicted_normal": metrics.get("prediction_counts", {}).get("Normal", 0),
+                "predicted_faint": metrics.get("prediction_counts", {}).get("Faint", 0),
                 "metrics_status": metrics.get("status"),
                 "torch_device": metrics.get("torch_device"),
                 "warnings": "; ".join(metrics.get("warnings", [])),
@@ -824,6 +968,55 @@ def write_markdown_report(path, final, rows):
     lines.extend(
         [
             "",
+            "## Prediction Distribution Audit",
+            "",
+            "| model_label | predicted Normal | predicted Faint |",
+            "| --- | --- | --- |",
+        ]
+    )
+    for row in rows:
+        lines.append("| {model_label} | {predicted_normal} | {predicted_faint} |".format(**row))
+    lines.extend(
+        [
+            "",
+            "## Threshold Audit",
+            "",
+            "| model_label | threshold | Faint recall | F1-score | precision | predicted Normal | predicted Faint |",
+            "| --- | --- | --- | --- | --- | --- | --- |",
+        ]
+    )
+    for item in final.get("models", []):
+        for audit_row in item.get("lstm_metrics", {}).get("threshold_audit", []):
+            lines.append(
+                f"| {item.get('model_label')} | {audit_row.get('threshold')} | {audit_row.get('faint_recall')} | {audit_row.get('f1_score')} | {audit_row.get('precision')} | {audit_row.get('predicted_normal')} | {audit_row.get('predicted_faint')} |"
+            )
+    lines.extend(
+        [
+            "",
+            "## Repeated Seed Audit",
+            "",
+            "| model_label | seeds | Faint recall mean | Faint recall std | F1-score mean | F1-score std |",
+            "| --- | --- | --- | --- | --- | --- |",
+        ]
+    )
+    for item in final.get("models", []):
+        seed_audit = item.get("lstm_metrics", {}).get("repeated_seed_audit", {})
+        if not seed_audit.get("enabled"):
+            continue
+        seeds = ",".join(str(seed) for seed in seed_audit.get("seeds", []))
+        lines.append(
+            "| {model_label} | {seeds} | {recall_mean} | {recall_std} | {f1_mean} | {f1_std} |".format(
+                model_label=item.get("model_label"),
+                seeds=seeds,
+                recall_mean=seed_audit.get("faint_recall_mean"),
+                recall_std=seed_audit.get("faint_recall_std"),
+                f1_mean=seed_audit.get("f1_score_mean"),
+                f1_std=seed_audit.get("f1_score_std"),
+            )
+        )
+    lines.extend(
+        [
+            "",
             "## Selection Policy",
             "",
             final["selection_policy"],
@@ -832,7 +1025,7 @@ def write_markdown_report(path, final, rows):
             "",
             "Evaluation priority: Faint recall, F1-score, false alarm tendency from confusion matrix, sequence stability, then runtime feasibility.",
             "",
-            "Per-model details are saved under each model directory as `summary.json`, `train_clips.json`, `eval_clips.json`, `train_clip_diagnostics.csv`, `eval_clip_diagnostics.csv`, sequence CSV files, `history.json` when training runs, and `confusion_matrix.csv`.",
+            "Per-model details are saved under each model directory as `summary.json`, `train_clips.json`, `eval_clips.json`, `train_clip_diagnostics.csv`, `eval_clip_diagnostics.csv`, sequence CSV files, `eval_predictions.csv`, `threshold_audit.csv`, `repeated_seed_audit.json`, `history.json` when training runs, and `confusion_matrix.csv`.",
         ]
     )
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")

@@ -17,8 +17,11 @@ from benchmark.compare_lstm_extractors import (
     normalize_torch_device,
     parse_frame_range,
     parse_model_specs,
+    prediction_audit_rows,
+    prediction_counts,
     sequence_class_counts,
     summarize_split,
+    threshold_audit_metrics,
     write_final_summary,
     zero_sequence_reason,
 )
@@ -64,6 +67,40 @@ class LstmExtractorComparisonTest(unittest.TestCase):
         self.assertEqual(metrics["confusion_matrix"]["matrix"], [[1, 1], [1, 1]])
         self.assertEqual(metrics["per_class_metrics"]["Normal"]["recall"], 0.5)
         self.assertEqual(metrics["per_class_metrics"]["Faint"]["recall"], 0.5)
+
+    def test_prediction_audit_rows_include_labels_and_probabilities(self):
+        rows = prediction_audit_rows(
+            y_true=[0, 1],
+            probabilities=[[0.8, 0.2], [0.4, 0.6]],
+            sequence_rows=[
+                {"clip_id": "n0", "frame_start": 0, "frame_end": 15},
+                {"clip_id": "f0", "frame_start": 100, "frame_end": 115},
+            ],
+        )
+
+        self.assertEqual(rows[0]["true_label"], "Normal")
+        self.assertEqual(rows[0]["pred_label"], "Normal")
+        self.assertEqual(rows[0]["normal_prob"], 0.8)
+        self.assertEqual(rows[0]["faint_prob"], 0.2)
+        self.assertEqual(rows[1]["clip_id"], "f0")
+        self.assertEqual(rows[1]["pred_label"], "Faint")
+
+    def test_threshold_audit_metrics_reports_faint_recall_and_f1(self):
+        audit = threshold_audit_metrics(
+            y_true=[0, 0, 1, 1],
+            faint_probs=[0.2, 0.45, 0.35, 0.65],
+            thresholds=[0.3, 0.5],
+        )
+
+        self.assertEqual(audit[0]["threshold"], 0.3)
+        self.assertEqual(audit[0]["faint_recall"], 1.0)
+        self.assertEqual(audit[0]["f1_score"], 0.8)
+        self.assertEqual(audit[1]["threshold"], 0.5)
+        self.assertEqual(audit[1]["faint_recall"], 0.5)
+        self.assertEqual(audit[1]["f1_score"], 0.666667)
+
+    def test_prediction_counts_reports_predicted_normal_and_faint(self):
+        self.assertEqual(prediction_counts([0, 1, 1, 0, 1]), {"Normal": 2, "Faint": 3})
 
     def test_normalize_torch_device_converts_numeric_gpu_id_to_cuda_device(self):
         self.assertEqual(normalize_torch_device("0", FakeTorch(True)), "cuda:0")
@@ -221,6 +258,19 @@ class LstmExtractorComparisonTest(unittest.TestCase):
                     "precision": 0.5,
                     "recall": 0.5,
                     "f1_score": 0.5,
+                    "prediction_counts": {"Normal": 3, "Faint": 2},
+                    "threshold_audit": [
+                        {"threshold": 0.3, "faint_recall": 0.75, "f1_score": 0.6},
+                        {"threshold": 0.5, "faint_recall": 0.5, "f1_score": 0.5},
+                    ],
+                    "repeated_seed_audit": {
+                        "enabled": True,
+                        "seeds": [42, 43, 44],
+                        "faint_recall_mean": 0.6,
+                        "faint_recall_std": 0.1,
+                        "f1_score_mean": 0.55,
+                        "f1_score_std": 0.05,
+                    },
                     "status": "OK",
                     "train_sequence_class_counts": {"Normal": 2, "Faint": 1},
                     "eval_sequence_class_counts": {"Normal": 1, "Faint": 1},
@@ -249,6 +299,12 @@ class LstmExtractorComparisonTest(unittest.TestCase):
             self.assertIn("## LSTM Classification Benchmark", report)
             self.assertIn("train Normal", report)
             self.assertIn("| YOLOv11n-pose | 2 | 1 | 1 | 1 | 0.5 | 0.5 | 0.5 | 0.5 | OK |", report)
+            self.assertIn("## Prediction Distribution Audit", report)
+            self.assertIn("| YOLOv11n-pose | 3 | 2 |", report)
+            self.assertIn("## Threshold Audit", report)
+            self.assertIn("| YOLOv11n-pose | 0.3 | 0.75 | 0.6 |", report)
+            self.assertIn("## Repeated Seed Audit", report)
+            self.assertIn("| YOLOv11n-pose | 42,43,44 | 0.6 | 0.1 | 0.55 | 0.05 |", report)
             self.assertIn("YOLOv11n-pose", report)
             self.assertEqual(summary["warnings"], [CUDA_CPU_FALLBACK_WARNING])
             self.assertTrue((output_dir / "summary.csv").exists())

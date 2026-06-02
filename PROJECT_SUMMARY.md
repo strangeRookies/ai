@@ -165,8 +165,11 @@ python benchmark/compare_lstm_extractors.py \
   --output-dir benchmark/results/lstm_final_11n_vs_26n \
   --max-rows-per-split 30 \
   --max-frames 0 \
-  --epochs 10
+  --epochs 10 \
+  --no-cpu-fallback
 ```
+
+For prediction-distribution auditing after a suspicious confusion matrix, add `--repeat-seeds 3`. This reruns only the LSTM train/eval phase for three deterministic seeds after sequence extraction, then reports mean/std for Faint recall and F1-score. The default Faint probability threshold audit reports thresholds `0.3,0.4,0.5,0.6,0.7`; override it with `--audit-thresholds` if needed.
 
 Required outputs are written under:
 
@@ -177,11 +180,16 @@ benchmark/results/lstm_final_11n_vs_26n/summary.json
 benchmark/results/lstm_final_11n_vs_26n/report.md
 benchmark/results/lstm_final_11n_vs_26n/<model>/summary.json
 benchmark/results/lstm_final_11n_vs_26n/<model>/confusion_matrix.csv
+benchmark/results/lstm_final_11n_vs_26n/<model>/eval_predictions.csv
+benchmark/results/lstm_final_11n_vs_26n/<model>/threshold_audit.csv
+benchmark/results/lstm_final_11n_vs_26n/<model>/repeated_seed_audit.json
 benchmark/results/lstm_final_11n_vs_26n/<model>/history.json
 benchmark/results/lstm_final_11n_vs_26n/<model>/best.pt
 ```
 
 Interpret the final result in this order: Faint recall, F1-score, false alarm tendency from the confusion matrix, sequence stability, then runtime feasibility. The report separates pose-only context, sequence generation metrics, and LSTM classification metrics. The current local Codex environment verified the CLI/report workflow and unit tests, but the real smoke/full benchmark must run on the GPU PC because the local workspace does not contain `../ai_fall_experiments/data/metadata/metadata.csv` or the real YOLO/Torch runtime.
+
+The audit outputs do not change final model selection. `eval_predictions.csv` stores per-sequence `true_label`, `pred_label`, `normal_prob`, and `faint_prob`; `threshold_audit.csv` reports Faint recall/F1 at each configured probability threshold; `report.md` and `summary.json` include prediction counts and repeated-seed recall/F1 statistics when enabled.
 
 The dataset is highly imbalanced, so the final benchmark applies `--max-rows-per-split` per class within each split. For example, `--max-rows-per-split 30` selects up to 30 Normal and 30 Faint rows for each of train, val, and test when available. The generated `summary.json` and `report.md` include selected class counts for train/val/test before reporting sequence generation and LSTM classification metrics.
 
