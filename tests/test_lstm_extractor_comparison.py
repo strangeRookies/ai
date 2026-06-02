@@ -1,3 +1,4 @@
+import json
 import unittest
 from tempfile import TemporaryDirectory
 from pathlib import Path
@@ -5,6 +6,8 @@ from pathlib import Path
 import numpy as np
 
 from benchmark.compare_lstm_extractors import (
+    CUDA_CPU_FALLBACK_WARNING,
+    CpuFallbackDisabledError,
     choose_best_model,
     classification_metrics,
     dataset_class_counts,
@@ -70,6 +73,12 @@ class LstmExtractorComparisonTest(unittest.TestCase):
         self.assertEqual(normalize_torch_device("0", FakeTorch(False)), "cpu")
         self.assertEqual(normalize_torch_device("cuda:0", FakeTorch(False)), "cpu")
         self.assertEqual(normalize_torch_device("auto", FakeTorch(False)), "cpu")
+
+    def test_normalize_torch_device_can_disable_cpu_fallback_for_requested_cuda(self):
+        with self.assertRaises(CpuFallbackDisabledError):
+            normalize_torch_device("0", FakeTorch(False), no_cpu_fallback=True)
+        with self.assertRaises(CpuFallbackDisabledError):
+            normalize_torch_device("cuda:0", FakeTorch(False), no_cpu_fallback=True)
 
     def test_choose_best_model_prioritizes_faint_recall_then_sequences(self):
         summaries = [
@@ -190,6 +199,8 @@ class LstmExtractorComparisonTest(unittest.TestCase):
                     "status": "OK",
                     "train_sequence_class_counts": {"Normal": 2, "Faint": 1},
                     "eval_sequence_class_counts": {"Normal": 1, "Faint": 1},
+                    "warnings": [CUDA_CPU_FALLBACK_WARNING],
+                    "torch_device": "cpu",
                 },
                 "runtime_seconds": 1.25,
             }
@@ -201,7 +212,10 @@ class LstmExtractorComparisonTest(unittest.TestCase):
             write_final_summary(output_dir, summaries, selected_class_counts)
 
             report = (output_dir / "report.md").read_text(encoding="utf-8")
+            summary = json.loads((output_dir / "summary.json").read_text(encoding="utf-8"))
             self.assertIn("## Pose-Only Benchmark", report)
+            self.assertIn("## Warnings", report)
+            self.assertIn(CUDA_CPU_FALLBACK_WARNING, report)
             self.assertIn("## Selected Dataset Class Counts", report)
             self.assertIn("| train | 30 | 30 | 60 |", report)
             self.assertIn("| val | 30 | 30 | 60 |", report)
@@ -211,6 +225,7 @@ class LstmExtractorComparisonTest(unittest.TestCase):
             self.assertIn("train Normal", report)
             self.assertIn("| YOLOv11n-pose | 2 | 1 | 1 | 1 | 0.5 | 0.5 | 0.5 | 0.5 | OK |", report)
             self.assertIn("YOLOv11n-pose", report)
+            self.assertEqual(summary["warnings"], [CUDA_CPU_FALLBACK_WARNING])
             self.assertTrue((output_dir / "summary.csv").exists())
             self.assertTrue((output_dir / "summary.json").exists())
 

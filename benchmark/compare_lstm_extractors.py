@@ -27,6 +27,11 @@ MODEL_SPECS = [
 ]
 CLASS_TO_ID = {"Normal": 0, "Faint": 1}
 ID_TO_CLASS = {0: "Normal", 1: "Faint"}
+CUDA_CPU_FALLBACK_WARNING = "CUDA requested but unavailable; LSTM ran on CPU fallback."
+
+
+class CpuFallbackDisabledError(RuntimeError):
+    pass
 
 
 def parse_args():
@@ -51,6 +56,7 @@ def parse_args():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--detector-conf", type=float, default=0.15, help="YOLO Pose detector confidence threshold.")
     parser.add_argument("--dry-run", action="store_true", help="Generate extractor sequence stats only; skip LSTM training.")
+    parser.add_argument("--no-cpu-fallback", action="store_true", help="Fail LSTM training when CUDA is requested but unavailable.")
     return parser.parse_args()
 
 
@@ -261,7 +267,8 @@ def train_and_evaluate(train_x, train_y, eval_x, eval_y, args, output_dir):
     from torch.utils.data import DataLoader, TensorDataset
 
     set_seed(args.seed, torch)
-    device = torch.device(normalize_torch_device(args.device, torch))
+    resolved_device = normalize_torch_device(args.device, torch, no_cpu_fallback=args.no_cpu_fallback)
+    device = torch.device(resolved_device)
     train_tensor = torch.from_numpy(np.stack(train_x).astype(np.float32))
     train_labels = torch.from_numpy(np.asarray(train_y, dtype=np.int64))
     eval_tensor = torch.from_numpy(np.stack(eval_x).astype(np.float32))
@@ -298,10 +305,18 @@ def train_and_evaluate(train_x, train_y, eval_x, eval_y, args, output_dir):
     output_dir.mkdir(parents=True, exist_ok=True)
     torch.save({"model_state": model.state_dict(), "model_config": model_config, "classes": ["Normal", "Faint"]}, output_dir / "best.pt")
     (output_dir / "history.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
-    return history[-1] if history else empty_metrics()
+    metrics = history[-1] if history else empty_metrics()
+    metrics["torch_device"] = str(device)
+    metrics["warnings"] = torch_device_warnings(args.device, torch, resolved_device)
+    return metrics
 
 
-def normalize_torch_device(device_arg, torch_module):
+def is_cuda_requested(device_arg):
+    raw = str(device_arg).strip().lower()
+    return raw.startswith("cuda") or raw.isdigit()
+
+
+def normalize_torch_device(device_arg, torch_module, no_cpu_fallback=False):
     raw = str(device_arg).strip().lower()
     cuda_available = bool(torch_module.cuda.is_available())
     if raw in {"auto", ""}:
@@ -309,10 +324,20 @@ def normalize_torch_device(device_arg, torch_module):
     if raw == "cpu":
         return "cpu"
     if raw.startswith("cuda"):
+        if not cuda_available and no_cpu_fallback:
+            raise CpuFallbackDisabledError(f"{CUDA_CPU_FALLBACK_WARNING} Use --device cpu or enable CUDA.")
         return raw if cuda_available else "cpu"
     if raw.isdigit():
+        if not cuda_available and no_cpu_fallback:
+            raise CpuFallbackDisabledError(f"{CUDA_CPU_FALLBACK_WARNING} Use --device cpu or enable CUDA.")
         return f"cuda:{raw}" if cuda_available else "cpu"
     return "cpu"
+
+
+def torch_device_warnings(device_arg, torch_module, resolved_device):
+    if is_cuda_requested(device_arg) and str(resolved_device).lower() == "cpu" and not torch_module.cuda.is_available():
+        return [CUDA_CPU_FALLBACK_WARNING]
+    return []
 
 
 def evaluate_lstm(model, loader, device):
@@ -385,6 +410,8 @@ def empty_metrics(reason="not_run"):
         "per_class_metrics": {},
         "train_sequence_class_counts": {"Normal": 0, "Faint": 0},
         "eval_sequence_class_counts": {"Normal": 0, "Faint": 0},
+        "torch_device": None,
+        "warnings": [],
     }
 
 
@@ -453,6 +480,8 @@ def compare_model(spec, rows, args, output_dir, selected_class_counts):
             try:
                 metrics = train_and_evaluate(train_x, train_y, eval_x, eval_y, args, model_dir)
                 metrics["status"] = "OK"
+            except CpuFallbackDisabledError:
+                raise
             except Exception as exc:
                 metrics = empty_metrics(f"failed: {exc}")
     metrics["train_sequence_class_counts"] = train_sequence_counts
@@ -532,6 +561,8 @@ def write_final_summary(output_dir, summaries, selected_class_counts=None):
                 "recall": metrics.get("recall"),
                 "f1_score": metrics.get("f1_score"),
                 "metrics_status": metrics.get("status"),
+                "torch_device": metrics.get("torch_device"),
+                "warnings": "; ".join(metrics.get("warnings", [])),
                 "runtime_seconds": item.get("runtime_seconds"),
             }
         )
@@ -541,6 +572,7 @@ def write_final_summary(output_dir, summaries, selected_class_counts=None):
         "selection_policy": "Prioritize Faint recall and stable sequence generation; fall_candidate_count is reference-only.",
         "best_model_for_downstream_lstm": choose_best_model(summaries),
         "selected_dataset_class_counts": selected_class_counts or {},
+        "warnings": sorted({warning for item in summaries for warning in item["lstm_metrics"].get("warnings", [])}),
         "models": summaries,
     }
     (output_dir / "summary.json").write_text(json.dumps(final, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -572,11 +604,19 @@ def write_markdown_report(path, final, rows):
         "",
         "Not rerun by this script. Previous pose-only results should not be used alone to select the final fall/Faint classifier.",
         "",
-        "## Selected Dataset Class Counts",
-        "",
-        "| split | Normal | Faint | total |",
-        "| --- | --- | --- | --- |",
     ]
+    if final.get("warnings"):
+        lines.extend(["## Warnings", ""])
+        lines.extend(f"- {warning}" for warning in final["warnings"])
+        lines.append("")
+    lines.extend(
+        [
+            "## Selected Dataset Class Counts",
+            "",
+            "| split | Normal | Faint | total |",
+            "| --- | --- | --- | --- |",
+        ]
+    )
     for split, counts in final.get("selected_dataset_class_counts", {}).items():
         lines.append(f"| {split} | {counts.get('Normal', 0)} | {counts.get('Faint', 0)} | {counts.get('total', 0)} |")
     lines.extend(
