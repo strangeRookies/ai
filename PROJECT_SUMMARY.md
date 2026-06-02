@@ -183,6 +183,8 @@ benchmark/results/lstm_final_11n_vs_26n/<model>/best.pt
 
 Interpret the final result in this order: Faint recall, F1-score, false alarm tendency from the confusion matrix, sequence stability, then runtime feasibility. The report separates pose-only context, sequence generation metrics, and LSTM classification metrics. The current local Codex environment verified the CLI/report workflow and unit tests, but the real smoke/full benchmark must run on the GPU PC because the local workspace does not contain `../ai_fall_experiments/data/metadata/metadata.csv` or the real YOLO/Torch runtime.
 
+The dataset is highly imbalanced, so the final benchmark applies `--max-rows-per-split` per class within each split. For example, `--max-rows-per-split 30` selects up to 30 Normal and 30 Faint rows for each of train, val, and test when available. The generated `summary.json` and `report.md` include selected class counts for train/val/test before reporting sequence generation and LSTM classification metrics.
+
 ## Mock Edge AI MQTT Publisher
 
 `mock_edge_ai.py` publishes random safety event JSON messages to the MQTT topic used by the local development pipeline.

@@ -16,7 +16,7 @@ from ai.action.classifier import LSTMActionModel
 from ai.streams.video_reader import VideoReader
 from detector.mock_detector import MockDetector
 from detector.yolo_pose_detector import YoloPoseDetector
-from scripts.run_dataset_evaluation import label_name, limit_rows_by_split, read_dataset_rows
+from scripts.run_dataset_evaluation import label_name, read_dataset_rows
 from scripts.run_rtsp_inference import ensure_mock_keypoints
 
 
@@ -76,6 +76,35 @@ def create_pose_detector(mode, model_name, device, imgsz, conf=0.25):
 
 def row_label_id(row):
     return CLASS_TO_ID.get(label_name(row), 0)
+
+
+def limit_rows_by_split_and_class(rows, max_rows_per_split):
+    if max_rows_per_split <= 0:
+        return rows
+    counts = Counter()
+    limited = []
+    for row in rows:
+        split = row.get("split") or "unspecified"
+        label = label_name(row)
+        key = (split, label)
+        if counts[key] >= max_rows_per_split:
+            continue
+        limited.append(row)
+        counts[key] += 1
+    return limited
+
+
+def dataset_class_counts(rows):
+    counts = {}
+    for row in rows:
+        split = row.get("split") or "unspecified"
+        label = label_name(row)
+        split_counts = counts.setdefault(split, {"Normal": 0, "Faint": 0, "total": 0})
+        if label not in split_counts:
+            split_counts[label] = 0
+        split_counts[label] += 1
+        split_counts["total"] += 1
+    return {split: counts[split] for split in sorted(counts)}
 
 
 def keypoints_to_feature(detection, frame_shape, keypoint_conf_threshold):
@@ -208,7 +237,7 @@ def collect_split_sequences(rows, split_name, detector, args):
     return x_rows, y_rows, clip_summaries, sequence_rows, dict(totals)
 
 
-def summarize_split(rows, y_rows, totals):
+def summarize_split(rows, y_rows, totals, requested_class_counts=None):
     counts = Counter(ID_TO_CLASS[int(label)] for label in y_rows)
     total_keypoints = totals.get("total_keypoints", 0)
     return {
@@ -222,6 +251,7 @@ def summarize_split(rows, y_rows, totals):
         "fallback_usage": int(totals.get("fallback_usage", 0)),
         "fallback_usage_ratio": 0.0,
         "sequence_class_counts": {"Normal": counts.get("Normal", 0), "Faint": counts.get("Faint", 0)},
+        "requested_class_counts": requested_class_counts or {"Normal": 0, "Faint": 0, "total": 0},
     }
 
 
@@ -361,7 +391,7 @@ def write_csv(path, rows):
         writer.writerows(rows)
 
 
-def compare_model(spec, rows, args, output_dir):
+def compare_model(spec, rows, args, output_dir, selected_class_counts):
     started = time.perf_counter()
     detector = create_pose_detector(args.detector_mode, spec["model"], args.device, args.imgsz, conf=args.detector_conf)
     model_dir = output_dir / spec["label"]
@@ -372,8 +402,8 @@ def compare_model(spec, rows, args, output_dir):
     write_csv(model_dir / "eval_sequences.csv", eval_sequences)
     (model_dir / "train_clips.json").write_text(json.dumps(train_clips, indent=2, ensure_ascii=False), encoding="utf-8")
     (model_dir / "eval_clips.json").write_text(json.dumps(eval_clips, indent=2, ensure_ascii=False), encoding="utf-8")
-    train_summary = summarize_split(rows, train_y, train_totals)
-    eval_summary = summarize_split(rows, eval_y, eval_totals)
+    train_summary = summarize_split(rows, train_y, train_totals, selected_class_counts.get(args.train_split))
+    eval_summary = summarize_split(rows, eval_y, eval_totals, selected_class_counts.get(args.eval_split))
     if args.dry_run:
         metrics = empty_metrics("dry_run")
     elif not train_x or not eval_x:
@@ -394,6 +424,7 @@ def compare_model(spec, rows, args, output_dir):
         "eval_split": args.eval_split,
         "train_sequence_summary": train_summary,
         "eval_sequence_summary": eval_summary,
+        "selected_dataset_class_counts": selected_class_counts,
         "lstm_metrics": metrics,
         "runtime_seconds": runtime_seconds,
     }
@@ -432,7 +463,7 @@ def false_alarm_count(confusion_matrix):
     return int(matrix[0][1])
 
 
-def write_final_summary(output_dir, summaries):
+def write_final_summary(output_dir, summaries, selected_class_counts=None):
     rows = []
     for item in summaries:
         eval_summary = item["eval_sequence_summary"]
@@ -462,6 +493,7 @@ def write_final_summary(output_dir, summaries):
     final = {
         "selection_policy": "Prioritize Faint recall and stable sequence generation; fall_candidate_count is reference-only.",
         "best_model_for_downstream_lstm": choose_best_model(summaries),
+        "selected_dataset_class_counts": selected_class_counts or {},
         "models": summaries,
     }
     (output_dir / "summary.json").write_text(json.dumps(final, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -493,11 +525,22 @@ def write_markdown_report(path, final, rows):
         "",
         "Not rerun by this script. Previous pose-only results should not be used alone to select the final fall/Faint classifier.",
         "",
+        "## Selected Dataset Class Counts",
+        "",
+        "| split | Normal | Faint | total |",
+        "| --- | --- | --- | --- |",
+    ]
+    for split, counts in final.get("selected_dataset_class_counts", {}).items():
+        lines.append(f"| {split} | {counts.get('Normal', 0)} | {counts.get('Faint', 0)} | {counts.get('total', 0)} |")
+    lines.extend(
+        [
+        "",
         "## Sequence Generation Benchmark",
         "",
         "| model_label | clips_requested | clips_processed | person_detections | keypoints_extracted | generated_sequences | zero_sequence_clips | keypoint_missing_rate | runtime_seconds |",
         "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
-    ]
+        ]
+    )
     for row in rows:
         lines.append(
             "| {model_label} | {clips_requested} | {clips_processed} | {person_detections} | {keypoints_extracted} | {generated_sequences} | {zero_sequence_clips} | {keypoint_missing_rate} | {runtime_seconds} |".format(
@@ -539,10 +582,11 @@ def write_markdown_report(path, final, rows):
 def main():
     args = parse_args()
     output_dir = Path(args.output_dir)
-    rows = limit_rows_by_split(read_dataset_rows(args.metadata_csv), args.max_rows_per_split)
+    rows = limit_rows_by_split_and_class(read_dataset_rows(args.metadata_csv), args.max_rows_per_split)
+    selected_class_counts = dataset_class_counts(rows)
     specs = parse_model_specs(args.models)
-    summaries = [compare_model(spec, rows, args, output_dir) for spec in specs]
-    final = write_final_summary(output_dir, summaries)
+    summaries = [compare_model(spec, rows, args, output_dir, selected_class_counts) for spec in specs]
+    final = write_final_summary(output_dir, summaries, selected_class_counts)
     print(json.dumps(final, indent=2, ensure_ascii=False))
 
 

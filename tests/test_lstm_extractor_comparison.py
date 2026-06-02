@@ -7,7 +7,9 @@ import numpy as np
 from benchmark.compare_lstm_extractors import (
     choose_best_model,
     classification_metrics,
+    dataset_class_counts,
     keypoints_to_feature,
+    limit_rows_by_split_and_class,
     parse_model_specs,
     summarize_split,
     write_final_summary,
@@ -89,10 +91,38 @@ class LstmExtractorComparisonTest(unittest.TestCase):
                 "missing_keypoints": 3,
                 "total_keypoints": 51,
             },
+            requested_class_counts={"Normal": 3, "Faint": 3, "total": 6},
         )
 
         self.assertEqual(summary["sequence_class_counts"], {"Normal": 1, "Faint": 2})
+        self.assertEqual(summary["requested_class_counts"], {"Normal": 3, "Faint": 3, "total": 6})
         self.assertEqual(summary["keypoint_missing_rate"], round(3 / 51, 6))
+
+    def test_limit_rows_by_split_and_class_caps_each_class_independently(self):
+        rows = []
+        for split in ("train", "val", "test"):
+            rows.extend({"split": split, "label": "0", "clip_id": f"{split}-normal-{idx}"} for idx in range(5))
+            rows.extend({"split": split, "label": "1", "clip_id": f"{split}-faint-{idx}"} for idx in range(4))
+
+        limited = limit_rows_by_split_and_class(rows, 3)
+        counts = dataset_class_counts(limited)
+
+        self.assertEqual(len(limited), 18)
+        self.assertEqual(counts["train"], {"Normal": 3, "Faint": 3, "total": 6})
+        self.assertEqual(counts["val"], {"Normal": 3, "Faint": 3, "total": 6})
+        self.assertEqual(counts["test"], {"Normal": 3, "Faint": 3, "total": 6})
+
+    def test_limit_rows_by_split_and_class_keeps_available_minority_rows(self):
+        rows = [
+            {"split": "train", "label": "0", "clip_id": "n0"},
+            {"split": "train", "label": "0", "clip_id": "n1"},
+            {"split": "train", "label": "0", "clip_id": "n2"},
+            {"split": "train", "label": "1", "clip_id": "f0"},
+        ]
+
+        limited = limit_rows_by_split_and_class(rows, 2)
+
+        self.assertEqual(dataset_class_counts(limited)["train"], {"Normal": 2, "Faint": 1, "total": 3})
 
     def test_parse_model_specs_accepts_label_model_pairs(self):
         specs = parse_model_specs("A:a.pt,B:b.pt")
@@ -118,13 +148,18 @@ class LstmExtractorComparisonTest(unittest.TestCase):
                 "runtime_seconds": 1.25,
             }
         ]
+        selected_class_counts = {"train": {"Normal": 30, "Faint": 30, "total": 60}, "val": {"Normal": 30, "Faint": 30, "total": 60}, "test": {"Normal": 30, "Faint": 30, "total": 60}}
         with TemporaryDirectory() as tmpdir:
             output_dir = Path(tmpdir)
 
-            write_final_summary(output_dir, summaries)
+            write_final_summary(output_dir, summaries, selected_class_counts)
 
             report = (output_dir / "report.md").read_text(encoding="utf-8")
             self.assertIn("## Pose-Only Benchmark", report)
+            self.assertIn("## Selected Dataset Class Counts", report)
+            self.assertIn("| train | 30 | 30 | 60 |", report)
+            self.assertIn("| val | 30 | 30 | 60 |", report)
+            self.assertIn("| test | 30 | 30 | 60 |", report)
             self.assertIn("## Sequence Generation Benchmark", report)
             self.assertIn("## LSTM Classification Benchmark", report)
             self.assertIn("YOLOv11n-pose", report)
