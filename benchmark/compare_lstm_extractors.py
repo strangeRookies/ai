@@ -2,6 +2,7 @@ import argparse
 import csv
 import json
 import random
+import re
 import sys
 import time
 from collections import Counter
@@ -57,6 +58,8 @@ def parse_args():
     parser.add_argument("--detector-conf", type=float, default=0.15, help="YOLO Pose detector confidence threshold.")
     parser.add_argument("--dry-run", action="store_true", help="Generate extractor sequence stats only; skip LSTM training.")
     parser.add_argument("--no-cpu-fallback", action="store_true", help="Fail LSTM training when CUDA is requested but unavailable.")
+    parser.add_argument("--prefilter-normal-clips", action="store_true", help="Use the first configured detector to keep Normal clip candidates only when person/keypoint signal is present.")
+    parser.add_argument("--prefilter-max-frames", type=int, default=120, help="Maximum frames per Normal candidate during prefiltering.")
     return parser.parse_args()
 
 
@@ -84,20 +87,80 @@ def row_label_id(row):
     return CLASS_TO_ID.get(label_name(row), 0)
 
 
-def limit_rows_by_split_and_class(rows, max_rows_per_split):
+def limit_rows_by_split_and_class(rows, max_rows_per_split, seed=42):
     if max_rows_per_split <= 0:
         return rows
-    counts = Counter()
     limited = []
+    by_split = {}
     for row in rows:
         split = row.get("split") or "unspecified"
-        label = label_name(row)
-        key = (split, label)
-        if counts[key] >= max_rows_per_split:
-            continue
-        limited.append(row)
-        counts[key] += 1
+        by_split.setdefault(split, []).append(row)
+    for split in sorted(by_split):
+        split_rows = by_split[split]
+        faint_rows = [row for row in split_rows if label_name(row) == "Faint"]
+        normal_rows = [row for row in split_rows if label_name(row) == "Normal"]
+        selected_faint = deterministic_order(faint_rows, seed, split, "Faint")[:max_rows_per_split]
+        limited.extend(selected_faint)
+        limited.extend(order_normal_candidates(normal_rows, selected_faint, seed, split)[:max_rows_per_split])
     return limited
+
+
+def deterministic_order(rows, seed, split, label):
+    rng = random.Random(f"{seed}:{split}:{label}")
+    decorated = [(rng.random(), index, row) for index, row in enumerate(rows)]
+    return [row for _, _, row in sorted(decorated)]
+
+
+def order_normal_candidates(rows, selected_faint_rows, seed, split):
+    rng = random.Random(f"{seed}:{split}:Normal")
+    faint_contexts = [row_context(row) for row in selected_faint_rows]
+    faint_sources = {item["source_key"] for item in faint_contexts if item["source_key"]}
+    decorated = []
+    for index, row in enumerate(rows):
+        context = row_context(row)
+        source_rank = 0 if context["source_key"] and context["source_key"] in faint_sources else 1
+        distance = nearest_non_overlapping_distance(context["frame_start"], context["frame_end"], faint_contexts)
+        decorated.append((source_rank, distance, rng.random(), index, row))
+    return [row for _, _, _, _, row in sorted(decorated)]
+
+
+def row_context(row):
+    video_path = row.get("_resolved_video_path") or row.get("video_path") or row.get("clip_path") or ""
+    start, end = parse_frame_range(video_path)
+    return {"source_key": source_key(video_path), "frame_start": start, "frame_end": end}
+
+
+def source_key(video_path):
+    stem = Path(str(video_path)).stem
+    return re.sub(r"__\d{6,}_\d{6,}$", "", stem)
+
+
+def parse_frame_range(video_path):
+    match = re.search(r"__(\d{6,})_(\d{6,})(?:$|\D)", Path(str(video_path)).stem)
+    if not match:
+        return None, None
+    return int(match.group(1)), int(match.group(2))
+
+
+def nearest_non_overlapping_distance(start, end, faint_contexts):
+    if start is None or end is None:
+        return 10**12
+    best = 10**12
+    for context in faint_contexts:
+        faint_start = context["frame_start"]
+        faint_end = context["frame_end"]
+        if faint_start is None or faint_end is None:
+            continue
+        if ranges_overlap(start, end, faint_start, faint_end):
+            continue
+        center = (start + end) / 2.0
+        faint_center = (faint_start + faint_end) / 2.0
+        best = min(best, abs(center - faint_center))
+    return best
+
+
+def ranges_overlap(first_start, first_end, second_start, second_end):
+    return max(first_start, second_start) <= min(first_end, second_end)
 
 
 def dataset_class_counts(rows):
@@ -160,16 +223,20 @@ def collect_split_sequences(rows, split_name, detector, args):
     for row in selected:
         video_path = row.get("_resolved_video_path") or ""
         clip_id = row.get("clip_id") or Path(row.get("video_path") or row.get("clip_path") or video_path).stem
+        frame_start, frame_end = parse_frame_range(video_path or row.get("video_path") or row.get("clip_path") or "")
         clip = {
             "clip_id": clip_id,
             "split": split_name,
             "label": label_name(row),
             "video_path": video_path,
+            "frame_start": frame_start,
+            "frame_end": frame_end,
             "frames_processed": 0,
             "person_detections": 0,
             "keypoints_extracted": 0,
             "generated_sequences": 0,
             "zero_sequence": True,
+            "reason_if_zero_sequence": "",
             "fallback_usage": 0,
             "missing_keypoints": 0,
             "total_keypoints": 0,
@@ -177,6 +244,7 @@ def collect_split_sequences(rows, split_name, detector, args):
         }
         if not video_path:
             clip["error"] = "video_not_found"
+            clip["reason_if_zero_sequence"] = "video_not_found"
             clip_summaries.append(clip)
             continue
         buffer = KeypointSequenceBuffer(args.sequence_length, args.sequence_stride)
@@ -228,6 +296,8 @@ def collect_split_sequences(rows, split_name, detector, args):
         if clip["frames_processed"] == 0 and not clip["error"]:
             clip["error"] = "zero_frames_decoded (가능성: 코덱 불일치 또는 비디오 인코딩 오류)"
         clip["zero_sequence"] = clip["generated_sequences"] == 0
+        if clip["zero_sequence"] and not clip["reason_if_zero_sequence"]:
+            clip["reason_if_zero_sequence"] = zero_sequence_reason(clip)
         clip_summaries.append(clip)
 
     for clip in clip_summaries:
@@ -241,6 +311,106 @@ def collect_split_sequences(rows, split_name, detector, args):
         totals["missing_keypoints"] += clip["missing_keypoints"]
         totals["total_keypoints"] += clip["total_keypoints"]
     return x_rows, y_rows, clip_summaries, sequence_rows, dict(totals)
+
+
+def zero_sequence_reason(clip):
+    if clip.get("error"):
+        return str(clip["error"])
+    if int(clip.get("person_detections", 0)) <= 0:
+        return "no_person_detections"
+    if int(clip.get("keypoints_extracted", 0)) <= 0:
+        return "no_keypoints_extracted"
+    return "no_complete_sequence_window"
+
+
+def write_clip_diagnostics_csv(path, clip_summaries):
+    rows = []
+    for clip in clip_summaries:
+        rows.append(
+            {
+                "label": clip.get("label"),
+                "video_path": clip.get("video_path"),
+                "frame_start": clip.get("frame_start"),
+                "frame_end": clip.get("frame_end"),
+                "person_detections": clip.get("person_detections"),
+                "keypoints_extracted": clip.get("keypoints_extracted"),
+                "generated_sequences": clip.get("generated_sequences"),
+                "reason_if_zero_sequence": clip.get("reason_if_zero_sequence", ""),
+            }
+        )
+    write_csv(path, rows)
+
+
+def prefilter_normal_rows(rows, args, specs, output_dir):
+    if not args.prefilter_normal_clips or args.max_rows_per_split <= 0:
+        return rows
+    detector = create_pose_detector(args.detector_mode, specs[0]["model"], args.device, args.imgsz, conf=args.detector_conf)
+    selected = []
+    diagnostics = []
+    by_split = {}
+    for row in rows:
+        split = row.get("split") or "unspecified"
+        by_split.setdefault(split, []).append(row)
+    for split in sorted(by_split):
+        split_rows = by_split[split]
+        faint_rows = [row for row in split_rows if label_name(row) == "Faint"]
+        selected_faint = deterministic_order(faint_rows, args.seed, split, "Faint")[: args.max_rows_per_split]
+        selected.extend(selected_faint)
+        normal_rows = [row for row in split_rows if label_name(row) == "Normal"]
+        accepted_normal = []
+        for row in order_normal_candidates(normal_rows, selected_faint, args.seed, split):
+            if len(accepted_normal) >= args.max_rows_per_split:
+                break
+            diagnostic = inspect_clip_signal(row, detector, args)
+            diagnostics.append(diagnostic)
+            if diagnostic["person_detections"] > 0 and diagnostic["keypoints_extracted"] > 0:
+                accepted_normal.append(row)
+        selected.extend(accepted_normal)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    write_csv(output_dir / "normal_prefilter_diagnostics.csv", diagnostics)
+    return selected
+
+
+def inspect_clip_signal(row, detector, args):
+    video_path = row.get("_resolved_video_path") or ""
+    frame_start, frame_end = parse_frame_range(video_path or row.get("video_path") or row.get("clip_path") or "")
+    diagnostic = {
+        "label": label_name(row),
+        "video_path": video_path,
+        "frame_start": frame_start,
+        "frame_end": frame_end,
+        "person_detections": 0,
+        "keypoints_extracted": 0,
+        "generated_sequences": 0,
+        "reason_if_zero_sequence": "",
+    }
+    if not video_path:
+        diagnostic["reason_if_zero_sequence"] = "video_not_found"
+        return diagnostic
+    buffer = KeypointSequenceBuffer(args.sequence_length, args.sequence_stride)
+    frames_processed = 0
+    try:
+        with VideoReader(video_path) as reader:
+            while True:
+                packet = reader.read()
+                if packet is None:
+                    break
+                if args.prefilter_max_frames > 0 and frames_processed >= args.prefilter_max_frames:
+                    break
+                detections = detector.detect(packet.frame)
+                if args.detector_mode == "mock":
+                    detections = ensure_mock_keypoints(detections)
+                frames_processed += 1
+                diagnostic["person_detections"] += len(detections)
+                diagnostic["keypoints_extracted"] += sum(1 for item in detections if item.get("keypoints"))
+                if buffer.add(packet.frame_idx, detections):
+                    diagnostic["generated_sequences"] += 1
+    except Exception as exc:
+        diagnostic["reason_if_zero_sequence"] = str(exc)
+        return diagnostic
+    if diagnostic["generated_sequences"] <= 0:
+        diagnostic["reason_if_zero_sequence"] = zero_sequence_reason(diagnostic)
+    return diagnostic
 
 
 def summarize_split(rows, y_rows, totals, requested_class_counts=None):
@@ -464,6 +634,8 @@ def compare_model(spec, rows, args, output_dir, selected_class_counts):
     eval_x, eval_y, eval_clips, eval_sequences, eval_totals = collect_split_sequences(rows, args.eval_split, detector, args)
     write_csv(model_dir / "train_sequences.csv", train_sequences)
     write_csv(model_dir / "eval_sequences.csv", eval_sequences)
+    write_clip_diagnostics_csv(model_dir / "train_clip_diagnostics.csv", train_clips)
+    write_clip_diagnostics_csv(model_dir / "eval_clip_diagnostics.csv", eval_clips)
     (model_dir / "train_clips.json").write_text(json.dumps(train_clips, indent=2, ensure_ascii=False), encoding="utf-8")
     (model_dir / "eval_clips.json").write_text(json.dumps(eval_clips, indent=2, ensure_ascii=False), encoding="utf-8")
     train_summary = summarize_split(rows, train_y, train_totals, selected_class_counts.get(args.train_split))
@@ -660,7 +832,7 @@ def write_markdown_report(path, final, rows):
             "",
             "Evaluation priority: Faint recall, F1-score, false alarm tendency from confusion matrix, sequence stability, then runtime feasibility.",
             "",
-            "Per-model details are saved under each model directory as `summary.json`, `train_clips.json`, `eval_clips.json`, sequence CSV files, `history.json` when training runs, and `confusion_matrix.csv`.",
+            "Per-model details are saved under each model directory as `summary.json`, `train_clips.json`, `eval_clips.json`, `train_clip_diagnostics.csv`, `eval_clip_diagnostics.csv`, sequence CSV files, `history.json` when training runs, and `confusion_matrix.csv`.",
         ]
     )
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -669,9 +841,11 @@ def write_markdown_report(path, final, rows):
 def main():
     args = parse_args()
     output_dir = Path(args.output_dir)
-    rows = limit_rows_by_split_and_class(read_dataset_rows(args.metadata_csv), args.max_rows_per_split)
-    selected_class_counts = dataset_class_counts(rows)
     specs = parse_model_specs(args.models)
+    rows = read_dataset_rows(args.metadata_csv)
+    rows = prefilter_normal_rows(rows, args, specs, output_dir)
+    rows = limit_rows_by_split_and_class(rows, args.max_rows_per_split, seed=args.seed)
+    selected_class_counts = dataset_class_counts(rows)
     summaries = [compare_model(spec, rows, args, output_dir, selected_class_counts) for spec in specs]
     final = write_final_summary(output_dir, summaries, selected_class_counts)
     print(json.dumps(final, indent=2, ensure_ascii=False))

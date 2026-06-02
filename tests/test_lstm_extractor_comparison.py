@@ -15,10 +15,12 @@ from benchmark.compare_lstm_extractors import (
     limit_rows_by_split_and_class,
     lstm_readiness_status,
     normalize_torch_device,
+    parse_frame_range,
     parse_model_specs,
     sequence_class_counts,
     summarize_split,
     write_final_summary,
+    zero_sequence_reason,
 )
 
 
@@ -159,6 +161,20 @@ class LstmExtractorComparisonTest(unittest.TestCase):
         self.assertEqual(counts["val"], {"Normal": 3, "Faint": 3, "total": 6})
         self.assertEqual(counts["test"], {"Normal": 3, "Faint": 3, "total": 6})
 
+    def test_limit_rows_by_split_and_class_prefers_normals_near_faint_context(self):
+        rows = [
+            {"split": "train", "label": "0", "_resolved_video_path": "cam01__000000_000031.mp4"},
+            {"split": "train", "label": "0", "_resolved_video_path": "cam01__000008_000039.mp4"},
+            {"split": "train", "label": "0", "_resolved_video_path": "cam01__004780_004811.mp4"},
+            {"split": "train", "label": "0", "_resolved_video_path": "cam01__004856_004887.mp4"},
+            {"split": "train", "label": "1", "_resolved_video_path": "cam01__004816_004847.mp4"},
+        ]
+
+        limited = limit_rows_by_split_and_class(rows, 2, seed=42)
+        normal_paths = [row["_resolved_video_path"] for row in limited if row["label"] == "0"]
+
+        self.assertEqual(normal_paths, ["cam01__004780_004811.mp4", "cam01__004856_004887.mp4"])
+
     def test_limit_rows_by_split_and_class_keeps_available_minority_rows(self):
         rows = [
             {"split": "train", "label": "0", "clip_id": "n0"},
@@ -170,6 +186,15 @@ class LstmExtractorComparisonTest(unittest.TestCase):
         limited = limit_rows_by_split_and_class(rows, 2)
 
         self.assertEqual(dataset_class_counts(limited)["train"], {"Normal": 2, "Faint": 1, "total": 3})
+
+    def test_parse_frame_range_reads_processed_clip_suffix(self):
+        self.assertEqual(parse_frame_range("100-1_cam01__004816_004847.mp4"), (4816, 4847))
+        self.assertEqual(parse_frame_range("no_range.mp4"), (None, None))
+
+    def test_zero_sequence_reason_distinguishes_no_person_and_no_keypoints(self):
+        self.assertEqual(zero_sequence_reason({"person_detections": 0, "keypoints_extracted": 0}), "no_person_detections")
+        self.assertEqual(zero_sequence_reason({"person_detections": 2, "keypoints_extracted": 0}), "no_keypoints_extracted")
+        self.assertEqual(zero_sequence_reason({"person_detections": 2, "keypoints_extracted": 2}), "no_complete_sequence_window")
 
     def test_parse_model_specs_accepts_label_model_pairs(self):
         specs = parse_model_specs("A:a.pt,B:b.pt")
