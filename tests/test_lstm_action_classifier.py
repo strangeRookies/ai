@@ -2,7 +2,7 @@ import unittest
 
 import numpy as np
 
-from ai.action.classifier import crops_to_features
+from ai.action.classifier import crops_to_features, keypoint_sequence_to_features, normalize_torch_device, threshold_prediction
 from ai.action.train_lstm import load_training_rows, summarize_metadata, target_ranges_for_row
 
 
@@ -18,6 +18,45 @@ class LSTMActionClassifierTest(unittest.TestCase):
         self.assertEqual(features.shape, (2, 64))
         self.assertEqual(float(features[0].max()), 0.0)
         self.assertEqual(float(features[1].min()), 1.0)
+
+    def test_keypoint_sequence_to_features_matches_benchmark_shape(self):
+        sequence = {
+            "detections": [
+                {
+                    "keypoints": [
+                        {"x": 50.0, "y": 25.0, "confidence": 0.9},
+                        {"x": 20.0, "y": 10.0, "confidence": 0.1},
+                    ]
+                }
+            ],
+            "frame_shapes": [(100, 200, 3)],
+        }
+
+        features = keypoint_sequence_to_features(sequence)
+
+        self.assertEqual(features.shape, (1, 51))
+        self.assertAlmostEqual(float(features[0][0]), 0.25)
+        self.assertAlmostEqual(float(features[0][1]), 0.25)
+        self.assertAlmostEqual(float(features[0][2]), 0.9)
+
+    def test_numeric_torch_device_is_normalized_for_lstm_classifier(self):
+        class FakeCuda:
+            def __init__(self, available):
+                self.available = available
+
+            def is_available(self):
+                return self.available
+
+        class FakeTorch:
+            def __init__(self, available):
+                self.cuda = FakeCuda(available)
+
+        self.assertEqual(normalize_torch_device("0", FakeTorch(True)), "cuda:0")
+        self.assertEqual(normalize_torch_device("0", FakeTorch(False)), "cpu")
+
+    def test_threshold_prediction_uses_faint_probability(self):
+        self.assertEqual(threshold_prediction({"Normal": 0.7, "Faint": 0.3}, 0.4), ("Normal", 0.7))
+        self.assertEqual(threshold_prediction({"Normal": 0.55, "Faint": 0.45}, 0.4), ("Faint", 0.45))
 
     def test_loads_ai_fall_metadata_csv(self):
         import csv

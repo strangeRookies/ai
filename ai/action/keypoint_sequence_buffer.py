@@ -5,11 +5,11 @@ class KeypointSequenceBuffer:
         self._frames = []
         self._last_emit_frame = -1
 
-    def add(self, frame_idx, detections):
+    def add(self, frame_idx, detections, frame_shape=None):
         detection = best_detection_with_keypoints(detections)
         if detection is None:
             return None
-        self._frames.append({"frame_idx": int(frame_idx), "detection": detection})
+        self._frames.append({"frame_idx": int(frame_idx), "detection": detection, "frame_shape": frame_shape})
         self._frames = self._frames[-self.sequence_length :]
         if len(self._frames) < self.sequence_length:
             return None
@@ -20,6 +20,7 @@ class KeypointSequenceBuffer:
             "start_frame": self._frames[0]["frame_idx"],
             "end_frame": self._frames[-1]["frame_idx"],
             "detections": [item["detection"] for item in self._frames],
+            "frame_shapes": [item["frame_shape"] for item in self._frames],
             "bbox": self._frames[-1]["detection"].get("bbox"),
             "keypoints": self._frames[-1]["detection"].get("keypoints"),
         }

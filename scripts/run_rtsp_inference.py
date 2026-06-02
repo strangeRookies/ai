@@ -21,9 +21,9 @@ def create_detector(mode, model, device, imgsz=640):
     return YoloPoseDetector(model, device=device, imgsz=imgsz)
 
 
-def create_classifier(action_model, device):
+def create_classifier(action_model, device, action_threshold=0.5):
     if action_model:
-        return LSTMActionClassifier(action_model, device=device), "lstm_checkpoint"
+        return LSTMActionClassifier(action_model, device=device, faint_threshold=action_threshold), "lstm_checkpoint"
     return MockActionClassifier(default_label="Faint", score=0.80), "mock_lstm"
 
 
@@ -75,11 +75,16 @@ def ensure_mock_keypoints(detections):
     return detections
 
 
+def is_alert_prediction(prediction):
+    return bool(prediction) and prediction.get("label") != "Normal"
+
+
 def run(args):
     detector = create_detector(args.detector_mode, args.yolo_model, args.device, getattr(args, "imgsz", 640))
-    classifier, classifier_mode = create_classifier(args.action_model, args.action_device)
+    classifier, classifier_mode = create_classifier(args.action_model, args.action_device, getattr(args, "action_threshold", 0.5))
     keypoint_buffer = KeypointSequenceBuffer(args.sequence_length, args.sequence_stride)
-    crop_buffer = CropSequenceBuffer(args.sequence_length, args.sequence_stride, args.resize_size) if args.action_model else None
+    classifier_input = getattr(args, "classifier_input", "keypoints")
+    crop_buffer = CropSequenceBuffer(args.sequence_length, args.sequence_stride, args.resize_size) if args.action_model and classifier_input == "crops" else None
     publisher = ConsoleEventPublisher()
     writer = None
     summary = {
@@ -89,6 +94,8 @@ def run(args):
         "detector_mode": args.detector_mode,
         "yolo_model": args.yolo_model if args.detector_mode == "real" else None,
         "classifier_mode": classifier_mode,
+        "classifier_input": classifier_input,
+        "action_threshold": getattr(args, "action_threshold", 0.5),
         "frames_processed": 0,
         "bbox_detections": 0,
         "keypoints_extracted": 0,
@@ -115,14 +122,15 @@ def run(args):
             summary["bbox_detections"] += len(boxes)
             summary["keypoints_extracted"] += sum(1 for item in detections if item.get("keypoints"))
 
-            keypoint_sequence = keypoint_buffer.add(packet.frame_idx, detections)
+            keypoint_sequence = keypoint_buffer.add(packet.frame_idx, detections, packet.frame.shape)
             crop_sequence = crop_buffer.add(packet.frame_idx, packet.frame, boxes) if crop_buffer else None
-            classifier_sequence = crop_sequence if crop_buffer else keypoint_sequence
+            classifier_sequence = crop_sequence if crop_sequence else keypoint_sequence
             prediction = classifier.predict(classifier_sequence) if classifier_sequence else None
             if keypoint_sequence:
                 summary["generated_sequences"] += 1
             if prediction:
                 summary["lstm_predictions"] += 1
+            if is_alert_prediction(prediction):
                 payload = build_event_payload(
                     camera_id=args.camera_id,
                     frame_idx=packet.frame_idx,
@@ -165,11 +173,13 @@ def main():
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--output", default=None)
     parser.add_argument("--overlay-output", default=None)
-    parser.add_argument("--yolo-model", default="yolov8n-pose.pt")
+    parser.add_argument("--yolo-model", default="yolo26n-pose.pt")
     parser.add_argument("--device", default="auto")
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--action-model", default=None)
     parser.add_argument("--action-device", default="auto")
+    parser.add_argument("--action-threshold", type=float, default=0.5, help="Faint probability threshold for LSTM checkpoints with Normal/Faint classes.")
+    parser.add_argument("--classifier-input", choices=["keypoints", "crops"], default="keypoints")
     parser.add_argument("--sequence-length", type=int, default=8)
     parser.add_argument("--sequence-stride", type=int, default=4)
     parser.add_argument("--resize-size", type=int, default=224)

@@ -191,6 +191,21 @@ Interpret the final result in this order: Faint recall, F1-score, false alarm te
 
 The audit outputs do not change final model selection. `eval_predictions.csv` stores per-sequence `true_label`, `pred_label`, `normal_prob`, and `faint_prob`; `threshold_audit.csv` reports Faint recall/F1 at each configured probability threshold; `report.md` and `summary.json` include prediction counts and repeated-seed recall/F1 statistics when enabled.
 
+YOLO26n-pose is the selected pose extractor for the operational RTSP/LSTM path. The runtime defaults now use `yolo26n-pose.pt`, keypoint-sequence classifier input, and a configurable Faint probability threshold. Point `--action-model` at the selected YOLO26n LSTM checkpoint, for example:
+
+```bash
+python scripts/run_rtsp_inference.py \
+  --rtsp-url rtsp://localhost:8554/cam1 \
+  --detector-mode real \
+  --yolo-model yolo26n-pose.pt \
+  --device 0 \
+  --action-model benchmark/results/lstm_final_11n_vs_26n_audit/YOLO26n-pose/best.pt \
+  --action-device 0 \
+  --action-threshold 0.5 \
+  --classifier-input keypoints \
+  --dry-run
+```
+
 The dataset is highly imbalanced, so the final benchmark applies `--max-rows-per-split` per class within each split. For example, `--max-rows-per-split 30` selects up to 30 Normal and 30 Faint rows for each of train, val, and test when available. The generated `summary.json` and `report.md` include selected class counts for train/val/test before reporting sequence generation and LSTM classification metrics.
 
 Normal clip sampling is deterministic but no longer raw row-order based. The sampler shuffles within split/class using `--seed`, prefers Normal clips from the same source context as selected Faint clips when frame ranges such as `__004816_004847` are available, and avoids overlapping Faint ranges. For midtests where early Normal clips produce no pose sequence, add `--prefilter-normal-clips`; this scans deterministic Normal candidates with the first configured pose detector and keeps candidates with both person detections and keypoints. The prefilter writes `normal_prefilter_diagnostics.csv`, and each model writes `train_clip_diagnostics.csv` / `eval_clip_diagnostics.csv` with label, path, parsed frame range, person detections, keypoints extracted, generated sequences, and zero-sequence reason.
@@ -315,7 +330,7 @@ The frame queue is intentionally small and drops old frames so inference latency
 RTSP_URL=rtsp://localhost:8554/cam01
 CAMERA_ID=cam_01
 DETECTOR_MODE=mock
-YOLO_MODEL=yolov8n-pose.pt
+YOLO_MODEL=yolo26n-pose.pt
 YOLO_DEVICE=auto
 FRAME_QUEUE_SIZE=2
 ALLOW_MOCK_FALLBACK=true
@@ -352,7 +367,7 @@ python main.py --once
 Run with RTSP and YOLO pose model:
 
 ```bash
-DETECTOR_MODE=yolo RTSP_URL=rtsp://localhost:8554/cam01 YOLO_MODEL=yolov8n-pose.pt python main.py
+DETECTOR_MODE=yolo RTSP_URL=rtsp://localhost:8554/cam01 YOLO_MODEL=yolo26n-pose.pt python main.py
 ```
 
 On Windows PowerShell:
@@ -360,7 +375,7 @@ On Windows PowerShell:
 ```powershell
 $env:DETECTOR_MODE="yolo"
 $env:RTSP_URL="rtsp://localhost:8554/cam01"
-$env:YOLO_MODEL="yolov8n-pose.pt"
+$env:YOLO_MODEL="yolo26n-pose.pt"
 python main.py
 ```
 
@@ -394,7 +409,7 @@ Expected event shape:
     "confidence": 0.87,
     "rule_score": 0.91,
     "pose_state": "LYING",
-    "model_name": "yolov8n-pose"
+    "model_name": "yolo26n-pose"
   }
 }
 ```
@@ -596,7 +611,11 @@ Use the real YOLO pose detector when the pose model and dependencies are availab
 python scripts/run_rtsp_inference.py \
   --rtsp-url rtsp://localhost:8554/cam1 \
   --detector-mode real \
-  --yolo-model yolov8n-pose.pt \
+  --yolo-model yolo26n-pose.pt \
+  --action-model benchmark/results/lstm_final_11n_vs_26n_audit/YOLO26n-pose/best.pt \
+  --action-device 0 \
+  --action-threshold 0.5 \
+  --classifier-input keypoints \
   --dry-run \
   --max-frames 60
 ```
@@ -619,7 +638,7 @@ Open:
 http://localhost:8010/stream
 ```
 
-The overlay shows person bbox, skeleton/keypoints when present, current Normal/Faint-style action label, confidence, frame count, bbox count, keypoint count, sequence count, prediction count, and event count. Use `--detector-mode real --yolo-model yolov8n-pose.pt` when YOLO Pose dependencies and model files are available.
+The overlay shows person bbox, skeleton/keypoints when present, current Normal/Faint-style action label, confidence, frame count, bbox count, keypoint count, sequence count, prediction count, and event count. Use `--detector-mode real --yolo-model yolo26n-pose.pt --action-model benchmark/results/lstm_final_11n_vs_26n_audit/YOLO26n-pose/best.pt --classifier-input keypoints` when YOLO Pose dependencies, Torch, and the selected LSTM checkpoint are available.
 
 The dry-run prints an RTSP publish plan using local-only URLs. To actually publish the four local videos to MediaMTX on the GPU PC, start the local RTSP server first, then opt in explicitly:
 

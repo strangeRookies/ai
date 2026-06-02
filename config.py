@@ -64,7 +64,7 @@ def load_settings():
         rtsp_url=os.getenv("RTSP_URL", "rtsp://localhost:8554/cam01"),
         camera_id=os.getenv("CAMERA_ID", "cam_01"),
         detector_mode=os.getenv("DETECTOR_MODE", "mock").strip().lower(),
-        yolo_model=os.getenv("YOLO_MODEL", "yolov8n-pose.pt"),
+        yolo_model=os.getenv("YOLO_MODEL", "yolo26n-pose.pt"),
         yolo_device=os.getenv("YOLO_DEVICE", "auto"),
         frame_queue_size=get_env_int("FRAME_QUEUE_SIZE", 2),
         reconnect_delay_seconds=get_env_float("RTSP_RECONNECT_DELAY_SECONDS", 3),

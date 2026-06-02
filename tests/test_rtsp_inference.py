@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 
 from ai.action.keypoint_sequence_buffer import KeypointSequenceBuffer
-from scripts.run_rtsp_inference import run
+from scripts.run_rtsp_inference import is_alert_prediction, run
 from ai.visualization.draw import draw_overlay
 
 
@@ -77,6 +77,10 @@ class RtspInferenceTest(unittest.TestCase):
         output = draw_overlay(frame, boxes, {"label": "Faint", "score": 0.8}, 1)
 
         self.assertEqual(output.shape, frame.shape)
+
+    def test_normal_prediction_is_not_alert_event(self):
+        self.assertFalse(is_alert_prediction({"label": "Normal", "score": 0.9}))
+        self.assertTrue(is_alert_prediction({"label": "Faint", "score": 0.6}))
 
 
 if __name__ == "__main__":

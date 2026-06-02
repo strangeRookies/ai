@@ -11,11 +11,12 @@ from urllib.parse import urlparse
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
+from ai.action.keypoint_sequence_buffer import KeypointSequenceBuffer
 from ai.action.sequence_buffer import CropSequenceBuffer
 from ai.publishers.event_publisher import build_event_payload
 from ai.streams.video_reader import VideoReader
 from ai.visualization.draw import draw_overlay
-from scripts.run_rtsp_inference import create_classifier, create_detector, ensure_mock_keypoints, normalize_detections
+from scripts.run_rtsp_inference import create_classifier, create_detector, ensure_mock_keypoints, is_alert_prediction, normalize_detections
 from stream.rtsp_reader import redact_url
 
 
@@ -73,12 +74,19 @@ def process_frame(packet, detector, classifier, sequence_buffer, summary, args):
     summary["bbox_detections"] += len(boxes)
     summary["keypoints_extracted"] += sum(1 for item in detections if item.get("keypoints"))
 
-    sequence = sequence_buffer.add(packet.frame_idx, packet.frame, boxes)
+    classifier_input = getattr(args, "classifier_input", None)
+    if classifier_input is None and hasattr(sequence_buffer, "resize_size"):
+        classifier_input = "crops"
+    if classifier_input == "crops":
+        sequence = sequence_buffer.add(packet.frame_idx, packet.frame, boxes)
+    else:
+        sequence = sequence_buffer.add(packet.frame_idx, detections, packet.frame.shape)
     prediction = classifier.predict(sequence) if sequence else None
     if sequence:
         summary["generated_sequences"] += 1
     if prediction:
         summary["lstm_predictions"] += 1
+    if is_alert_prediction(prediction):
         payload = build_event_payload(
             camera_id=args.camera_id,
             frame_idx=packet.frame_idx,
@@ -149,10 +157,13 @@ class OverlayWorker:
 
     def _run(self):
         detector = create_detector(self.args.detector_mode, self.args.yolo_model, self.args.device, self.args.imgsz)
-        classifier, _classifier_mode = create_classifier(self.args.action_model, self.args.action_device)
+        classifier, _classifier_mode = create_classifier(self.args.action_model, self.args.action_device, self.args.action_threshold)
         summary = initial_summary()
         while not self.stop_event.is_set():
-            sequence_buffer = CropSequenceBuffer(self.args.sequence_length, self.args.sequence_stride, self.args.resize_size)
+            if self.args.classifier_input == "crops":
+                sequence_buffer = CropSequenceBuffer(self.args.sequence_length, self.args.sequence_stride, self.args.resize_size)
+            else:
+                sequence_buffer = KeypointSequenceBuffer(self.args.sequence_length, self.args.sequence_stride)
             try:
                 with VideoReader(self.args.rtsp_url) as reader:
                     print(f"[ai-overlay] connected: {redact_url(self.args.rtsp_url)}", flush=True)
@@ -239,11 +250,13 @@ def main():
     parser.add_argument("--port", type=int, default=8010)
     parser.add_argument("--mjpeg-fps", type=float, default=8.0)
     parser.add_argument("--detector-mode", choices=["real", "mock"], default="mock")
-    parser.add_argument("--yolo-model", default="yolov8n-pose.pt")
+    parser.add_argument("--yolo-model", default="yolo26n-pose.pt")
     parser.add_argument("--device", default="auto")
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--action-model", default=None)
     parser.add_argument("--action-device", default="auto")
+    parser.add_argument("--action-threshold", type=float, default=0.5)
+    parser.add_argument("--classifier-input", choices=["keypoints", "crops"], default="keypoints")
     parser.add_argument("--sequence-length", type=int, default=8)
     parser.add_argument("--sequence-stride", type=int, default=4)
     parser.add_argument("--resize-size", type=int, default=224)
