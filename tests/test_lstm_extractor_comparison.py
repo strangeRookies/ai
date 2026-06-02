@@ -10,10 +10,26 @@ from benchmark.compare_lstm_extractors import (
     dataset_class_counts,
     keypoints_to_feature,
     limit_rows_by_split_and_class,
+    lstm_readiness_status,
+    normalize_torch_device,
     parse_model_specs,
+    sequence_class_counts,
     summarize_split,
     write_final_summary,
 )
+
+
+class FakeCuda:
+    def __init__(self, available):
+        self.available = available
+
+    def is_available(self):
+        return self.available
+
+
+class FakeTorch:
+    def __init__(self, cuda_available):
+        self.cuda = FakeCuda(cuda_available)
 
 
 class LstmExtractorComparisonTest(unittest.TestCase):
@@ -43,6 +59,17 @@ class LstmExtractorComparisonTest(unittest.TestCase):
         self.assertEqual(metrics["confusion_matrix"]["matrix"], [[1, 1], [1, 1]])
         self.assertEqual(metrics["per_class_metrics"]["Normal"]["recall"], 0.5)
         self.assertEqual(metrics["per_class_metrics"]["Faint"]["recall"], 0.5)
+
+    def test_normalize_torch_device_converts_numeric_gpu_id_to_cuda_device(self):
+        self.assertEqual(normalize_torch_device("0", FakeTorch(True)), "cuda:0")
+        self.assertEqual(normalize_torch_device(0, FakeTorch(True)), "cuda:0")
+        self.assertEqual(normalize_torch_device("cuda:0", FakeTorch(True)), "cuda:0")
+        self.assertEqual(normalize_torch_device("cpu", FakeTorch(True)), "cpu")
+
+    def test_normalize_torch_device_falls_back_to_cpu_when_cuda_unavailable(self):
+        self.assertEqual(normalize_torch_device("0", FakeTorch(False)), "cpu")
+        self.assertEqual(normalize_torch_device("cuda:0", FakeTorch(False)), "cpu")
+        self.assertEqual(normalize_torch_device("auto", FakeTorch(False)), "cpu")
 
     def test_choose_best_model_prioritizes_faint_recall_then_sequences(self):
         summaries = [
@@ -98,6 +125,17 @@ class LstmExtractorComparisonTest(unittest.TestCase):
         self.assertEqual(summary["requested_class_counts"], {"Normal": 3, "Faint": 3, "total": 6})
         self.assertEqual(summary["keypoint_missing_rate"], round(3 / 51, 6))
 
+    def test_lstm_readiness_status_reports_specific_sequence_and_class_gaps(self):
+        self.assertEqual(lstm_readiness_status([], [0, 1]), "no_train_sequences")
+        self.assertEqual(lstm_readiness_status([0, 1], []), "no_eval_sequences")
+        self.assertEqual(lstm_readiness_status([0], [0, 1]), "insufficient_sequences")
+        self.assertEqual(lstm_readiness_status([0, 0], [0, 1]), "missing_class_in_train")
+        self.assertEqual(lstm_readiness_status([0, 1], [1, 1]), "missing_class_in_eval")
+        self.assertEqual(lstm_readiness_status([0, 1], [0, 1]), "OK")
+
+    def test_sequence_class_counts_reports_normal_and_faint_sequences(self):
+        self.assertEqual(sequence_class_counts([0, 1, 1]), {"Normal": 1, "Faint": 2})
+
     def test_limit_rows_by_split_and_class_caps_each_class_independently(self):
         rows = []
         for split in ("train", "val", "test"):
@@ -144,7 +182,15 @@ class LstmExtractorComparisonTest(unittest.TestCase):
                     "keypoint_missing_rate": 0.1,
                     "fallback_usage": 0,
                 },
-                "lstm_metrics": {"accuracy": 0.5, "precision": 0.5, "recall": 0.5, "f1_score": 0.5, "status": "OK"},
+                "lstm_metrics": {
+                    "accuracy": 0.5,
+                    "precision": 0.5,
+                    "recall": 0.5,
+                    "f1_score": 0.5,
+                    "status": "OK",
+                    "train_sequence_class_counts": {"Normal": 2, "Faint": 1},
+                    "eval_sequence_class_counts": {"Normal": 1, "Faint": 1},
+                },
                 "runtime_seconds": 1.25,
             }
         ]
@@ -162,6 +208,8 @@ class LstmExtractorComparisonTest(unittest.TestCase):
             self.assertIn("| test | 30 | 30 | 60 |", report)
             self.assertIn("## Sequence Generation Benchmark", report)
             self.assertIn("## LSTM Classification Benchmark", report)
+            self.assertIn("train Normal", report)
+            self.assertIn("| YOLOv11n-pose | 2 | 1 | 1 | 1 | 0.5 | 0.5 | 0.5 | 0.5 | OK |", report)
             self.assertIn("YOLOv11n-pose", report)
             self.assertTrue((output_dir / "summary.csv").exists())
             self.assertTrue((output_dir / "summary.json").exists())

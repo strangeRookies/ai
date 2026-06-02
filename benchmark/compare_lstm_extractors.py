@@ -261,7 +261,7 @@ def train_and_evaluate(train_x, train_y, eval_x, eval_y, args, output_dir):
     from torch.utils.data import DataLoader, TensorDataset
 
     set_seed(args.seed, torch)
-    device = torch.device("cuda:0" if args.device == "auto" and torch.cuda.is_available() else ("cpu" if args.device == "auto" else args.device))
+    device = torch.device(normalize_torch_device(args.device, torch))
     train_tensor = torch.from_numpy(np.stack(train_x).astype(np.float32))
     train_labels = torch.from_numpy(np.asarray(train_y, dtype=np.int64))
     eval_tensor = torch.from_numpy(np.stack(eval_x).astype(np.float32))
@@ -299,6 +299,20 @@ def train_and_evaluate(train_x, train_y, eval_x, eval_y, args, output_dir):
     torch.save({"model_state": model.state_dict(), "model_config": model_config, "classes": ["Normal", "Faint"]}, output_dir / "best.pt")
     (output_dir / "history.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
     return history[-1] if history else empty_metrics()
+
+
+def normalize_torch_device(device_arg, torch_module):
+    raw = str(device_arg).strip().lower()
+    cuda_available = bool(torch_module.cuda.is_available())
+    if raw in {"auto", ""}:
+        return "cuda:0" if cuda_available else "cpu"
+    if raw == "cpu":
+        return "cpu"
+    if raw.startswith("cuda"):
+        return raw if cuda_available else "cpu"
+    if raw.isdigit():
+        return f"cuda:{raw}" if cuda_available else "cpu"
+    return "cpu"
 
 
 def evaluate_lstm(model, loader, device):
@@ -369,6 +383,8 @@ def empty_metrics(reason="not_run"):
         "f1_score": None,
         "confusion_matrix": {"labels": ["Normal", "Faint"], "matrix": [[0, 0], [0, 0]]},
         "per_class_metrics": {},
+        "train_sequence_class_counts": {"Normal": 0, "Faint": 0},
+        "eval_sequence_class_counts": {"Normal": 0, "Faint": 0},
     }
 
 
@@ -391,6 +407,27 @@ def write_csv(path, rows):
         writer.writerows(rows)
 
 
+def sequence_class_counts(y_rows):
+    counts = Counter(ID_TO_CLASS[int(label)] for label in y_rows)
+    return {"Normal": counts.get("Normal", 0), "Faint": counts.get("Faint", 0)}
+
+
+def lstm_readiness_status(train_y, eval_y):
+    if not train_y:
+        return "no_train_sequences"
+    if not eval_y:
+        return "no_eval_sequences"
+    if len(train_y) < 2 or len(eval_y) < 2:
+        return "insufficient_sequences"
+    train_counts = sequence_class_counts(train_y)
+    eval_counts = sequence_class_counts(eval_y)
+    if train_counts["Normal"] == 0 or train_counts["Faint"] == 0:
+        return "missing_class_in_train"
+    if eval_counts["Normal"] == 0 or eval_counts["Faint"] == 0:
+        return "missing_class_in_eval"
+    return "OK"
+
+
 def compare_model(spec, rows, args, output_dir, selected_class_counts):
     started = time.perf_counter()
     detector = create_pose_detector(args.detector_mode, spec["model"], args.device, args.imgsz, conf=args.detector_conf)
@@ -404,16 +441,22 @@ def compare_model(spec, rows, args, output_dir, selected_class_counts):
     (model_dir / "eval_clips.json").write_text(json.dumps(eval_clips, indent=2, ensure_ascii=False), encoding="utf-8")
     train_summary = summarize_split(rows, train_y, train_totals, selected_class_counts.get(args.train_split))
     eval_summary = summarize_split(rows, eval_y, eval_totals, selected_class_counts.get(args.eval_split))
+    train_sequence_counts = sequence_class_counts(train_y)
+    eval_sequence_counts = sequence_class_counts(eval_y)
     if args.dry_run:
         metrics = empty_metrics("dry_run")
-    elif not train_x or not eval_x:
-        metrics = empty_metrics("no_sequences")
     else:
-        try:
-            metrics = train_and_evaluate(train_x, train_y, eval_x, eval_y, args, model_dir)
-            metrics["status"] = "OK"
-        except Exception as exc:
-            metrics = empty_metrics(f"failed: {exc}")
+        readiness_status = lstm_readiness_status(train_y, eval_y)
+        if readiness_status != "OK":
+            metrics = empty_metrics(readiness_status)
+        else:
+            try:
+                metrics = train_and_evaluate(train_x, train_y, eval_x, eval_y, args, model_dir)
+                metrics["status"] = "OK"
+            except Exception as exc:
+                metrics = empty_metrics(f"failed: {exc}")
+    metrics["train_sequence_class_counts"] = train_sequence_counts
+    metrics["eval_sequence_class_counts"] = eval_sequence_counts
     runtime_seconds = round(time.perf_counter() - started, 4)
     write_confusion_matrix_csv(model_dir / "confusion_matrix.csv", metrics.get("confusion_matrix", {}))
     summary = {
@@ -480,6 +523,10 @@ def write_final_summary(output_dir, summaries, selected_class_counts=None):
                 "zero_sequence_clips": eval_summary["zero_sequence_clips"],
                 "keypoint_missing_rate": eval_summary["keypoint_missing_rate"],
                 "fallback_usage": eval_summary["fallback_usage"],
+                "train_sequence_normal": metrics.get("train_sequence_class_counts", {}).get("Normal", 0),
+                "train_sequence_faint": metrics.get("train_sequence_class_counts", {}).get("Faint", 0),
+                "eval_sequence_normal": metrics.get("eval_sequence_class_counts", {}).get("Normal", 0),
+                "eval_sequence_faint": metrics.get("eval_sequence_class_counts", {}).get("Faint", 0),
                 "accuracy": metrics.get("accuracy"),
                 "precision": metrics.get("precision"),
                 "recall": metrics.get("recall"),
@@ -552,13 +599,13 @@ def write_markdown_report(path, final, rows):
             "",
             "## LSTM Classification Benchmark",
             "",
-            "| model_label | accuracy | precision | Faint recall | F1-score | metrics_status |",
-            "| --- | --- | --- | --- | --- | --- |",
+            "| model_label | train Normal | train Faint | eval Normal | eval Faint | accuracy | precision | Faint recall | F1-score | metrics_status |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
         ]
     )
     for row in rows:
         lines.append(
-            "| {model_label} | {accuracy} | {precision} | {recall} | {f1_score} | {metrics_status} |".format(
+            "| {model_label} | {train_sequence_normal} | {train_sequence_faint} | {eval_sequence_normal} | {eval_sequence_faint} | {accuracy} | {precision} | {recall} | {f1_score} | {metrics_status} |".format(
                 **row
             )
         )
