@@ -4,6 +4,37 @@
 
 This project includes a benchmarking pipeline for selecting a YOLO pose model for a smart safety monitoring system.
 
+### Current Decision
+
+The final pose extractor is **YOLO26n-pose (`yolo26n-pose.pt`)**.
+
+The production-oriented AI pipeline is:
+
+```text
+RTSP input
+-> YOLO26n-pose bbox/keypoint extraction
+-> skeleton sequence generation
+-> LSTM Normal/Faint classification
+-> threshold and post-processing
+-> MQTT event publishing
+```
+
+This decision is based on downstream LSTM Normal/Faint performance, not pose-only FPS or fall-rule candidate counts. YOLOv11n-pose was benchmarked and then excluded because YOLO26n-pose produced stronger Faint detection behavior and better repeated-seed stability in the downstream LSTM benchmark.
+
+Latest benchmark status:
+
+- Dataset metadata: 215,541 rows, 205,594 Normal, 9,947 Faint.
+- Source coverage: 183 source videos; Faint appears in 174 source videos.
+- Domains: indoor_background, indoor_chromakey, outdoor.
+- 300/class benchmark: train/val/test each selected 300 Normal and 300 Faint; generated 1,380 sequences; 108 zero-sequence clips; threshold 0.4 gave the best balance with Faint recall around 0.672 and F1 around 0.650.
+- 1000/class benchmark: train/val/test each selected 1000 Normal and 1000 Faint; train generated 5,024 sequences; eval generated 4,676 sequences; threshold 0.5 Faint recall 0.586382 and F1 0.617608; threshold 0.3 Faint recall 0.784553 and F1 0.665661; repeated-seed mean Faint recall 0.658198 and mean F1 0.648263.
+- Latest expanded benchmark now runs YOLO26n-pose only.
+
+Detailed Korean documentation:
+
+- `docs/MODEL_BENCHMARK_REPORT.md`
+- `docs/NEXT_STEPS.md`
+
 The benchmark compares these configured model groups on the same video inputs, image size, and device:
 
 - YOLOv8n-pose (`yolo8n-pose.pt`, fallback `yolov8n-pose.pt`)
