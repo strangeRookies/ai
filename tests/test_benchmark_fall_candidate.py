@@ -1,9 +1,25 @@
 import unittest
 
-from benchmark.benchmark_models import evaluate_fall_candidate, is_fall_candidate
+from benchmark.benchmark_models import BUILTIN_CONFIG, evaluate_fall_candidate, filter_model_entries, is_fall_candidate
 
 
 class BenchmarkFallCandidateTest(unittest.TestCase):
+    def test_filter_model_entries_selects_yolo26n_by_label(self):
+        selected = filter_model_entries(BUILTIN_CONFIG["models"], "YOLO26n-pose")
+
+        self.assertEqual(len(selected), 1)
+        self.assertEqual(selected[0]["name"], "YOLO26n-pose")
+
+    def test_filter_model_entries_selects_yolo26n_by_weight_name_without_extension(self):
+        selected = filter_model_entries(BUILTIN_CONFIG["models"], "yolo26n-pose")
+
+        self.assertEqual(len(selected), 1)
+        self.assertEqual(selected[0]["candidates"], ["yolo26n-pose.pt"])
+
+    def test_filter_model_entries_rejects_unknown_model_selector(self):
+        with self.assertRaisesRegex(ValueError, "Unknown model selector"):
+            filter_model_entries(BUILTIN_CONFIG["models"], "yolo999n-pose")
+
     def test_fall_candidate_reports_torso_ratio_details(self):
         keypoints = [[0.0, 0.0] for _ in range(17)]
         conf = [1.0 for _ in range(17)]

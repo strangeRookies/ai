@@ -129,6 +129,60 @@ benchmark/results/lstm_extractor_comparison/
 
 The comparison prioritizes Faint recall and stable sequence generation over temporary fall-candidate rule counts. It reports clips processed, person detections, keypoints extracted, generated sequences, zero-sequence clips, keypoint missing rate, fallback usage, LSTM accuracy, precision, recall, F1-score, and confusion matrix.
 
+### Final LSTM Benchmark: YOLOv11n-pose vs YOLO26n-pose
+
+The final LSTM extractor benchmark is now scoped to the two remaining pose backbones only:
+
+- YOLOv11n-pose (`yolo11n-pose.pt`)
+- YOLO26n-pose (`yolo26n-pose.pt`)
+
+Older YOLOv8 and `s` variants are previous pose-model candidates and should not be rerun for the final LSTM comparison unless a specific regression check requires it.
+
+Run the GPU-PC smoke test first:
+
+```bash
+python benchmark/compare_lstm_extractors.py \
+  --metadata-csv ../ai_fall_experiments/data/metadata/metadata.csv \
+  --detector-mode real \
+  --models YOLOv11n-pose:yolo11n-pose.pt,YOLO26n-pose:yolo26n-pose.pt \
+  --device 0 \
+  --imgsz 640 \
+  --output-dir benchmark/results/lstm_final_11n_vs_26n \
+  --max-rows-per-split 1 \
+  --max-frames 120 \
+  --epochs 1
+```
+
+If the smoke test completes, run the full final benchmark:
+
+```bash
+python benchmark/compare_lstm_extractors.py \
+  --metadata-csv ../ai_fall_experiments/data/metadata/metadata.csv \
+  --detector-mode real \
+  --models YOLOv11n-pose:yolo11n-pose.pt,YOLO26n-pose:yolo26n-pose.pt \
+  --device 0 \
+  --imgsz 640 \
+  --output-dir benchmark/results/lstm_final_11n_vs_26n \
+  --max-rows-per-split 30 \
+  --max-frames 0 \
+  --epochs 10
+```
+
+Required outputs are written under:
+
+```text
+benchmark/results/lstm_final_11n_vs_26n/
+benchmark/results/lstm_final_11n_vs_26n/summary.csv
+benchmark/results/lstm_final_11n_vs_26n/summary.json
+benchmark/results/lstm_final_11n_vs_26n/report.md
+benchmark/results/lstm_final_11n_vs_26n/<model>/summary.json
+benchmark/results/lstm_final_11n_vs_26n/<model>/confusion_matrix.csv
+benchmark/results/lstm_final_11n_vs_26n/<model>/history.json
+benchmark/results/lstm_final_11n_vs_26n/<model>/best.pt
+```
+
+Interpret the final result in this order: Faint recall, F1-score, false alarm tendency from the confusion matrix, sequence stability, then runtime feasibility. The report separates pose-only context, sequence generation metrics, and LSTM classification metrics. The current local Codex environment verified the CLI/report workflow and unit tests, but the real smoke/full benchmark must run on the GPU PC because the local workspace does not contain `../ai_fall_experiments/data/metadata/metadata.csv` or the real YOLO/Torch runtime.
+
 ## Mock Edge AI MQTT Publisher
 
 `mock_edge_ai.py` publishes random safety event JSON messages to the MQTT topic used by the local development pipeline.

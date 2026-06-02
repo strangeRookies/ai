@@ -91,6 +91,11 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Benchmark YOLO pose models on sample videos.")
     parser.add_argument("--config", default=str(DEFAULT_CONFIG), help="Path to benchmark YAML config.")
     parser.add_argument("--video-dir", default="sample_videos", help="Directory containing input videos.")
+    parser.add_argument(
+        "--models",
+        default="",
+        help="Optional comma-separated model labels or weight names to benchmark, e.g. YOLO26n-pose or yolo26n-pose.pt.",
+    )
     parser.add_argument("--imgsz", type=int, default=640, help="Inference image size.")
     parser.add_argument("--device", default="auto", help="CUDA device index, 'cpu', or 'auto'.")
     parser.add_argument("--max-frames", type=int, default=0, help="Optional maximum measured frames per video.")
@@ -140,6 +145,38 @@ def list_videos(video_dir, extensions):
 
 def candidate_status_name(model_entry):
     return model_entry.get("name") or ", ".join(model_entry.get("candidates", [])) or "unknown"
+
+
+def normalize_model_selector(value):
+    text = str(value).strip().lower()
+    return text[:-3] if text.endswith(".pt") else text
+
+
+def model_entry_selectors(model_entry):
+    selectors = {normalize_model_selector(candidate_status_name(model_entry))}
+    for candidate in model_entry.get("candidates", []):
+        selectors.add(normalize_model_selector(candidate))
+    return selectors
+
+
+def filter_model_entries(model_entries, requested_models):
+    requested = {normalize_model_selector(item) for item in str(requested_models).split(",") if item.strip()}
+    if not requested:
+        return list(model_entries)
+
+    selected = []
+    matched = set()
+    for model_entry in model_entries:
+        selectors = model_entry_selectors(model_entry)
+        if selectors & requested:
+            selected.append(model_entry)
+            matched.update(selectors & requested)
+
+    missing = sorted(requested - matched)
+    if missing:
+        available = sorted({selector for model_entry in model_entries for selector in model_entry_selectors(model_entry)})
+        raise ValueError(f"Unknown model selector(s): {', '.join(missing)}. Available: {', '.join(available)}")
+    return selected
 
 
 def load_first_available_model(model_entry):
@@ -548,6 +585,7 @@ def main():
     args = parse_args()
     config = load_config(args.config)
     device = resolve_device(str(args.device))
+    model_entries = filter_model_entries(config.get("models", []), args.models)
     videos = list_videos(args.video_dir, config.get("video_extensions", [".mp4", ".avi", ".mov", ".mkv"]))
 
     if not videos:
@@ -560,7 +598,7 @@ def main():
                 args.imgsz,
                 "SKIPPED: sample_videos folder is empty or has no supported video files",
             )
-            for model_entry in config.get("models", [])
+            for model_entry in model_entries
         ]
         csv_path, md_path = save_results(rows, args.results_dir)
         print(f"Saved empty benchmark report: {csv_path}")
@@ -568,7 +606,7 @@ def main():
         return 0
 
     rows = []
-    for model_entry in config.get("models", []):
+    for model_entry in model_entries:
         configured_name = candidate_status_name(model_entry)
         try:
             loaded_name, model = load_first_available_model(model_entry)

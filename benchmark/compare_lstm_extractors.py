@@ -3,6 +3,7 @@ import csv
 import json
 import random
 import sys
+import time
 from collections import Counter
 from pathlib import Path
 
@@ -151,7 +152,7 @@ def collect_split_sequences(rows, split_name, detector, args):
                 # 경로에 processed 또는 clips가 있으면 잘려진 32프레임짜리 클립이므로 점프하지 않습니다.
                 is_processed_clip = "processed" in str(video_path).lower() or "clips" in str(video_path).lower()
                 if start_frame > 0 and not is_processed_clip and getattr(reader, "cap", None) is not None:
-                    reader.cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+                    reader.cap.set(reader.cv2.CAP_PROP_POS_FRAMES, start_frame)
                     reader.frame_idx = start_frame
                 while True:
                     packet = reader.read()
@@ -301,7 +302,32 @@ def classification_metrics(y_true, y_pred):
         "recall": round(recall, 6),
         "f1_score": round(f1, 6),
         "confusion_matrix": {"labels": ["Normal", "Faint"], "matrix": matrix},
+        "per_class_metrics": per_class_metrics(matrix),
     }
+
+
+def per_class_metrics(matrix):
+    labels = ["Normal", "Faint"]
+    total = sum(sum(row) for row in matrix)
+    metrics = {}
+    for class_id, label in enumerate(labels):
+        true_positive = matrix[class_id][class_id]
+        false_positive = sum(matrix[row][class_id] for row in range(len(labels)) if row != class_id)
+        false_negative = sum(matrix[class_id][column] for column in range(len(labels)) if column != class_id)
+        true_negative = total - true_positive - false_positive - false_negative
+        precision = true_positive / max(true_positive + false_positive, 1)
+        recall = true_positive / max(true_positive + false_negative, 1)
+        f1 = (2 * precision * recall) / max(precision + recall, 1e-12)
+        metrics[label] = {
+            "precision": round(precision, 6),
+            "recall": round(recall, 6),
+            "f1_score": round(f1, 6),
+            "support": int(sum(matrix[class_id])),
+            "false_positive": int(false_positive),
+            "false_negative": int(false_negative),
+            "true_negative": int(true_negative),
+        }
+    return metrics
 
 
 def empty_metrics(reason="not_run"):
@@ -312,6 +338,7 @@ def empty_metrics(reason="not_run"):
         "recall": None,
         "f1_score": None,
         "confusion_matrix": {"labels": ["Normal", "Faint"], "matrix": [[0, 0], [0, 0]]},
+        "per_class_metrics": {},
     }
 
 
@@ -335,6 +362,7 @@ def write_csv(path, rows):
 
 
 def compare_model(spec, rows, args, output_dir):
+    started = time.perf_counter()
     detector = create_pose_detector(args.detector_mode, spec["model"], args.device, args.imgsz, conf=args.detector_conf)
     model_dir = output_dir / spec["label"]
     model_dir.mkdir(parents=True, exist_ok=True)
@@ -356,6 +384,8 @@ def compare_model(spec, rows, args, output_dir):
             metrics["status"] = "OK"
         except Exception as exc:
             metrics = empty_metrics(f"failed: {exc}")
+    runtime_seconds = round(time.perf_counter() - started, 4)
+    write_confusion_matrix_csv(model_dir / "confusion_matrix.csv", metrics.get("confusion_matrix", {}))
     summary = {
         "model_label": spec["label"],
         "pose_model": spec["model"] if args.detector_mode == "real" else "mock",
@@ -365,6 +395,7 @@ def compare_model(spec, rows, args, output_dir):
         "train_sequence_summary": train_summary,
         "eval_sequence_summary": eval_summary,
         "lstm_metrics": metrics,
+        "runtime_seconds": runtime_seconds,
     }
     (model_dir / "summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
     return summary
@@ -377,9 +408,11 @@ def choose_best_model(summaries):
             candidates,
             key=lambda item: (
                 item["lstm_metrics"]["recall"],
+                item["lstm_metrics"]["f1_score"],
+                -false_alarm_count(item["lstm_metrics"].get("confusion_matrix", {})),
                 item["eval_sequence_summary"]["generated_sequences"],
                 -item["eval_sequence_summary"]["zero_sequence_clips"],
-                item["lstm_metrics"]["f1_score"],
+                -item["eval_sequence_summary"]["keypoint_missing_rate"],
             ),
         )["model_label"]
     return max(
@@ -392,6 +425,13 @@ def choose_best_model(summaries):
     )["model_label"] if summaries else None
 
 
+def false_alarm_count(confusion_matrix):
+    matrix = confusion_matrix.get("matrix") or [[0, 0], [0, 0]]
+    if not matrix or not matrix[0] or len(matrix[0]) < 2:
+        return 0
+    return int(matrix[0][1])
+
+
 def write_final_summary(output_dir, summaries):
     rows = []
     for item in summaries:
@@ -401,6 +441,7 @@ def write_final_summary(output_dir, summaries):
             {
                 "model_label": item["model_label"],
                 "pose_model": item["pose_model"],
+                "clips_requested": eval_summary["clips_requested"],
                 "clips_processed": eval_summary["clips_processed"],
                 "person_detections": eval_summary["person_detections"],
                 "keypoints_extracted": eval_summary["keypoints_extracted"],
@@ -413,6 +454,7 @@ def write_final_summary(output_dir, summaries):
                 "recall": metrics.get("recall"),
                 "f1_score": metrics.get("f1_score"),
                 "metrics_status": metrics.get("status"),
+                "runtime_seconds": item.get("runtime_seconds"),
             }
         )
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -423,7 +465,75 @@ def write_final_summary(output_dir, summaries):
         "models": summaries,
     }
     (output_dir / "summary.json").write_text(json.dumps(final, indent=2, ensure_ascii=False), encoding="utf-8")
+    write_markdown_report(output_dir / "report.md", final, rows)
     return final
+
+
+def write_confusion_matrix_csv(path, confusion_matrix):
+    labels = confusion_matrix.get("labels") or ["Normal", "Faint"]
+    matrix = confusion_matrix.get("matrix") or [[0, 0], [0, 0]]
+    rows = []
+    for label, values in zip(labels, matrix):
+        row = {"actual": label}
+        for predicted_label, value in zip(labels, values):
+            row[f"predicted_{predicted_label}"] = int(value)
+        rows.append(row)
+    write_csv(path, rows)
+
+
+def write_markdown_report(path, final, rows):
+    lines = [
+        "# Final LSTM Pose Extractor Benchmark",
+        "",
+        "## Scope",
+        "",
+        "This report focuses on the LSTM classification benchmark. Pose-only model speed/quality is a separate benchmark, and sequence generation is reported here only as the input stability layer for LSTM training/evaluation.",
+        "",
+        "## Pose-Only Benchmark",
+        "",
+        "Not rerun by this script. Previous pose-only results should not be used alone to select the final fall/Faint classifier.",
+        "",
+        "## Sequence Generation Benchmark",
+        "",
+        "| model_label | clips_requested | clips_processed | person_detections | keypoints_extracted | generated_sequences | zero_sequence_clips | keypoint_missing_rate | runtime_seconds |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for row in rows:
+        lines.append(
+            "| {model_label} | {clips_requested} | {clips_processed} | {person_detections} | {keypoints_extracted} | {generated_sequences} | {zero_sequence_clips} | {keypoint_missing_rate} | {runtime_seconds} |".format(
+                **row
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "## LSTM Classification Benchmark",
+            "",
+            "| model_label | accuracy | precision | Faint recall | F1-score | metrics_status |",
+            "| --- | --- | --- | --- | --- | --- |",
+        ]
+    )
+    for row in rows:
+        lines.append(
+            "| {model_label} | {accuracy} | {precision} | {recall} | {f1_score} | {metrics_status} |".format(
+                **row
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "## Selection Policy",
+            "",
+            final["selection_policy"],
+            "",
+            f"Current best model for downstream LSTM: `{final['best_model_for_downstream_lstm']}`",
+            "",
+            "Evaluation priority: Faint recall, F1-score, false alarm tendency from confusion matrix, sequence stability, then runtime feasibility.",
+            "",
+            "Per-model details are saved under each model directory as `summary.json`, `train_clips.json`, `eval_clips.json`, sequence CSV files, `history.json` when training runs, and `confusion_matrix.csv`.",
+        ]
+    )
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def main():

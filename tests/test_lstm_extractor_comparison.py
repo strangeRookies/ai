@@ -1,4 +1,6 @@
 import unittest
+from tempfile import TemporaryDirectory
+from pathlib import Path
 
 import numpy as np
 
@@ -8,6 +10,7 @@ from benchmark.compare_lstm_extractors import (
     keypoints_to_feature,
     parse_model_specs,
     summarize_split,
+    write_final_summary,
 )
 
 
@@ -36,18 +39,36 @@ class LstmExtractorComparisonTest(unittest.TestCase):
         self.assertEqual(metrics["recall"], 0.5)
         self.assertEqual(metrics["f1_score"], 0.5)
         self.assertEqual(metrics["confusion_matrix"]["matrix"], [[1, 1], [1, 1]])
+        self.assertEqual(metrics["per_class_metrics"]["Normal"]["recall"], 0.5)
+        self.assertEqual(metrics["per_class_metrics"]["Faint"]["recall"], 0.5)
 
     def test_choose_best_model_prioritizes_faint_recall_then_sequences(self):
         summaries = [
             {
                 "model_label": "YOLO26n-pose",
                 "eval_sequence_summary": {"generated_sequences": 10, "zero_sequence_clips": 0, "keypoint_missing_rate": 0.1},
-                "lstm_metrics": {"recall": 0.8, "f1_score": 0.7},
+                "lstm_metrics": {"recall": 0.8, "f1_score": 0.7, "confusion_matrix": {"matrix": [[9, 1], [2, 8]]}},
             },
             {
                 "model_label": "YOLOv11n-pose",
                 "eval_sequence_summary": {"generated_sequences": 50, "zero_sequence_clips": 0, "keypoint_missing_rate": 0.1},
-                "lstm_metrics": {"recall": 0.7, "f1_score": 0.9},
+                "lstm_metrics": {"recall": 0.7, "f1_score": 0.9, "confusion_matrix": {"matrix": [[9, 1], [3, 7]]}},
+            },
+        ]
+
+        self.assertEqual(choose_best_model(summaries), "YOLO26n-pose")
+
+    def test_choose_best_model_uses_f1_before_sequence_count_when_recall_ties(self):
+        summaries = [
+            {
+                "model_label": "YOLO26n-pose",
+                "eval_sequence_summary": {"generated_sequences": 10, "zero_sequence_clips": 0, "keypoint_missing_rate": 0.1},
+                "lstm_metrics": {"recall": 0.8, "f1_score": 0.9, "confusion_matrix": {"matrix": [[9, 1], [2, 8]]}},
+            },
+            {
+                "model_label": "YOLOv11n-pose",
+                "eval_sequence_summary": {"generated_sequences": 50, "zero_sequence_clips": 0, "keypoint_missing_rate": 0.1},
+                "lstm_metrics": {"recall": 0.8, "f1_score": 0.7, "confusion_matrix": {"matrix": [[9, 1], [2, 8]]}},
             },
         ]
 
@@ -77,6 +98,38 @@ class LstmExtractorComparisonTest(unittest.TestCase):
         specs = parse_model_specs("A:a.pt,B:b.pt")
 
         self.assertEqual(specs, [{"label": "A", "model": "a.pt"}, {"label": "B", "model": "b.pt"}])
+
+    def test_write_final_summary_creates_markdown_report_with_required_sections(self):
+        summaries = [
+            {
+                "model_label": "YOLOv11n-pose",
+                "pose_model": "yolo11n-pose.pt",
+                "eval_sequence_summary": {
+                    "clips_requested": 1,
+                    "clips_processed": 1,
+                    "person_detections": 4,
+                    "keypoints_extracted": 4,
+                    "generated_sequences": 2,
+                    "zero_sequence_clips": 0,
+                    "keypoint_missing_rate": 0.1,
+                    "fallback_usage": 0,
+                },
+                "lstm_metrics": {"accuracy": 0.5, "precision": 0.5, "recall": 0.5, "f1_score": 0.5, "status": "OK"},
+                "runtime_seconds": 1.25,
+            }
+        ]
+        with TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+
+            write_final_summary(output_dir, summaries)
+
+            report = (output_dir / "report.md").read_text(encoding="utf-8")
+            self.assertIn("## Pose-Only Benchmark", report)
+            self.assertIn("## Sequence Generation Benchmark", report)
+            self.assertIn("## LSTM Classification Benchmark", report)
+            self.assertIn("YOLOv11n-pose", report)
+            self.assertTrue((output_dir / "summary.csv").exists())
+            self.assertTrue((output_dir / "summary.json").exists())
 
 
 if __name__ == "__main__":
