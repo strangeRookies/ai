@@ -15,13 +15,40 @@ from detector.mock_detector import MockDetector
 from detector.yolo_pose_detector import YoloPoseDetector
 
 
+DEFAULT_FAINT_THRESHOLD = 0.3
+DEFAULT_MIN_CONSECUTIVE_FAINT = 2
+DEFAULT_CAMERA_COOLDOWN_SECONDS = 10.0
+
+
+class FaintEventPostProcessor:
+    def __init__(self, min_consecutive_faint=DEFAULT_MIN_CONSECUTIVE_FAINT, cooldown_seconds=DEFAULT_CAMERA_COOLDOWN_SECONDS):
+        self.min_consecutive_faint = max(1, int(min_consecutive_faint))
+        self.cooldown_seconds = max(0.0, float(cooldown_seconds))
+        self._consecutive_by_camera = {}
+        self._last_event_time_by_camera = {}
+
+    def should_trigger(self, camera_id, prediction, timestamp):
+        if not is_alert_prediction(prediction):
+            self._consecutive_by_camera[camera_id] = 0
+            return False
+        consecutive = int(self._consecutive_by_camera.get(camera_id, 0)) + 1
+        self._consecutive_by_camera[camera_id] = consecutive
+        if consecutive < self.min_consecutive_faint:
+            return False
+        last_event_time = self._last_event_time_by_camera.get(camera_id)
+        if last_event_time is not None and float(timestamp) - float(last_event_time) < self.cooldown_seconds:
+            return False
+        self._last_event_time_by_camera[camera_id] = float(timestamp)
+        return True
+
+
 def create_detector(mode, model, device, imgsz=640):
     if mode == "mock":
         return MockDetector(model_name="mock-pose-detector")
     return YoloPoseDetector(model, device=device, imgsz=imgsz)
 
 
-def create_classifier(action_model, device, action_threshold=0.5):
+def create_classifier(action_model, device, action_threshold=DEFAULT_FAINT_THRESHOLD):
     if action_model:
         return LSTMActionClassifier(action_model, device=device, faint_threshold=action_threshold), "lstm_checkpoint"
     return MockActionClassifier(default_label="Faint", score=0.80), "mock_lstm"
@@ -79,12 +106,42 @@ def is_alert_prediction(prediction):
     return bool(prediction) and prediction.get("label") != "Normal"
 
 
+def build_inference_event_payload(args, packet, prediction, boxes, sequence):
+    payload = build_event_payload(
+        camera_id=args.camera_id,
+        frame_idx=packet.frame_idx,
+        timestamp=packet.timestamp,
+        event_type=prediction["label"],
+        score=prediction["score"],
+        boxes=boxes,
+        snapshot_path=None,
+    )
+    bbox = sequence.get("bbox") if sequence else None
+    track_id = sequence.get("track_id") if sequence else None
+    payload["bbox"] = bbox
+    payload["confidence"] = prediction["score"]
+    payload["threshold"] = getattr(args, "action_threshold", DEFAULT_FAINT_THRESHOLD)
+    payload["track_id"] = track_id
+    payload["severity"] = getattr(args, "event_severity", "HIGH")
+    payload["sequence_window"] = {"start": sequence["start_frame"], "end": sequence["end_frame"]} if sequence else None
+    payload["probabilities"] = prediction.get("probabilities", {})
+    payload["post_processing"] = {
+        "min_consecutive_faint": getattr(args, "min_consecutive_faint", DEFAULT_MIN_CONSECUTIVE_FAINT),
+        "camera_cooldown_seconds": getattr(args, "camera_cooldown_seconds", DEFAULT_CAMERA_COOLDOWN_SECONDS),
+    }
+    return payload
+
+
 def run(args):
     detector = create_detector(args.detector_mode, args.yolo_model, args.device, getattr(args, "imgsz", 640))
-    classifier, classifier_mode = create_classifier(args.action_model, args.action_device, getattr(args, "action_threshold", 0.5))
+    classifier, classifier_mode = create_classifier(args.action_model, args.action_device, getattr(args, "action_threshold", DEFAULT_FAINT_THRESHOLD))
     keypoint_buffer = KeypointSequenceBuffer(args.sequence_length, args.sequence_stride)
     classifier_input = getattr(args, "classifier_input", "keypoints")
     crop_buffer = CropSequenceBuffer(args.sequence_length, args.sequence_stride, args.resize_size) if args.action_model and classifier_input == "crops" else None
+    post_processor = FaintEventPostProcessor(
+        min_consecutive_faint=getattr(args, "min_consecutive_faint", DEFAULT_MIN_CONSECUTIVE_FAINT),
+        cooldown_seconds=getattr(args, "camera_cooldown_seconds", DEFAULT_CAMERA_COOLDOWN_SECONDS),
+    )
     publisher = ConsoleEventPublisher()
     writer = None
     summary = {
@@ -95,7 +152,9 @@ def run(args):
         "yolo_model": args.yolo_model if args.detector_mode == "real" else None,
         "classifier_mode": classifier_mode,
         "classifier_input": classifier_input,
-        "action_threshold": getattr(args, "action_threshold", 0.5),
+        "action_threshold": getattr(args, "action_threshold", DEFAULT_FAINT_THRESHOLD),
+        "min_consecutive_faint": getattr(args, "min_consecutive_faint", DEFAULT_MIN_CONSECUTIVE_FAINT),
+        "camera_cooldown_seconds": getattr(args, "camera_cooldown_seconds", DEFAULT_CAMERA_COOLDOWN_SECONDS),
         "frames_processed": 0,
         "bbox_detections": 0,
         "keypoints_extracted": 0,
@@ -130,20 +189,9 @@ def run(args):
                 summary["generated_sequences"] += 1
             if prediction:
                 summary["lstm_predictions"] += 1
-            if is_alert_prediction(prediction):
-                payload = build_event_payload(
-                    camera_id=args.camera_id,
-                    frame_idx=packet.frame_idx,
-                    timestamp=packet.timestamp,
-                    event_type=prediction["label"],
-                    score=prediction["score"],
-                    boxes=boxes,
-                    snapshot_path=None,
-                )
+            if post_processor.should_trigger(args.camera_id, prediction, packet.timestamp):
                 sequence_for_event = keypoint_sequence or crop_sequence
-                payload["bbox"] = sequence_for_event.get("bbox") if sequence_for_event else None
-                payload["confidence"] = prediction["score"]
-                payload["sequence_window"] = {"start": sequence_for_event["start_frame"], "end": sequence_for_event["end_frame"]}
+                payload = build_inference_event_payload(args, packet, prediction, boxes, sequence_for_event)
                 if args.dry_run:
                     publisher.publish(payload)
                 summary["events_generated"] += 1
@@ -178,7 +226,10 @@ def main():
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--action-model", default=None)
     parser.add_argument("--action-device", default="auto")
-    parser.add_argument("--action-threshold", type=float, default=0.5, help="Faint probability threshold for LSTM checkpoints with Normal/Faint classes.")
+    parser.add_argument("--action-threshold", type=float, default=DEFAULT_FAINT_THRESHOLD, help="Faint probability threshold for LSTM checkpoints with Normal/Faint classes.")
+    parser.add_argument("--min-consecutive-faint", type=int, default=DEFAULT_MIN_CONSECUTIVE_FAINT, help="Consecutive Faint sequences required before emitting an event.")
+    parser.add_argument("--camera-cooldown-seconds", type=float, default=DEFAULT_CAMERA_COOLDOWN_SECONDS, help="Per-camera event cooldown after a Faint event.")
+    parser.add_argument("--event-severity", default="HIGH")
     parser.add_argument("--classifier-input", choices=["keypoints", "crops"], default="keypoints")
     parser.add_argument("--sequence-length", type=int, default=8)
     parser.add_argument("--sequence-stride", type=int, default=4)

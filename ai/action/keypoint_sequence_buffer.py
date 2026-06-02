@@ -23,6 +23,7 @@ class KeypointSequenceBuffer:
             "frame_shapes": [item["frame_shape"] for item in self._frames],
             "bbox": self._frames[-1]["detection"].get("bbox"),
             "keypoints": self._frames[-1]["detection"].get("keypoints"),
+            "track_id": self._frames[-1]["detection"].get("track_id"),
         }
 
 

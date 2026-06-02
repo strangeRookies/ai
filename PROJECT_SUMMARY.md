@@ -27,7 +27,7 @@ Latest benchmark status:
 - Source coverage: 183 source videos; Faint appears in 174 source videos.
 - Domains: indoor_background, indoor_chromakey, outdoor.
 - 300/class benchmark: train/val/test each selected 300 Normal and 300 Faint; generated 1,380 sequences; 108 zero-sequence clips; threshold 0.4 gave the best balance with Faint recall around 0.672 and F1 around 0.650.
-- 1000/class benchmark: train/val/test each selected 1000 Normal and 1000 Faint; train generated 5,024 sequences; eval generated 4,676 sequences; threshold 0.5 Faint recall 0.586382 and F1 0.617608; threshold 0.3 Faint recall 0.784553 and F1 0.665661; repeated-seed mean Faint recall 0.658198 and mean F1 0.648263.
+- 1000/class benchmark: train/val/test each selected 1000 Normal and 1000 Faint; train generated 5,024 sequences; eval generated 4,676 sequences; threshold 0.5 Faint recall 0.586382 and F1 0.617608; threshold 0.3 Faint recall 0.784553 and F1 0.665661; repeated-seed mean Faint recall 0.658198 and mean F1 0.648263. The real-time inference default candidate threshold is now 0.3, with consecutive-Faint and camera-cooldown post-processing to reduce false alarms.
 - Latest expanded benchmark now runs YOLO26n-pose only.
 
 Detailed Korean documentation:
@@ -232,7 +232,9 @@ python scripts/run_rtsp_inference.py \
   --device 0 \
   --action-model benchmark/results/lstm_final_11n_vs_26n_audit/YOLO26n-pose/best.pt \
   --action-device 0 \
-  --action-threshold 0.5 \
+  --action-threshold 0.3 \
+  --min-consecutive-faint 2 \
+  --camera-cooldown-seconds 10 \
   --classifier-input keypoints \
   --dry-run
 ```
@@ -645,7 +647,9 @@ python scripts/run_rtsp_inference.py \
   --yolo-model yolo26n-pose.pt \
   --action-model benchmark/results/lstm_final_11n_vs_26n_audit/YOLO26n-pose/best.pt \
   --action-device 0 \
-  --action-threshold 0.5 \
+  --action-threshold 0.3 \
+  --min-consecutive-faint 2 \
+  --camera-cooldown-seconds 10 \
   --classifier-input keypoints \
   --dry-run \
   --max-frames 60

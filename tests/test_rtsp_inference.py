@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 
 from ai.action.keypoint_sequence_buffer import KeypointSequenceBuffer
-from scripts.run_rtsp_inference import is_alert_prediction, run
+from scripts.run_rtsp_inference import FaintEventPostProcessor, build_inference_event_payload, is_alert_prediction, run
 from ai.visualization.draw import draw_overlay
 
 
@@ -16,6 +16,7 @@ class RtspInferenceTest(unittest.TestCase):
         detection = {
             "bbox": [0, 0, 10, 20],
             "keypoints": [{"x": 1, "y": 2, "confidence": 0.9}],
+            "track_id": 7,
         }
 
         self.assertIsNone(buffer.add(0, [detection]))
@@ -24,6 +25,7 @@ class RtspInferenceTest(unittest.TestCase):
         self.assertEqual(sequence["start_frame"], 0)
         self.assertEqual(sequence["end_frame"], 1)
         self.assertEqual(sequence["bbox"], [0, 0, 10, 20])
+        self.assertEqual(sequence["track_id"], 7)
 
     def test_mock_rtsp_inference_reports_required_counts(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -47,6 +49,11 @@ class RtspInferenceTest(unittest.TestCase):
                 device="auto",
                 action_model=None,
                 action_device="auto",
+                action_threshold=0.3,
+                min_consecutive_faint=2,
+                camera_cooldown_seconds=10,
+                event_severity="HIGH",
+                classifier_input="keypoints",
                 sequence_length=2,
                 sequence_stride=1,
                 resize_size=32,
@@ -81,6 +88,43 @@ class RtspInferenceTest(unittest.TestCase):
     def test_normal_prediction_is_not_alert_event(self):
         self.assertFalse(is_alert_prediction({"label": "Normal", "score": 0.9}))
         self.assertTrue(is_alert_prediction({"label": "Faint", "score": 0.6}))
+
+    def test_faint_post_processor_requires_consecutive_predictions_and_cooldown(self):
+        processor = FaintEventPostProcessor(min_consecutive_faint=2, cooldown_seconds=5)
+
+        self.assertFalse(processor.should_trigger("cam_01", {"label": "Faint"}, 1.0))
+        self.assertTrue(processor.should_trigger("cam_01", {"label": "Faint"}, 2.0))
+        self.assertFalse(processor.should_trigger("cam_01", {"label": "Faint"}, 4.0))
+        self.assertFalse(processor.should_trigger("cam_01", {"label": "Normal"}, 8.0))
+        self.assertFalse(processor.should_trigger("cam_01", {"label": "Faint"}, 9.0))
+        self.assertTrue(processor.should_trigger("cam_01", {"label": "Faint"}, 10.0))
+
+    def test_inference_event_payload_contains_required_runtime_fields(self):
+        args = Namespace(
+            camera_id="cam_01",
+            action_threshold=0.3,
+            min_consecutive_faint=2,
+            camera_cooldown_seconds=10,
+            event_severity="HIGH",
+        )
+        packet = Namespace(frame_idx=12, timestamp=123.5)
+        prediction = {
+            "label": "Faint",
+            "score": 0.81,
+            "probabilities": {"Normal": 0.19, "Faint": 0.81},
+        }
+        sequence = {"bbox": [1, 2, 3, 4], "track_id": 9, "start_frame": 4, "end_frame": 12}
+
+        payload = build_inference_event_payload(args, packet, prediction, boxes=[], sequence=sequence)
+
+        self.assertEqual(payload["camera_id"], "cam_01")
+        self.assertEqual(payload["event_type"], "Faint")
+        self.assertEqual(payload["confidence"], 0.81)
+        self.assertEqual(payload["threshold"], 0.3)
+        self.assertEqual(payload["track_id"], 9)
+        self.assertEqual(payload["timestamp"], 123.5)
+        self.assertEqual(payload["bbox"], [1, 2, 3, 4])
+        self.assertEqual(payload["severity"], "HIGH")
 
 
 if __name__ == "__main__":

@@ -95,15 +95,16 @@ threshold 0.4는 Faint를 더 적극적으로 잡으면서도 F1-score 균형이
 | repeated-seed mean Faint recall | 0.658198 |
 | repeated-seed mean F1-score | 0.648263 |
 
-threshold 0.5는 기본 argmax에 가까운 보수적 기준이다. threshold 0.3은 Faint recall을 크게 올렸고 F1-score도 더 높았다. 다만 threshold가 낮아질수록 false alarm 가능성이 커질 수 있으므로, 운영에서는 threshold만 낮추지 말고 post-processing을 함께 적용해야 한다.
+threshold 0.5는 기본 argmax에 가까운 보수적 기준이며 현재 운영 목적에는 너무 보수적이다. threshold 0.3은 Faint recall을 크게 올렸고 F1-score도 더 높았다. 다만 threshold가 낮아질수록 false alarm 가능성이 커질 수 있으므로, 운영에서는 threshold 0.3을 기본 후보로 쓰되 연속 Faint sequence 조건과 camera-level cooldown을 함께 적용한다.
 
 ## 현재 해석
 
-YOLO26n-pose는 최종 pose extractor로 채택한다. 현재 숫자만 보면 threshold 0.3과 0.4가 Faint recall 측면에서 유리하다. 특히 1000/class benchmark에서 threshold 0.3은 recall 0.784553, F1 0.665661로 threshold 0.5보다 높은 Faint 탐지 성능을 보였다.
+YOLO26n-pose는 최종 pose extractor로 채택한다. 특히 1000/class benchmark에서 threshold 0.3은 recall 0.784553, F1 0.665661로 threshold 0.5보다 높은 Faint 탐지 성능을 보였다. 따라서 다음 단계는 추가 모델 비교가 아니라 YOLO26n-pose + LSTM Faint detection의 실시간 추론 준비다.
 
 운영 threshold는 즉시 하나로 고정하기보다 다음 방식으로 정하는 것이 좋다.
 
-- 기준 후보: 0.3, 0.4, 0.5
+- 기본 운영 후보: 0.3
+- 비교 후보: 0.4, 0.5
 - 실시간 RTSP smoke test에서 false alarm 빈도 확인
 - 일정 frame/window 이상 Faint가 유지될 때만 MQTT event 발행
 - ByteTrack으로 같은 사람 track의 연속성을 유지
@@ -117,8 +118,8 @@ YOLO26n-pose는 최종 pose extractor로 채택한다. 현재 숫자만 보면 t
 Pose extractor: YOLO26n-pose
 LSTM task: Normal/Faint classification
 Runtime input: keypoint skeleton sequence
-Initial threshold candidates: 0.3, 0.4, 0.5
-Recommended next operating threshold to test first: 0.4
+Initial runtime threshold candidate: 0.3
+Post-processing: consecutive Faint sequences + camera-level cooldown
 ```
 
 최종 선택 근거는 YOLO26n-pose의 downstream LSTM Faint detection 성능과 repeated-seed 안정성이다.

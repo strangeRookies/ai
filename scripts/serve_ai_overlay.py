@@ -16,7 +16,7 @@ from ai.action.sequence_buffer import CropSequenceBuffer
 from ai.publishers.event_publisher import build_event_payload
 from ai.streams.video_reader import VideoReader
 from ai.visualization.draw import draw_overlay
-from scripts.run_rtsp_inference import create_classifier, create_detector, ensure_mock_keypoints, is_alert_prediction, normalize_detections
+from scripts.run_rtsp_inference import DEFAULT_FAINT_THRESHOLD, create_classifier, create_detector, ensure_mock_keypoints, is_alert_prediction, normalize_detections
 from stream.rtsp_reader import redact_url
 
 
@@ -255,7 +255,7 @@ def main():
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--action-model", default=None)
     parser.add_argument("--action-device", default="auto")
-    parser.add_argument("--action-threshold", type=float, default=0.5)
+    parser.add_argument("--action-threshold", type=float, default=DEFAULT_FAINT_THRESHOLD)
     parser.add_argument("--classifier-input", choices=["keypoints", "crops"], default="keypoints")
     parser.add_argument("--sequence-length", type=int, default=8)
     parser.add_argument("--sequence-stride", type=int, default=4)

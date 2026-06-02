@@ -17,17 +17,17 @@ RTSP 입력
 
 ## 1. Threshold tuning
 
-현재 benchmark 기준으로 threshold 후보는 0.3, 0.4, 0.5다.
+현재 1000/class benchmark 기준으로 실시간 추론의 기본 threshold 후보는 0.3이다. threshold 0.5는 Faint recall이 낮아 너무 보수적이다.
 
 | threshold | 의미 | 현재 해석 |
 | --- | --- | --- |
-| 0.3 | Faint를 적극적으로 잡는 기준 | recall이 높지만 false alarm 확인 필요 |
-| 0.4 | recall과 F1 균형 후보 | 300/class에서 가장 균형이 좋았음 |
-| 0.5 | 기본에 가까운 보수적 기준 | false alarm은 줄 수 있지만 Faint miss 가능성이 큼 |
+| 0.3 | Faint를 적극적으로 잡는 기준 | 1000/class에서 recall 0.784553, F1 0.665661로 가장 좋은 운영 후보 |
+| 0.4 | 중간 기준 | false alarm이 많을 때 비교 후보 |
+| 0.5 | 보수적 기준 | Faint miss 가능성이 커서 기본값으로는 부적합 |
 
 권장 순서:
 
-1. RTSP smoke test를 threshold 0.4로 먼저 실행한다.
+1. RTSP smoke test를 threshold 0.3으로 먼저 실행한다.
 2. false alarm이 많으면 0.45 또는 0.5로 올린다.
 3. Faint miss가 많으면 0.3 또는 0.35로 낮춘다.
 4. threshold별 event count, false alarm clip, missed Faint clip을 기록한다.
@@ -66,7 +66,9 @@ python scripts/run_rtsp_inference.py \
   --device 0 \
   --action-model benchmark/results/lstm_final_11n_vs_26n_audit/YOLO26n-pose/best.pt \
   --action-device 0 \
-  --action-threshold 0.4 \
+  --action-threshold 0.3 \
+  --min-consecutive-faint 2 \
+  --camera-cooldown-seconds 10 \
   --classifier-input keypoints \
   --dry-run \
   --max-frames 300
@@ -150,8 +152,8 @@ Fight 확장은 현재 YOLO26n-pose + LSTM Normal/Faint 파이프라인이 RTSP�
 
 ## 우선순위
 
-1. Threshold 0.4 기준 RTSP smoke test.
-2. Threshold 0.3/0.5 비교 실행.
+1. Threshold 0.3 기준 RTSP smoke test.
+2. Threshold 0.4/0.5 비교 실행.
 3. False alarm post-processing rule 추가.
 4. ByteTrack 기반 track-level sequence/history 연결.
 5. MQTT payload에 probability/threshold/post-processing metadata 추가.
