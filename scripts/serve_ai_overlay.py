@@ -274,10 +274,21 @@ class OverlayHandler(BaseHTTPRequestHandler):
         if path == "/health":
             self.send_json({"status": "ok", **self.state.status()})
             return
+        if path == "/cameras":
+            camera_id = getattr(self.server, "camera_id", "camera-1")
+            self.send_json({
+                "cameras": [
+                    {
+                        "id": camera_id,
+                        "connected": self.state.status()["connected"],
+                    }
+                ]
+            })
+            return
         if path == "/summary":
             self.send_json(self.state.status()["summary"])
             return
-        if path == "/" or path == "/stream":
+        if path == "/" or path.startswith("/stream"):
             self.stream()
             return
         self.send_error(HTTPStatus.NOT_FOUND, "Not found")
@@ -358,6 +369,7 @@ def main():
     OverlayHandler.state = state
     server = ThreadingHTTPServer((args.host, args.port), OverlayHandler)
     server.target_fps = args.mjpeg_fps
+    server.camera_id = args.camera_id
 
     worker.start()
     print(f"[ai-overlay] serving http://{args.host}:{args.port}/stream", flush=True)
