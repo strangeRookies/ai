@@ -41,11 +41,14 @@ class FaintEventPostProcessor:
         self._last_event_time_by_camera[camera_id] = float(timestamp)
         return True
 
+    def consecutive_count(self, camera_id):
+        return int(self._consecutive_by_camera.get(camera_id, 0))
 
-def create_detector(mode, model, device, imgsz=640):
+
+def create_detector(mode, model, device, imgsz=640, conf=0.25):
     if mode == "mock":
         return MockDetector(model_name="mock-pose-detector")
-    return YoloPoseDetector(model, device=device, imgsz=imgsz)
+    return YoloPoseDetector(model, device=device, imgsz=imgsz, conf=conf)
 
 
 def create_classifier(action_model, device, action_threshold=DEFAULT_FAINT_THRESHOLD):
@@ -106,6 +109,37 @@ def is_alert_prediction(prediction):
     return bool(prediction) and prediction.get("label") != "Normal"
 
 
+def faint_probability(prediction):
+    if not prediction:
+        return None
+    probabilities = prediction.get("probabilities") or {}
+    if "Faint" in probabilities:
+        return float(probabilities["Faint"])
+    if prediction.get("label") == "Faint":
+        return float(prediction.get("score", 0.0))
+    return None
+
+
+def maybe_log_debug(packet, boxes, summary, prediction, args):
+    every_n = max(0, int(getattr(args, "debug_every_n", 30)))
+    missing_detection = len(boxes) == 0
+    should_log = missing_detection or (every_n > 0 and summary["frames_processed"] % every_n == 0)
+    if not should_log:
+        return
+    faint_prob = faint_probability(prediction)
+    faint_text = "None" if faint_prob is None else f"{faint_prob:.4f}"
+    print(
+        "[rtsp-inference-debug] "
+        f"frame={packet.frame_idx} "
+        f"bbox={len(boxes)} "
+        f"keypoints={summary.get('latest_frame_keypoints', 0)} "
+        f"seq={summary['generated_sequences']} "
+        f"pred={summary['lstm_predictions']} "
+        f"latest_faint_prob={faint_text}",
+        flush=True,
+    )
+
+
 def build_inference_event_payload(args, packet, prediction, boxes, sequence):
     payload = build_event_payload(
         camera_id=args.camera_id,
@@ -133,7 +167,7 @@ def build_inference_event_payload(args, packet, prediction, boxes, sequence):
 
 
 def run(args):
-    detector = create_detector(args.detector_mode, args.yolo_model, args.device, getattr(args, "imgsz", 640))
+    detector = create_detector(args.detector_mode, args.yolo_model, args.device, getattr(args, "imgsz", 640), conf=getattr(args, "detector_conf", 0.25))
     classifier, classifier_mode = create_classifier(args.action_model, args.action_device, getattr(args, "action_threshold", DEFAULT_FAINT_THRESHOLD))
     keypoint_buffer = KeypointSequenceBuffer(args.sequence_length, args.sequence_stride)
     classifier_input = getattr(args, "classifier_input", "keypoints")
@@ -155,6 +189,9 @@ def run(args):
         "action_threshold": getattr(args, "action_threshold", DEFAULT_FAINT_THRESHOLD),
         "min_consecutive_faint": getattr(args, "min_consecutive_faint", DEFAULT_MIN_CONSECUTIVE_FAINT),
         "camera_cooldown_seconds": getattr(args, "camera_cooldown_seconds", DEFAULT_CAMERA_COOLDOWN_SECONDS),
+        "latest_faint_probability": None,
+        "latest_prediction_label": None,
+        "latest_frame_keypoints": 0,
         "frames_processed": 0,
         "bbox_detections": 0,
         "keypoints_extracted": 0,
@@ -177,9 +214,11 @@ def run(args):
             if args.detector_mode == "mock":
                 detections = ensure_mock_keypoints(detections)
             boxes = normalize_detections(detections)
+            frame_keypoint_count = sum(1 for item in detections if item.get("keypoints"))
             summary["frames_processed"] += 1
             summary["bbox_detections"] += len(boxes)
-            summary["keypoints_extracted"] += sum(1 for item in detections if item.get("keypoints"))
+            summary["keypoints_extracted"] += frame_keypoint_count
+            summary["latest_frame_keypoints"] = frame_keypoint_count
 
             keypoint_sequence = keypoint_buffer.add(packet.frame_idx, detections, packet.frame.shape)
             crop_sequence = crop_buffer.add(packet.frame_idx, packet.frame, boxes) if crop_buffer else None
@@ -189,6 +228,8 @@ def run(args):
                 summary["generated_sequences"] += 1
             if prediction:
                 summary["lstm_predictions"] += 1
+                summary["latest_prediction_label"] = prediction.get("label")
+                summary["latest_faint_probability"] = faint_probability(prediction)
             if post_processor.should_trigger(args.camera_id, prediction, packet.timestamp):
                 sequence_for_event = keypoint_sequence or crop_sequence
                 payload = build_inference_event_payload(args, packet, prediction, boxes, sequence_for_event)
@@ -197,6 +238,7 @@ def run(args):
                 summary["events_generated"] += 1
                 if summary["sample_event"] is None:
                     summary["sample_event"] = payload
+            maybe_log_debug(packet, boxes, summary, prediction, args)
 
             if args.overlay_output:
                 import cv2
@@ -224,12 +266,14 @@ def main():
     parser.add_argument("--yolo-model", default="yolo26n-pose.pt")
     parser.add_argument("--device", default="auto")
     parser.add_argument("--imgsz", type=int, default=640)
+    parser.add_argument("--detector-conf", type=float, default=0.25)
     parser.add_argument("--action-model", default=None)
     parser.add_argument("--action-device", default="auto")
     parser.add_argument("--action-threshold", type=float, default=DEFAULT_FAINT_THRESHOLD, help="Faint probability threshold for LSTM checkpoints with Normal/Faint classes.")
     parser.add_argument("--min-consecutive-faint", type=int, default=DEFAULT_MIN_CONSECUTIVE_FAINT, help="Consecutive Faint sequences required before emitting an event.")
     parser.add_argument("--camera-cooldown-seconds", type=float, default=DEFAULT_CAMERA_COOLDOWN_SECONDS, help="Per-camera event cooldown after a Faint event.")
     parser.add_argument("--event-severity", default="HIGH")
+    parser.add_argument("--debug-every-n", type=int, default=30)
     parser.add_argument("--classifier-input", choices=["keypoints", "crops"], default="keypoints")
     parser.add_argument("--sequence-length", type=int, default=8)
     parser.add_argument("--sequence-stride", type=int, default=4)

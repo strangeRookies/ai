@@ -5,11 +5,29 @@ import numpy as np
 
 from ai.streams.video_reader import FramePacket
 from scripts.run_rtsp_inference import create_classifier, create_detector
-from scripts.serve_ai_overlay import initial_summary, process_frame
+from scripts.serve_ai_overlay import annotate_boxes_with_action, format_action_overlay_text, initial_summary, process_frame
 from ai.action.sequence_buffer import CropSequenceBuffer
 
 
 class AiOverlayServerTest(unittest.TestCase):
+    def test_action_overlay_text_shows_faint_probability_threshold_and_alert(self):
+        prediction = {"label": "Normal", "score": 0.63, "probabilities": {"Normal": 0.63, "Faint": 0.37}}
+
+        text = format_action_overlay_text(prediction, threshold=0.3, consecutive_faint=0, event_triggered=False)
+        alert_text = format_action_overlay_text({"label": "Faint", "score": 0.82, "probabilities": {"Faint": 0.82}}, threshold=0.3, consecutive_faint=2, event_triggered=True)
+
+        self.assertEqual(text, "Faint: 0.37 | pred: Normal | th: 0.30 | seq: 0")
+        self.assertEqual(alert_text, "ALERT Faint: 0.82")
+
+    def test_annotate_boxes_adds_action_overlay_to_each_box(self):
+        boxes = [{"x1": 1, "y1": 2, "x2": 3, "y2": 4, "score": 0.91}]
+        args = Namespace(action_threshold=0.3)
+
+        annotate_boxes_with_action(boxes, {"label": "Faint", "score": 0.4, "probabilities": {"Faint": 0.4}}, args, consecutive_faint=1, event_triggered=False)
+
+        self.assertIn("Faint: 0.40", boxes[0]["action_overlay"])
+        self.assertFalse(boxes[0]["event_triggered"])
+
     def test_process_frame_draws_overlay_and_updates_counts(self):
         args = Namespace(
             detector_mode="mock",
