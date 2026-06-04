@@ -15,6 +15,7 @@ from ai.inference.rtsp_runtime import (
     maybe_log_debug,
     normalize_detections,
     update_prediction_counts,
+    update_tracking_summary,
 )
 from ai.overlay_http import OverlayState, create_overlay_server
 from ai.streams.video_reader import VideoReader
@@ -45,7 +46,7 @@ def initial_summary():
     return initial_overlay_summary()
 
 
-def process_frame(packet, detector, classifier, sequence_buffer, summary, args, post_processor=None, tracker=None):
+def process_frame(packet, detector, classifier, sequence_buffer, summary, args, post_processor=None, tracker=None, state=None):
     detections = detector.detect(packet.frame)
     if args.detector_mode == "mock":
         detections = ensure_mock_keypoints(detections)
@@ -53,14 +54,13 @@ def process_frame(packet, detector, classifier, sequence_buffer, summary, args, 
         detections = tracker.update(detections, now=packet.timestamp)
     boxes = normalize_detections(detections)
     frame_keypoint_count = sum(1 for item in detections if item.get("keypoints"))
-    active_tracks = len({int(item["track_id"]) for item in detections if item.get("track_id") is not None})
     summary["frames_processed"] += 1
     summary["bbox_detections"] += len(boxes)
     summary["keypoints_extracted"] += frame_keypoint_count
     summary["latest_frame_bbox"] = len(boxes)
     summary["latest_frame_keypoints"] = frame_keypoint_count
-    summary["active_tracks"] = active_tracks
-    summary["max_active_tracks"] = max(summary.get("max_active_tracks", 0), active_tracks)
+    if tracker is not None:
+        update_tracking_summary(summary, tracker.diagnostics())
 
     classifier_input = getattr(args, "classifier_input", None)
     if classifier_input == "crops":
@@ -110,6 +110,8 @@ def process_frame(packet, detector, classifier, sequence_buffer, summary, args, 
             summary["sample_event"] = payload
         if args.print_events:
             print(f"[ai-overlay-event] {json.dumps(payload, ensure_ascii=False)}", flush=True)
+        if state is not None:
+            state.push_event(payload)
     maybe_log_debug(packet, boxes, summary, prediction, args, prefix="[ai-overlay-debug]")
 
     update_overlay_runtime(summary)
@@ -141,7 +143,11 @@ class OverlayWorker:
             cooldown_seconds=self.args.camera_cooldown_seconds,
         )
         tracker = SimpleTrackAssigner(
-            iou_threshold=self.args.tracker_iou_threshold,
+            track_thresh=self.args.track_thresh,
+            match_thresh=self.args.match_thresh,
+            track_buffer=self.args.track_buffer,
+            min_box_area=self.args.min_box_area,
+            bbox_smoothing_alpha=self.args.bbox_smoothing_alpha,
             max_missing_seconds=self.args.track_max_missing_seconds,
         )
         while not self.stop_event.is_set():
@@ -165,7 +171,7 @@ class OverlayWorker:
                         packet = reader.read()
                         if packet is None:
                             break
-                        overlay = process_frame(packet, detector, classifier, sequence_buffer, summary, self.args, post_processor=post_processor, tracker=tracker)
+                        overlay = process_frame(packet, detector, classifier, sequence_buffer, summary, self.args, post_processor=post_processor, tracker=tracker, state=self.state)
                         self.state.update_frame(overlay, summary)
                         if self.args.max_frames > 0 and summary["frames_processed"] >= self.args.max_frames:
                             return
@@ -197,8 +203,13 @@ def main():
     parser.add_argument("--sequence-length", type=int, default=8)
     parser.add_argument("--sequence-stride", type=int, default=4)
     parser.add_argument("--resize-size", type=int, default=224)
-    parser.add_argument("--tracker-iou-threshold", type=float, default=0.3)
-    parser.add_argument("--track-max-missing-seconds", type=float, default=2.0)
+    parser.add_argument("--track-thresh", type=float, default=0.10)
+    parser.add_argument("--match-thresh", "--tracker-iou-threshold", dest="match_thresh", type=float, default=0.20)
+    parser.add_argument("--track-buffer", type=int, default=45)
+    parser.add_argument("--min-box-area", type=float, default=100.0)
+    parser.add_argument("--bbox-smoothing-alpha", type=float, default=0.60)
+    parser.add_argument("--track-max-missing-seconds", type=float, default=3.0)
+    parser.add_argument("--overlay-debug-tracks", action="store_true")
     parser.add_argument("--max-frames", type=int, default=0)
     parser.add_argument("--reconnect-delay", type=float, default=2.0)
     parser.add_argument("--debug-every-n", type=int, default=30)

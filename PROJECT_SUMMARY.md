@@ -264,6 +264,8 @@ Runtime JSON remains backward-compatible and now also reports `active_tracks`, `
 
 The RTSP overlay is tuned for operator readability. Normal tracks use a subtle bbox and compact `ID N` label. Tracks whose Faint probability is at or above the configured threshold use a more visible warning bbox and `ID N | Faint p` label. Confirmed post-processed events use the thickest alert bbox and `ALERT | ID N | Faint p` label. Labels have filled backgrounds, adaptive text size, and stay near the bbox without changing model thresholds or event logic.
 
+Track ID stability now uses configurable ByteTrack-style fallback parameters: `track_thresh=0.10`, `match_thresh=0.20`, `track_buffer=45`, `min_box_area=100`, and `bbox_smoothing_alpha=0.60`. The fallback tracker keeps tracks alive across short missed-detection gaps, matches returning detections by IoU, applies EMA smoothing to visualization bboxes while preserving raw bboxes for diagnostics, and reports `new_tracks`, `lost_tracks`, `id_switch_like_events`, `track_age`, `missing_frames`, and per-track detection confidence in `/summary`.
+
 Acceleration decision rule:
 
 - RTSP/read latency slow or unstable: investigate GStreamer.

@@ -23,6 +23,7 @@ from ai.inference.rtsp_runtime import (
     maybe_log_debug,
     normalize_detections,
     update_prediction_counts,
+    update_tracking_summary,
 )
 from ai.publishers.event_publisher import ConsoleEventPublisher
 from ai.runtime_metrics import RuntimeMetrics
@@ -50,8 +51,12 @@ def run(args):
     classifier, classifier_mode = create_classifier(args.action_model, args.action_device, getattr(args, "action_threshold", DEFAULT_FAINT_THRESHOLD))
     classifier_input = getattr(args, "classifier_input", "keypoints")
     tracker = SimpleTrackAssigner(
-        iou_threshold=getattr(args, "tracker_iou_threshold", 0.3),
-        max_missing_seconds=getattr(args, "track_max_missing_seconds", 2.0),
+        track_thresh=getattr(args, "track_thresh", 0.10),
+        match_thresh=getattr(args, "match_thresh", 0.20),
+        track_buffer=getattr(args, "track_buffer", 45),
+        min_box_area=getattr(args, "min_box_area", 100.0),
+        bbox_smoothing_alpha=getattr(args, "bbox_smoothing_alpha", 0.60),
+        max_missing_seconds=getattr(args, "track_max_missing_seconds", 3.0),
     )
     keypoint_buffers = PerTrackKeypointSequenceBuffers(
         args.sequence_length,
@@ -91,6 +96,10 @@ def run(args):
         "latest_frame_keypoints": 0,
         "active_tracks": 0,
         "max_active_tracks": 0,
+        "new_tracks": 0,
+        "lost_tracks": 0,
+        "id_switch_like_events": 0,
+        "track_diagnostics": {},
         "per_track_sequences_generated": {},
         "faint_predictions": 0,
         "normal_predictions": 0,
@@ -124,14 +133,12 @@ def run(args):
             detections = tracker.update(detections, now=packet.timestamp)
             boxes = normalize_detections(detections)
             frame_keypoint_count = sum(1 for item in detections if item.get("keypoints"))
-            active_tracks = len({int(item["track_id"]) for item in detections if item.get("track_id") is not None})
-            metrics.observe_active_tracks(active_tracks)
+            update_tracking_summary(summary, tracker.diagnostics())
+            metrics.observe_active_tracks(summary["active_tracks"])
             summary["frames_processed"] += 1
             summary["bbox_detections"] += len(boxes)
             summary["keypoints_extracted"] += frame_keypoint_count
             summary["latest_frame_keypoints"] = frame_keypoint_count
-            summary["active_tracks"] = active_tracks
-            summary["max_active_tracks"] = max(summary["max_active_tracks"], active_tracks)
 
             keypoint_sequences = keypoint_buffers.add(packet.frame_idx, detections, packet.frame.shape, now=packet.timestamp)
             crop_sequences = crop_buffers.add(packet.frame_idx, packet.frame, boxes, now=packet.timestamp) if crop_buffers else []
@@ -219,8 +226,12 @@ def main():
     parser.add_argument("--sequence-length", type=int, default=8)
     parser.add_argument("--sequence-stride", type=int, default=4)
     parser.add_argument("--resize-size", type=int, default=224)
-    parser.add_argument("--tracker-iou-threshold", type=float, default=0.3)
-    parser.add_argument("--track-max-missing-seconds", type=float, default=2.0)
+    parser.add_argument("--track-thresh", type=float, default=0.10)
+    parser.add_argument("--match-thresh", "--tracker-iou-threshold", dest="match_thresh", type=float, default=0.20)
+    parser.add_argument("--track-buffer", type=int, default=45)
+    parser.add_argument("--min-box-area", type=float, default=100.0)
+    parser.add_argument("--bbox-smoothing-alpha", type=float, default=0.60)
+    parser.add_argument("--track-max-missing-seconds", type=float, default=3.0)
     args = parser.parse_args()
 
     summary = run(args)

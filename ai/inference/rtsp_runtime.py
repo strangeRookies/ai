@@ -23,6 +23,11 @@ def normalize_detections(detections):
                 "class_name": "person",
                 "keypoints": detection.get("keypoints"),
                 "track_id": detection.get("track_id"),
+                "raw_bbox": detection.get("raw_bbox") or bbox,
+                "smoothed_bbox": detection.get("smoothed_bbox") or bbox,
+                "track_age": detection.get("track_age"),
+                "missing_frames": detection.get("missing_frames", 0),
+                "track_confidence": detection.get("track_confidence", detection.get("confidence", 0.0)),
             }
         )
     return boxes
@@ -109,3 +114,12 @@ def update_prediction_counts(summary, prediction):
         summary["faint_predictions"] += 1
     elif label == "Normal":
         summary["normal_predictions"] += 1
+
+
+def update_tracking_summary(summary, tracker_diagnostics):
+    summary["active_tracks"] = int(tracker_diagnostics.get("active_tracks", 0))
+    summary["max_active_tracks"] = max(summary.get("max_active_tracks", 0), summary["active_tracks"])
+    summary["new_tracks"] += int(tracker_diagnostics.get("new_tracks", 0))
+    summary["lost_tracks"] += int(tracker_diagnostics.get("lost_tracks", 0))
+    summary["id_switch_like_events"] += int(tracker_diagnostics.get("id_switch_like_events", 0))
+    summary["track_diagnostics"] = tracker_diagnostics.get("tracks", {})

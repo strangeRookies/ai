@@ -14,6 +14,10 @@ def initial_overlay_summary():
         "events_generated": 0,
         "active_tracks": 0,
         "max_active_tracks": 0,
+        "new_tracks": 0,
+        "lost_tracks": 0,
+        "id_switch_like_events": 0,
+        "track_diagnostics": {},
         "per_track_sequences_generated": {},
         "faint_predictions": 0,
         "normal_predictions": 0,
@@ -58,15 +62,26 @@ def bbox_visual_state(box, threshold=DEFAULT_FAINT_THRESHOLD):
 
 def format_bbox_label(box, threshold=DEFAULT_FAINT_THRESHOLD):
     track_id = box.get("track_id")
-    track_text = f"ID: {int(track_id)}" if track_id is not None else "ID: ?"
+    track_text = f"ID {int(track_id)}" if track_id is not None else "ID ?"
     faint_prob = box.get("faint_probability")
     state = bbox_visual_state(box, threshold)
     if state == "alert":
-        prob_text = "N/A" if faint_prob is None else f"{float(faint_prob):.2f}"
-        return f"[ALERT] {track_text} (Faint: {prob_text})"
+        prob_text = "n/a" if faint_prob is None else f"{float(faint_prob):.2f}"
+        return append_track_debug(f"ALERT | {track_text} | Faint {prob_text}", box)
     if state == "warning":
-        return f"WARN | {track_text} (Faint: {float(faint_prob):.2f})"
-    return track_text
+        return append_track_debug(f"{track_text} | Faint {float(faint_prob):.2f}", box)
+    return append_track_debug(track_text, box)
+
+
+def append_track_debug(text, box):
+    if not box.get("overlay_debug_tracks"):
+        return text
+    age = box.get("track_age")
+    missing = box.get("missing_frames", 0)
+    conf = box.get("track_confidence")
+    conf_text = "n/a" if conf is None else f"{float(conf):.2f}"
+    age_text = "?" if age is None else str(int(age))
+    return f"{text} | age {age_text} | miss {int(missing)} | conf {conf_text}"
 
 
 def annotate_boxes_with_action(boxes, prediction, args, consecutive_faint=0, event_triggered=False):
@@ -77,6 +92,7 @@ def annotate_boxes_with_action(boxes, prediction, args, consecutive_faint=0, eve
         box["event_triggered"] = bool(event_triggered)
         box["faint_probability"] = faint_prob
         box["action_threshold"] = getattr(args, "action_threshold", DEFAULT_FAINT_THRESHOLD)
+        box["overlay_debug_tracks"] = bool(getattr(args, "overlay_debug_tracks", False))
     return boxes
 
 
@@ -85,6 +101,7 @@ def annotate_boxes_with_track_actions(boxes, predictions_by_track, consecutive_b
     for box in boxes:
         track_id = box.get("track_id")
         box["action_threshold"] = threshold
+        box["overlay_debug_tracks"] = bool(getattr(args, "overlay_debug_tracks", False))
         if track_id is None:
             box["action_overlay"] = format_action_overlay_text(None, getattr(args, "action_threshold", DEFAULT_FAINT_THRESHOLD))
             continue

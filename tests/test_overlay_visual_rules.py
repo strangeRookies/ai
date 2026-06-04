@@ -9,19 +9,32 @@ class OverlayVisualRulesTest(unittest.TestCase):
         box = {"track_id": 3, "faint_probability": 0.12, "event_triggered": False}
 
         self.assertEqual(bbox_visual_state(box, threshold=0.3), "normal")
-        self.assertEqual(format_bbox_label(box, threshold=0.3), "ID: 3")
+        self.assertEqual(format_bbox_label(box, threshold=0.3), "ID 3")
 
     def test_warning_label_shows_faint_probability(self):
         box = {"track_id": 3, "faint_probability": 0.42, "event_triggered": False}
 
         self.assertEqual(bbox_visual_state(box, threshold=0.3), "warning")
-        self.assertEqual(format_bbox_label(box, threshold=0.3), "WARN | ID: 3 (Faint: 0.42)")
+        self.assertEqual(format_bbox_label(box, threshold=0.3), "ID 3 | Faint 0.42")
 
     def test_alert_label_is_explicit(self):
         box = {"track_id": 3, "faint_probability": 0.81, "event_triggered": True}
 
         self.assertEqual(bbox_visual_state(box, threshold=0.3), "alert")
-        self.assertEqual(format_bbox_label(box, threshold=0.3), "[ALERT] ID: 3 (Faint: 0.81)")
+        self.assertEqual(format_bbox_label(box, threshold=0.3), "ALERT | ID 3 | Faint 0.81")
+
+    def test_debug_label_includes_track_diagnostics(self):
+        box = {
+            "track_id": 3,
+            "faint_probability": 0.12,
+            "event_triggered": False,
+            "overlay_debug_tracks": True,
+            "track_age": 12,
+            "missing_frames": 1,
+            "track_confidence": 0.91,
+        }
+
+        self.assertEqual(format_bbox_label(box, threshold=0.3), "ID 3 | age 12 | miss 1 | conf 0.91")
 
     def test_bbox_thickness_increases_with_state(self):
         normal = bbox_thickness(1280, "normal")
