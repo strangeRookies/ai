@@ -1,5 +1,6 @@
 import argparse
 import csv
+import math
 import statistics
 import sys
 import time
@@ -90,6 +91,11 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Benchmark YOLO pose models on sample videos.")
     parser.add_argument("--config", default=str(DEFAULT_CONFIG), help="Path to benchmark YAML config.")
     parser.add_argument("--video-dir", default="sample_videos", help="Directory containing input videos.")
+    parser.add_argument(
+        "--models",
+        default="",
+        help="Optional comma-separated model labels or weight names to benchmark, e.g. YOLO26n-pose or yolo26n-pose.pt.",
+    )
     parser.add_argument("--imgsz", type=int, default=640, help="Inference image size.")
     parser.add_argument("--device", default="auto", help="CUDA device index, 'cpu', or 'auto'.")
     parser.add_argument("--max-frames", type=int, default=0, help="Optional maximum measured frames per video.")
@@ -141,6 +147,38 @@ def candidate_status_name(model_entry):
     return model_entry.get("name") or ", ".join(model_entry.get("candidates", [])) or "unknown"
 
 
+def normalize_model_selector(value):
+    text = str(value).strip().lower()
+    return text[:-3] if text.endswith(".pt") else text
+
+
+def model_entry_selectors(model_entry):
+    selectors = {normalize_model_selector(candidate_status_name(model_entry))}
+    for candidate in model_entry.get("candidates", []):
+        selectors.add(normalize_model_selector(candidate))
+    return selectors
+
+
+def filter_model_entries(model_entries, requested_models):
+    requested = {normalize_model_selector(item) for item in str(requested_models).split(",") if item.strip()}
+    if not requested:
+        return list(model_entries)
+
+    selected = []
+    matched = set()
+    for model_entry in model_entries:
+        selectors = model_entry_selectors(model_entry)
+        if selectors & requested:
+            selected.append(model_entry)
+            matched.update(selectors & requested)
+
+    missing = sorted(requested - matched)
+    if missing:
+        available = sorted({selector for model_entry in model_entries for selector in model_entry_selectors(model_entry)})
+        raise ValueError(f"Unknown model selector(s): {', '.join(missing)}. Available: {', '.join(available)}")
+    return selected
+
+
 def load_first_available_model(model_entry):
     if YOLO is None:
         raise RuntimeError(f"ultralytics import failed: {ULTRALYTICS_IMPORT_ERROR}")
@@ -190,7 +228,7 @@ def extract_pose_metrics(result, keypoint_conf_threshold):
         if visible.numel() > 0:
             keypoint_confidences.extend(visible.tolist())
 
-        if xy_tensor is not None and is_fall_candidate(xy_tensor[person_idx], kp_conf, keypoint_conf_threshold):
+        if xy_tensor is not None and evaluate_fall_candidate(xy_tensor[person_idx], kp_conf, keypoint_conf_threshold)["candidate"]:
             fall_candidates += 1
 
     return {
@@ -203,23 +241,88 @@ def extract_pose_metrics(result, keypoint_conf_threshold):
 
 
 def is_fall_candidate(keypoints_xy, keypoints_conf, threshold):
+    return evaluate_fall_candidate(keypoints_xy, keypoints_conf, threshold)["candidate"]
+
+
+def evaluate_fall_candidate(keypoints_xy, keypoints_conf, threshold):
     required = [COCO_LEFT_SHOULDER, COCO_RIGHT_SHOULDER, COCO_LEFT_HIP, COCO_RIGHT_HIP]
-    if any(idx >= keypoints_conf.numel() or float(keypoints_conf[idx]) < threshold for idx in required):
-        return False
+    details = {
+        "required_keypoints": required,
+        "threshold": float(threshold),
+        "required_confidences": {},
+        "missing_required": [],
+        "shoulder_center": None,
+        "hip_center": None,
+        "torso_dx": None,
+        "torso_dy": None,
+        "torso_ratio": None,
+        "torso_angle_degrees": None,
+        "torso_center": None,
+        "torso_center_y": None,
+        "uses_bbox_ratio": False,
+        "uses_center_height": False,
+        "uses_torso_angle": False,
+        "uses_torso_ratio": True,
+        "uses_confidence_threshold": True,
+        "candidate": False,
+        "reason": "",
+    }
+    for idx in required:
+        if idx >= tensor_len(keypoints_conf):
+            details["missing_required"].append(idx)
+            continue
+        conf = float(keypoints_conf[idx])
+        details["required_confidences"][str(idx)] = conf
+        if conf < threshold:
+            details["missing_required"].append(idx)
+    if details["missing_required"]:
+        details["reason"] = "required_keypoint_below_threshold_or_missing"
+        return details
 
     left_shoulder = keypoints_xy[COCO_LEFT_SHOULDER]
     right_shoulder = keypoints_xy[COCO_RIGHT_SHOULDER]
     left_hip = keypoints_xy[COCO_LEFT_HIP]
     right_hip = keypoints_xy[COCO_RIGHT_HIP]
 
-    shoulder_center = (left_shoulder + right_shoulder) / 2
-    hip_center = (left_hip + right_hip) / 2
+    shoulder_center = midpoint_xy(left_shoulder, right_shoulder)
+    hip_center = midpoint_xy(left_hip, right_hip)
     torso_dx = abs(float(shoulder_center[0] - hip_center[0]))
     torso_dy = abs(float(shoulder_center[1] - hip_center[1]))
+    torso_ratio = torso_dx / max(torso_dy, 1.0) if torso_dx > 0 else 0.0
+    torso_angle_degrees = math.degrees(math.atan2(torso_dy, torso_dx)) if torso_dx > 0 else 90.0
+    torso_center = ((shoulder_center[0] + hip_center[0]) / 2.0, (shoulder_center[1] + hip_center[1]) / 2.0)
+
+    details.update(
+        {
+            "shoulder_center": [float(shoulder_center[0]), float(shoulder_center[1])],
+            "hip_center": [float(hip_center[0]), float(hip_center[1])],
+            "torso_dx": torso_dx,
+            "torso_dy": torso_dy,
+            "torso_ratio": torso_ratio,
+            "torso_angle_degrees": torso_angle_degrees,
+            "torso_center": [float(torso_center[0]), float(torso_center[1])],
+            "torso_center_y": float(torso_center[1]),
+        }
+    )
 
     if torso_dx <= 0:
-        return False
-    return torso_dx / max(torso_dy, 1.0) >= 1.3
+        details["reason"] = "zero_horizontal_torso_delta"
+        return details
+    details["candidate"] = torso_ratio >= 1.3
+    details["reason"] = "torso_ratio_pass" if details["candidate"] else "torso_ratio_below_1.3"
+    return details
+
+
+def tensor_len(value):
+    if hasattr(value, "numel"):
+        return int(value.numel())
+    return len(value)
+
+
+def midpoint_xy(first, second):
+    first_x, first_y = float(first[0]), float(first[1])
+    second_x, second_y = float(second[0]), float(second[1])
+    return ((first_x + second_x) / 2.0, (first_y + second_y) / 2.0)
 
 
 def mean_or_zero(values):
@@ -482,6 +585,7 @@ def main():
     args = parse_args()
     config = load_config(args.config)
     device = resolve_device(str(args.device))
+    model_entries = filter_model_entries(config.get("models", []), args.models)
     videos = list_videos(args.video_dir, config.get("video_extensions", [".mp4", ".avi", ".mov", ".mkv"]))
 
     if not videos:
@@ -494,7 +598,7 @@ def main():
                 args.imgsz,
                 "SKIPPED: sample_videos folder is empty or has no supported video files",
             )
-            for model_entry in config.get("models", [])
+            for model_entry in model_entries
         ]
         csv_path, md_path = save_results(rows, args.results_dir)
         print(f"Saved empty benchmark report: {csv_path}")
@@ -502,7 +606,7 @@ def main():
         return 0
 
     rows = []
-    for model_entry in config.get("models", []):
+    for model_entry in model_entries:
         configured_name = candidate_status_name(model_entry)
         try:
             loaded_name, model = load_first_available_model(model_entry)

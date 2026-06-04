@@ -4,6 +4,37 @@
 
 This project includes a benchmarking pipeline for selecting a YOLO pose model for a smart safety monitoring system.
 
+### Current Decision
+
+The final pose extractor is **YOLO26n-pose (`yolo26n-pose.pt`)**.
+
+The production-oriented AI pipeline is:
+
+```text
+RTSP input
+-> YOLO26n-pose bbox/keypoint extraction
+-> skeleton sequence generation
+-> LSTM Normal/Faint classification
+-> threshold and post-processing
+-> MQTT event publishing
+```
+
+This decision is based on downstream LSTM Normal/Faint performance, not pose-only FPS or fall-rule candidate counts. YOLOv11n-pose was benchmarked and then excluded because YOLO26n-pose produced stronger Faint detection behavior and better repeated-seed stability in the downstream LSTM benchmark.
+
+Latest benchmark status:
+
+- Dataset metadata: 215,541 rows, 205,594 Normal, 9,947 Faint.
+- Source coverage: 183 source videos; Faint appears in 174 source videos.
+- Domains: indoor_background, indoor_chromakey, outdoor.
+- 300/class benchmark: train/val/test each selected 300 Normal and 300 Faint; generated 1,380 sequences; 108 zero-sequence clips; threshold 0.4 gave the best balance with Faint recall around 0.672 and F1 around 0.650.
+- 1000/class benchmark: train/val/test each selected 1000 Normal and 1000 Faint; train generated 5,024 sequences; eval generated 4,676 sequences; threshold 0.5 Faint recall 0.586382 and F1 0.617608; threshold 0.3 Faint recall 0.784553 and F1 0.665661; repeated-seed mean Faint recall 0.658198 and mean F1 0.648263. The real-time inference default candidate threshold is now 0.3, with consecutive-Faint and camera-cooldown post-processing to reduce false alarms.
+- Latest expanded benchmark now runs YOLO26n-pose only.
+
+Detailed Korean documentation:
+
+- `docs/MODEL_BENCHMARK_REPORT.md`
+- `docs/NEXT_STEPS.md`
+
 The benchmark compares these configured model groups on the same video inputs, image size, and device:
 
 - YOLOv8n-pose (`yolo8n-pose.pt`, fallback `yolov8n-pose.pt`)
@@ -79,6 +110,138 @@ GPU memory is measured with `torch.cuda.max_memory_allocated()` when CUDA is use
 The optional fall candidate rule uses COCO pose shoulder and hip keypoints. A person is counted as a `FALL_DOWN` candidate when the shoulder-to-hip torso vector is much more horizontal than vertical and required keypoints are above the configured confidence threshold.
 
 This is a simple screening rule for model comparison, not a final safety decision engine.
+
+### Fall Candidate Diagnostics
+
+If one model reports unexpected `fall_candidate_count` values, inspect the rule inputs on the same sampled frames:
+
+```bash
+python benchmark/diagnose_fall_candidates.py \
+  --video sample_videos/full_demo.mp4 \
+  --models YOLOv8s-pose,YOLOv11n-pose,YOLO26n-pose \
+  --start-frame 7800 \
+  --end-frame 8200 \
+  --samples 10 \
+  --imgsz 640 \
+  --device 0
+```
+
+The diagnostic report writes:
+
+```text
+benchmark/results/fall_candidate_diagnostics/fall_candidate_diagnostics.csv
+benchmark/results/fall_candidate_diagnostics/fall_candidate_diagnostics.json
+benchmark/results/fall_candidate_diagnostics/overlays/<model>/frame_*.jpg
+```
+
+Each row includes bbox `xyxy`, bbox width/height ratio, keypoint coordinates, keypoint confidence, fall-rule torso values, final candidate decision, and a result-format report for checking pixel vs normalized coordinates.
+
+### LSTM Pose Extractor Comparison
+
+Do not eliminate YOLO26n-pose only because `fall_candidate_count` is zero. That value is a rule-based diagnostic. Compare pose models as downstream LSTM keypoint extractors instead:
+
+```bash
+python benchmark/compare_lstm_extractors.py \
+  --metadata-csv ../ai_fall_experiments/data/metadata/metadata.csv \
+  --detector-mode real \
+  --models YOLOv11n-pose:yolo11n-pose.pt,YOLO26n-pose:yolo26n-pose.pt,YOLOv8s-pose:yolov8s-pose.pt \
+  --device 0 \
+  --imgsz 640 \
+  --max-rows-per-split 3 \
+  --max-frames 300 \
+  --epochs 1
+```
+
+For a preprocessing-only smoke test, add `--dry-run`. Results are written under:
+
+```text
+benchmark/results/lstm_extractor_comparison/
+```
+
+The comparison prioritizes Faint recall and stable sequence generation over temporary fall-candidate rule counts. It reports clips processed, person detections, keypoints extracted, generated sequences, zero-sequence clips, keypoint missing rate, fallback usage, LSTM accuracy, precision, recall, F1-score, and confusion matrix.
+
+### Final LSTM Benchmark: YOLOv11n-pose vs YOLO26n-pose
+
+The final LSTM extractor benchmark is now scoped to the two remaining pose backbones only:
+
+- YOLOv11n-pose (`yolo11n-pose.pt`)
+- YOLO26n-pose (`yolo26n-pose.pt`)
+
+Older YOLOv8 and `s` variants are previous pose-model candidates and should not be rerun for the final LSTM comparison unless a specific regression check requires it.
+
+Run the GPU-PC smoke test first:
+
+```bash
+python benchmark/compare_lstm_extractors.py \
+  --metadata-csv ../ai_fall_experiments/data/metadata/metadata.csv \
+  --detector-mode real \
+  --models YOLOv11n-pose:yolo11n-pose.pt,YOLO26n-pose:yolo26n-pose.pt \
+  --device 0 \
+  --imgsz 640 \
+  --output-dir benchmark/results/lstm_final_11n_vs_26n \
+  --max-rows-per-split 1 \
+  --max-frames 120 \
+  --epochs 1
+```
+
+If the smoke test completes, run the full final benchmark:
+
+```bash
+python benchmark/compare_lstm_extractors.py \
+  --metadata-csv ../ai_fall_experiments/data/metadata/metadata.csv \
+  --detector-mode real \
+  --models YOLOv11n-pose:yolo11n-pose.pt,YOLO26n-pose:yolo26n-pose.pt \
+  --device 0 \
+  --imgsz 640 \
+  --output-dir benchmark/results/lstm_final_11n_vs_26n \
+  --max-rows-per-split 30 \
+  --max-frames 0 \
+  --epochs 10 \
+  --no-cpu-fallback
+```
+
+For prediction-distribution auditing after a suspicious confusion matrix, add `--repeat-seeds 3`. This reruns only the LSTM train/eval phase for three deterministic seeds after sequence extraction, then reports mean/std for Faint recall and F1-score. The default Faint probability threshold audit reports thresholds `0.3,0.4,0.5,0.6,0.7`; override it with `--audit-thresholds` if needed.
+
+Required outputs are written under:
+
+```text
+benchmark/results/lstm_final_11n_vs_26n/
+benchmark/results/lstm_final_11n_vs_26n/summary.csv
+benchmark/results/lstm_final_11n_vs_26n/summary.json
+benchmark/results/lstm_final_11n_vs_26n/report.md
+benchmark/results/lstm_final_11n_vs_26n/<model>/summary.json
+benchmark/results/lstm_final_11n_vs_26n/<model>/confusion_matrix.csv
+benchmark/results/lstm_final_11n_vs_26n/<model>/eval_predictions.csv
+benchmark/results/lstm_final_11n_vs_26n/<model>/threshold_audit.csv
+benchmark/results/lstm_final_11n_vs_26n/<model>/repeated_seed_audit.json
+benchmark/results/lstm_final_11n_vs_26n/<model>/history.json
+benchmark/results/lstm_final_11n_vs_26n/<model>/best.pt
+```
+
+Interpret the final result in this order: Faint recall, F1-score, false alarm tendency from the confusion matrix, sequence stability, then runtime feasibility. The report separates pose-only context, sequence generation metrics, and LSTM classification metrics. The current local Codex environment verified the CLI/report workflow and unit tests, but the real smoke/full benchmark must run on the GPU PC because the local workspace does not contain `../ai_fall_experiments/data/metadata/metadata.csv` or the real YOLO/Torch runtime.
+
+The audit outputs do not change final model selection. `eval_predictions.csv` stores per-sequence `true_label`, `pred_label`, `normal_prob`, and `faint_prob`; `threshold_audit.csv` reports Faint recall/F1 at each configured probability threshold; `report.md` and `summary.json` include prediction counts and repeated-seed recall/F1 statistics when enabled.
+
+YOLO26n-pose is the selected pose extractor for the operational RTSP/LSTM path. The runtime defaults now use `yolo26n-pose.pt`, keypoint-sequence classifier input, and a configurable Faint probability threshold. Point `--action-model` at the selected YOLO26n LSTM checkpoint, for example:
+
+```bash
+python scripts/run_rtsp_inference.py \
+  --rtsp-url rtsp://localhost:8554/cam1 \
+  --detector-mode real \
+  --yolo-model yolo26n-pose.pt \
+  --device 0 \
+  --action-model benchmark/results/lstm_final_11n_vs_26n_audit/YOLO26n-pose/best.pt \
+  --action-device 0 \
+  --action-threshold 0.3 \
+  --min-consecutive-faint 2 \
+  --camera-cooldown-seconds 10 \
+  --classifier-input keypoints \
+  --dry-run
+```
+
+The dataset is highly imbalanced, so the final benchmark applies `--max-rows-per-split` per class within each split. For example, `--max-rows-per-split 30` selects up to 30 Normal and 30 Faint rows for each of train, val, and test when available. The generated `summary.json` and `report.md` include selected class counts for train/val/test before reporting sequence generation and LSTM classification metrics.
+
+Normal clip sampling is deterministic but no longer raw row-order based. The sampler shuffles within split/class using `--seed`, prefers Normal clips from the same source context as selected Faint clips when frame ranges such as `__004816_004847` are available, and avoids overlapping Faint ranges. For midtests where early Normal clips produce no pose sequence, add `--prefilter-normal-clips`; this scans deterministic Normal candidates with the first configured pose detector and keeps candidates with both person detections and keypoints. The prefilter writes `normal_prefilter_diagnostics.csv`, and each model writes `train_clip_diagnostics.csv` / `eval_clip_diagnostics.csv` with label, path, parsed frame range, person detections, keypoints extracted, generated sequences, and zero-sequence reason.
 
 ## Mock Edge AI MQTT Publisher
 
@@ -167,7 +330,9 @@ CCTV / Sample Video
 -> OpenCV RTSP Reader
 -> Latest-frame Queue
 -> YOLO Pose Detector or Mock Detector
--> Fall Rule Engine
+-> Track Assigner
+-> Per-track Sequence Buffer
+-> Fall Rule State Machine
 -> MQTT safety/events
 -> Spring Boot Backend
 ```
@@ -181,7 +346,9 @@ stream/frame_queue.py
 stream/rtsp_reader.py
 detector/mock_detector.py
 detector/yolo_pose_detector.py
+tracking/simple_tracker.py
 rules/fall_rule.py
+rules/track_sequence.py
 messaging/event_schema.py
 messaging/mqtt_publisher.py
 tests/test_fall_rule.py
@@ -196,12 +363,19 @@ The frame queue is intentionally small and drops old frames so inference latency
 RTSP_URL=rtsp://localhost:8554/cam01
 CAMERA_ID=cam_01
 DETECTOR_MODE=mock
-YOLO_MODEL=yolov8n-pose.pt
+YOLO_MODEL=yolo26n-pose.pt
 YOLO_DEVICE=auto
 FRAME_QUEUE_SIZE=2
 ALLOW_MOCK_FALLBACK=true
 FALL_MIN_DURATION_SECONDS=1.5
 FALL_DEBOUNCE_SECONDS=10
+FALL_CANDIDATE_THRESHOLD=0.7
+FALL_DECISION_WINDOW=3
+FALL_DECISION_REQUIRED=2
+TRACK_IOU_THRESHOLD=0.3
+TRACK_MAX_MISSING_SECONDS=2
+SEQUENCE_LENGTH=30
+SEQUENCE_MAX_TRACK_AGE_SECONDS=5
 MAX_FRAMES=0
 MQTT_HOST=localhost
 MQTT_PORT=1883
@@ -226,7 +400,7 @@ python main.py --once
 Run with RTSP and YOLO pose model:
 
 ```bash
-DETECTOR_MODE=yolo RTSP_URL=rtsp://localhost:8554/cam01 YOLO_MODEL=yolov8n-pose.pt python main.py
+DETECTOR_MODE=yolo RTSP_URL=rtsp://localhost:8554/cam01 YOLO_MODEL=yolo26n-pose.pt python main.py
 ```
 
 On Windows PowerShell:
@@ -234,7 +408,7 @@ On Windows PowerShell:
 ```powershell
 $env:DETECTOR_MODE="yolo"
 $env:RTSP_URL="rtsp://localhost:8554/cam01"
-$env:YOLO_MODEL="yolov8n-pose.pt"
+$env:YOLO_MODEL="yolo26n-pose.pt"
 python main.py
 ```
 
@@ -268,7 +442,7 @@ Expected event shape:
     "confidence": 0.87,
     "rule_score": 0.91,
     "pose_state": "LYING",
-    "model_name": "yolov8n-pose"
+    "model_name": "yolo26n-pose"
   }
 }
 ```
@@ -277,9 +451,23 @@ Expected event shape:
 
 The first stabilized rule is `fall_detected`. It combines bbox aspect ratio, pose-horizontal signal, detector confidence, and a minimum duration threshold before emitting an event. Repeated events for the same track are debounced.
 
+The runtime now follows a track-aware decision flow:
+
+```text
+Detection
+-> SimpleTrackAssigner
+-> PerTrackSequenceBuffer
+-> FallRuleEngine
+-> Event schema v1.0
+```
+
+`SimpleTrackAssigner` is a lightweight IoU-based adapter so detections without native tracker IDs still get stable-enough `track_id` values in local testing. It is intentionally isolated behind `tracking/simple_tracker.py` so ByteTrack can replace it later without changing the event rule or MQTT schema.
+
+`FallRuleEngine` confirms an event only after the candidate score passes the threshold in at least `FALL_DECISION_REQUIRED` of the last `FALL_DECISION_WINDOW` observations and remains active for `FALL_MIN_DURATION_SECONDS`. This keeps the diagram's "2 out of recent 3" decision rule while preserving duration and cooldown safeguards.
+
 TODO:
 
-- Add ByteTrack or another tracker for stable `track_id` across real streams.
+- Replace `SimpleTrackAssigner` with ByteTrack or another production tracker for stable `track_id` across crowded real streams.
 - Expand rule modules for unconscious, bed fall, unauthorized exit, and violence detection.
 - Add RTSP benchmark tooling in `benchmark/benchmark_rtsp.py`.
 - Calibrate thresholds with real non-sensitive sample videos.
@@ -323,4 +511,179 @@ Use a CSV containing `video_path,label_path,split`:
 python -m ai.main --dataset-csv datasets/processed/clips_train.csv --split train --detector-mode mock
 ```
 
-Current action classifier is a mock interface returning `Fight/Fall/Normal` style labels. Replace `MockActionClassifier` with a PyTorch video classification model later.
+Train the LSTM action classifier from the same CSV:
+
+```bash
+bash scripts/run_yolov8n_vs_yolo11n_lstm.sh
+```
+
+For a quick demo run, limit rows, frames, and epochs:
+
+```bash
+DATASET_CSV=../ai_fall_experiments/data/metadata/metadata.csv MAX_ROWS_PER_SPLIT=3 MAX_FRAMES=120 EPOCHS=1 bash scripts/run_yolov8n_vs_yolo11n_lstm.sh
+```
+
+If YOLO does not find a person in a short demo clip, the training script uses the whole frame as a fallback crop by default. Disable that behavior with `FALLBACK_FULL_FRAME=false`.
+The preprocessing step uses annotation `event_frame` ranges first when available, retries YOLO once with a lower confidence threshold, and writes detector/fallback metadata for every generated sequence.
+
+This writes checkpoints and a comparison table:
+
+```text
+runs/action_lstm/yolov8n/best.pt
+runs/action_lstm/yolo11n/best.pt
+runs/action_lstm/summary.csv
+runs/action_lstm/<model>/preprocess_sequences_train.csv
+runs/action_lstm/<model>/preprocess_summary_train.json
+```
+
+Or run one model manually:
+
+```bash
+python -m ai.action.train_lstm \
+  --dataset-csv datasets/processed/clips_train.csv \
+  --train-split train \
+  --val-split val \
+  --detector-mode yolo \
+  --yolo-model yolov8n.pt \
+  --output-dir runs/action_lstm/yolov8n
+```
+
+Compare another YOLO detector backbone by changing `--yolo-model` and output directory:
+
+```bash
+python -m ai.action.train_lstm \
+  --dataset-csv datasets/processed/clips_train.csv \
+  --train-split train \
+  --val-split val \
+  --detector-mode yolo \
+  --yolo-model yolo11n.pt \
+  --output-dir runs/action_lstm/yolo11n
+```
+
+Run inference with a trained checkpoint:
+
+```bash
+python -m ai.main \
+  --input path/to/video.mp4 \
+  --label path/to/label.json \
+  --detector-mode yolo \
+  --yolo-model yolov8n.pt \
+  --action-model runs/action_lstm/yolov8n/best.pt
+```
+
+If `--action-model` is not provided, the pipeline still falls back to `MockActionClassifier` for integration smoke tests.
+
+## Dataset Split And 4-Camera Demo Checks
+
+Verify the local fall dataset split ratio and source-video leakage:
+
+```bash
+python scripts/check_dataset_split.py \
+  --metadata-csv ../ai_fall_experiments/data/metadata/metadata.csv
+```
+
+Run split verification and the 4-camera dry-run together:
+
+```bash
+python scripts/run_dataset_rtsp_verification.py \
+  --metadata-csv ../ai_fall_experiments/data/metadata/metadata.csv \
+  --config configs/demo_4cams.yaml \
+  --detector-mode mock \
+  --max-frames 60 \
+  --write-fixed-split runs/dataset_split/metadata_stratified.csv
+```
+
+The combined report is written to `runs/verification/final_summary.json`.
+
+Run a dataset pose/keypoint sequence dry-run without training:
+
+```bash
+python scripts/run_dataset_evaluation.py \
+  --metadata-csv ../ai_fall_experiments/data/metadata/metadata.csv \
+  --detector-mode mock \
+  --max-rows-per-split 2 \
+  --max-frames 60 \
+  --output runs/verification/dataset_evaluation_summary.json
+```
+
+This reports selected-row class counts, person bbox detections, keypoint extraction count, generated keypoint sequence count, zero-sequence clips, and fallback crop usage ratio.
+
+If the ratio or leakage is wrong, write a safe candidate split without overwriting production metadata:
+
+```bash
+python scripts/check_dataset_split.py \
+  --metadata-csv ../ai_fall_experiments/data/metadata/metadata.csv \
+  --write-fixed runs/dataset_split/metadata_stratified.csv
+```
+
+Run the safe 4-camera local dataset dry-run. This uses local/demo RTSP URLs from `configs/demo_4cams.yaml`, reads local dataset videos, prints bbox/event payloads in the summary, and does not contact MQTT/EQMS:
+
+```bash
+python scripts/run_rtsp_demo.py \
+  --config configs/demo_4cams.yaml \
+  --dataset-csv ../ai_fall_experiments/data/metadata/metadata.csv \
+  --dry-run \
+  --detector-mode mock \
+  --max-frames 60
+```
+
+Run a single-camera RTSP AI inference dry-run against the local MediaMTX cam1 stream:
+
+```bash
+python scripts/run_rtsp_inference.py \
+  --rtsp-url rtsp://localhost:8554/cam1 \
+  --detector-mode mock \
+  --dry-run \
+  --max-frames 60 \
+  --output runs/verification/rtsp_cam1_inference.json
+```
+
+Use the real YOLO pose detector when the pose model and dependencies are available:
+
+```bash
+python scripts/run_rtsp_inference.py \
+  --rtsp-url rtsp://localhost:8554/cam1 \
+  --detector-mode real \
+  --yolo-model yolo26n-pose.pt \
+  --action-model benchmark/results/lstm_final_11n_vs_26n_audit/YOLO26n-pose/best.pt \
+  --action-device 0 \
+  --action-threshold 0.3 \
+  --min-consecutive-faint 2 \
+  --camera-cooldown-seconds 10 \
+  --classifier-input keypoints \
+  --dry-run \
+  --max-frames 60
+```
+
+`serve_mjpeg.py` remains a raw RTSP-to-MJPEG stream server. It does not run YOLO/LSTM or draw overlays. The AI dry-run scripts above are the current local inference/event-output path.
+
+To view the actual cam1 video with AI overlays in a browser, run the separate local overlay server. This keeps the working raw MJPEG stream untouched:
+
+```bash
+python scripts/serve_ai_overlay.py \
+  --rtsp-url rtsp://localhost:8554/cam1 \
+  --detector-mode mock \
+  --port 8010 \
+  --print-events
+```
+
+Open:
+
+```text
+http://localhost:8010/stream
+```
+
+The overlay shows person bbox, skeleton/keypoints when present, current Normal/Faint-style action label, confidence, frame count, bbox count, keypoint count, sequence count, prediction count, and event count. Use `--detector-mode real --yolo-model yolo26n-pose.pt --action-model benchmark/results/lstm_final_11n_vs_26n_audit/YOLO26n-pose/best.pt --classifier-input keypoints` when YOLO Pose dependencies, Torch, and the selected LSTM checkpoint are available.
+
+The dry-run prints an RTSP publish plan using local-only URLs. To actually publish the four local videos to MediaMTX on the GPU PC, start the local RTSP server first, then opt in explicitly:
+
+```bash
+./scripts/run_rtsp_server.sh
+python scripts/run_rtsp_demo.py \
+  --config configs/demo_4cams.yaml \
+  --dataset-csv ../ai_fall_experiments/data/metadata/metadata.csv \
+  --dry-run \
+  --start-rtsp-publishers \
+  --read-from-rtsp \
+  --max-frames 60
+```

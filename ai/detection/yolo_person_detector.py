@@ -2,18 +2,26 @@ PERSON_CLASS_ID = 0
 
 
 class YoloPersonDetector:
-    def __init__(self, model_name="yolov8n.pt", conf=0.35, iou=0.5):
+    def __init__(self, model_name="yolov8n.pt", conf=0.35, iou=0.5, imgsz=640):
         self.model_name = model_name
         self.conf = conf
         self.iou = iou
+        self.imgsz = imgsz
         try:
             from ultralytics import YOLO
         except ImportError as exc:
             raise RuntimeError(f"ultralytics is required for YOLO inference: {exc}") from exc
         self.model = YOLO(model_name)
 
-    def detect(self, frame, frame_idx):
-        results = self.model.predict(frame, conf=self.conf, iou=self.iou, classes=[PERSON_CLASS_ID], verbose=False)
+    def detect(self, frame, frame_idx, conf=None):
+        results = self.model.predict(
+            frame,
+            conf=self.conf if conf is None else conf,
+            iou=self.iou,
+            imgsz=self.imgsz,
+            classes=[PERSON_CLASS_ID],
+            verbose=False,
+        )
         boxes = []
         for result in results:
             result_boxes = getattr(result, "boxes", None)

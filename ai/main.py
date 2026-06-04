@@ -2,7 +2,7 @@ import csv
 from queue import Queue
 from pathlib import Path
 
-from ai.action.classifier import MockActionClassifier
+from ai.action.classifier import LSTMActionClassifier, MockActionClassifier
 from ai.action.sequence_buffer import CropSequenceBuffer
 from ai.config import parse_config
 from ai.detection.yolo_person_detector import MockPersonDetector, YoloPersonDetector
@@ -21,10 +21,16 @@ def create_detector(config):
     return YoloPersonDetector(config.yolo_model, conf=config.yolo_conf, iou=config.yolo_iou)
 
 
+def create_classifier(config):
+    if config.action_model:
+        return LSTMActionClassifier(config.action_model, device=config.action_device)
+    return MockActionClassifier()
+
+
 def run_one_video(config, video_path, label_path):
     label = load_event_label(label_path) if label_path else None
     detector = create_detector(config)
-    classifier = MockActionClassifier()
+    classifier = create_classifier(config)
     buffer = CropSequenceBuffer(config.sequence_length, config.sequence_stride, config.resize_size)
     publisher = ConsoleEventPublisher()
     records = []

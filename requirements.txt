@@ -1,6 +1,7 @@
 ultralytics
 torch
 opencv-python
+numpy
 pandas
 PyYAML
 tqdm

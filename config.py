@@ -42,6 +42,13 @@ class Settings:
     mqtt_client_id: str
     fall_min_duration_seconds: float
     fall_debounce_seconds: float
+    fall_candidate_threshold: float
+    fall_decision_window: int
+    fall_decision_required: int
+    track_iou_threshold: float
+    track_max_missing_seconds: float
+    sequence_length: int
+    sequence_max_track_age_seconds: float
     event_clip_pre_frames: int
     event_clip_post_frames: int
     event_clip_cooldown_seconds: float
@@ -57,7 +64,7 @@ def load_settings():
         rtsp_url=os.getenv("RTSP_URL", "rtsp://localhost:8554/cam01"),
         camera_id=os.getenv("CAMERA_ID", "cam_01"),
         detector_mode=os.getenv("DETECTOR_MODE", "mock").strip().lower(),
-        yolo_model=os.getenv("YOLO_MODEL", "yolov8n-pose.pt"),
+        yolo_model=os.getenv("YOLO_MODEL", "yolo26n-pose.pt"),
         yolo_device=os.getenv("YOLO_DEVICE", "auto"),
         frame_queue_size=get_env_int("FRAME_QUEUE_SIZE", 2),
         reconnect_delay_seconds=get_env_float("RTSP_RECONNECT_DELAY_SECONDS", 3),
@@ -69,6 +76,13 @@ def load_settings():
         mqtt_client_id=os.getenv("MQTT_CLIENT_ID", "edge-ai-001"),
         fall_min_duration_seconds=get_env_float("FALL_MIN_DURATION_SECONDS", 1.5),
         fall_debounce_seconds=get_env_float("FALL_DEBOUNCE_SECONDS", 10),
+        fall_candidate_threshold=get_env_float("FALL_CANDIDATE_THRESHOLD", 0.7),
+        fall_decision_window=get_env_int("FALL_DECISION_WINDOW", 3),
+        fall_decision_required=get_env_int("FALL_DECISION_REQUIRED", 2),
+        track_iou_threshold=get_env_float("TRACK_IOU_THRESHOLD", 0.3),
+        track_max_missing_seconds=get_env_float("TRACK_MAX_MISSING_SECONDS", 2),
+        sequence_length=get_env_int("SEQUENCE_LENGTH", 30),
+        sequence_max_track_age_seconds=get_env_float("SEQUENCE_MAX_TRACK_AGE_SECONDS", 5),
         event_clip_pre_frames=get_env_int("EVENT_CLIP_PRE_FRAMES", 150),
         event_clip_post_frames=get_env_int("EVENT_CLIP_POST_FRAMES", 150),
         event_clip_cooldown_seconds=get_env_float("EVENT_CLIP_COOLDOWN_SECONDS", 10),

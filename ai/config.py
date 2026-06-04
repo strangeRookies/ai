@@ -26,6 +26,8 @@ class AiPipelineConfig:
     sequence_stride: int
     resize_size: int
     output_video: str | None
+    action_model: str | None
+    action_device: str
     event_clip_enabled: bool
     event_clip_pre_frames: int
     event_clip_post_frames: int
@@ -50,6 +52,8 @@ def parse_config():
     parser.add_argument("--sequence-stride", type=int, default=env_int("SEQUENCE_STRIDE", 8))
     parser.add_argument("--resize-size", type=int, default=env_int("RESIZE_SIZE", 224))
     parser.add_argument("--output-video", default=os.getenv("OUTPUT_VIDEO"))
+    parser.add_argument("--action-model", default=os.getenv("ACTION_MODEL"))
+    parser.add_argument("--action-device", default=os.getenv("ACTION_DEVICE", "auto"))
     parser.add_argument("--event-clip-enabled", action=argparse.BooleanOptionalAction, default=os.getenv("EVENT_CLIP_ENABLED", "true").lower() in {"1", "true", "yes", "y", "on"})
     parser.add_argument("--event-clip-pre-frames", type=int, default=env_int("EVENT_CLIP_PRE_FRAMES", 150))
     parser.add_argument("--event-clip-post-frames", type=int, default=env_int("EVENT_CLIP_POST_FRAMES", 150))
