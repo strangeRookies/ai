@@ -397,3 +397,92 @@ tracker가 부여하는 raw `track_id`는 세션 전체에서 전역 증가(예:
 - RTSP read latency가 높거나 프레임 입력이 불안정하면 GStreamer 검토.
 - YOLO latency가 높거나 목표 FPS보다 낮으면 TensorRT 검토.
 - 지표가 안정적이면 GStreamer/TensorRT는 보류하고 ByteTrack, 후처리, MQTT 연동을 우선한다.
+
+## 11. Final source_video split for LSTM retraining
+
+최종 YOLO26n-pose + LSTM Normal/Faint 학습은 기존 1000/class benchmark split을 그대로 쓰지 않는다. benchmark split은 모델 선택용이고, 최종 학습 split은 `source_video` 단위로 나누어 같은 원본 영상이 train/val/test에 동시에 들어가지 않게 해야 한다.
+
+GPU PC에서 최종 split을 생성한다:
+
+```bash
+cd ~/yolo_training/strange_ai_lstm
+source .venv/bin/activate 2>/dev/null || source ../strange_ai/.venv/bin/activate
+
+python scripts/create_final_source_video_split.py \
+  --metadata-csv ../ai_fall_experiments/data/metadata/metadata.csv \
+  --output-dir data/splits/final_source_video_split \
+  --seed 42
+```
+
+생성 산출물:
+
+```text
+data/splits/final_source_video_split/train.csv
+data/splits/final_source_video_split/val.csv
+data/splits/final_source_video_split/test.csv
+data/splits/final_source_video_split/all.csv
+data/splits/final_source_video_split/split_summary.json
+data/splits/final_source_video_split/split_report.md
+```
+
+검증 기준:
+
+- `source_video` leakage check가 `PASS`여야 한다.
+- train/val/test 각각 Normal과 Faint가 모두 있어야 한다.
+- split별 Normal row 수는 Faint row 수와 같아야 한다.
+- domain 분포는 가능한 한 `indoor_background`, `indoor_chromakey`, `outdoor`가 나뉘어 있어야 한다.
+
+최종 split으로 YOLO26n-pose keypoint sequence를 재생성하는 smoke/dry-run:
+
+```bash
+python benchmark/compare_lstm_extractors.py \
+  --metadata-csv data/splits/final_source_video_split/all.csv \
+  --detector-mode real \
+  --models YOLO26n-pose:yolo26n-pose.pt \
+  --device 0 \
+  --imgsz 640 \
+  --output-dir benchmark/results/final_yolo26n_source_split_sequences \
+  --train-split train \
+  --eval-split val \
+  --max-frames 0 \
+  --epochs 1 \
+  --dry-run \
+  --no-cpu-fallback
+```
+
+최종 LSTM 학습:
+
+```bash
+python benchmark/compare_lstm_extractors.py \
+  --metadata-csv data/splits/final_source_video_split/all.csv \
+  --detector-mode real \
+  --models YOLO26n-pose:yolo26n-pose.pt \
+  --device 0 \
+  --imgsz 640 \
+  --output-dir benchmark/results/lstm_yolo26n_final_source_split \
+  --train-split train \
+  --eval-split val \
+  --max-frames 0 \
+  --epochs 10 \
+  --repeat-seeds 3 \
+  --no-cpu-fallback
+```
+
+최종 학습 후 test split threshold audit:
+
+```bash
+python benchmark/compare_lstm_extractors.py \
+  --metadata-csv data/splits/final_source_video_split/all.csv \
+  --detector-mode real \
+  --models YOLO26n-pose:yolo26n-pose.pt \
+  --device 0 \
+  --imgsz 640 \
+  --output-dir benchmark/results/lstm_yolo26n_final_source_split_test_audit \
+  --train-split train \
+  --eval-split test \
+  --max-frames 0 \
+  --epochs 10 \
+  --repeat-seeds 3 \
+  --audit-thresholds 0.3,0.4,0.5,0.6,0.7 \
+  --no-cpu-fallback
+```

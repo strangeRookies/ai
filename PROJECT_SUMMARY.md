@@ -26,6 +26,7 @@ Latest benchmark status:
 - Dataset metadata: 215,541 rows, 205,594 Normal, 9,947 Faint.
 - Source coverage: 183 source videos; Faint appears in 174 source videos.
 - Domains: indoor_background, indoor_chromakey, outdoor.
+- Final training split is now prepared by `scripts/create_final_source_video_split.py`. It splits by `source_video` with a 7:1.5:1.5 train/val/test ratio, keeps each source video in exactly one split, preserves domain/Faint source distribution by stratified source buckets when possible, and class-balances each split by sampling Normal rows down to the Faint row count. Outputs are written under `data/splits/final_source_video_split/`.
 - 300/class benchmark: train/val/test each selected 300 Normal and 300 Faint; generated 1,380 sequences; 108 zero-sequence clips; threshold 0.4 gave the best balance with Faint recall around 0.672 and F1 around 0.650.
 - 1000/class benchmark: train/val/test each selected 1000 Normal and 1000 Faint; train generated 5,024 sequences; eval generated 4,676 sequences; threshold 0.5 Faint recall 0.586382 and F1 0.617608; threshold 0.3 Faint recall 0.784553 and F1 0.665661; repeated-seed mean Faint recall 0.658198 and mean F1 0.648263. The real-time inference default candidate threshold is now 0.3, with consecutive-Faint and camera-cooldown post-processing to reduce false alarms.
 - Latest expanded benchmark now runs YOLO26n-pose only.
