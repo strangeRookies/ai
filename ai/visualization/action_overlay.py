@@ -47,22 +47,50 @@ def format_action_overlay_text(prediction, threshold, consecutive_faint=0, event
     return f"Faint: {faint_prob:.2f} | pred: {label} | th: {float(threshold):.2f} | seq: {int(consecutive_faint)}"
 
 
+def bbox_visual_state(box, threshold=DEFAULT_FAINT_THRESHOLD):
+    if box.get("event_triggered"):
+        return "alert"
+    faint_prob = box.get("faint_probability")
+    if faint_prob is not None and float(faint_prob) >= float(threshold):
+        return "warning"
+    return "normal"
+
+
+def format_bbox_label(box, threshold=DEFAULT_FAINT_THRESHOLD):
+    track_id = box.get("track_id")
+    track_text = f"ID {int(track_id)}" if track_id is not None else "ID ?"
+    faint_prob = box.get("faint_probability")
+    state = bbox_visual_state(box, threshold)
+    if state == "alert":
+        prob_text = "n/a" if faint_prob is None else f"{float(faint_prob):.2f}"
+        return f"ALERT | {track_text} | Faint {prob_text}"
+    if state == "warning":
+        return f"{track_text} | Faint {float(faint_prob):.2f}"
+    return track_text
+
+
 def annotate_boxes_with_action(boxes, prediction, args, consecutive_faint=0, event_triggered=False):
     text = format_action_overlay_text(prediction, getattr(args, "action_threshold", DEFAULT_FAINT_THRESHOLD), consecutive_faint, event_triggered)
+    faint_prob = faint_probability(prediction)
     for box in boxes:
         box["action_overlay"] = text
         box["event_triggered"] = bool(event_triggered)
+        box["faint_probability"] = faint_prob
+        box["action_threshold"] = getattr(args, "action_threshold", DEFAULT_FAINT_THRESHOLD)
     return boxes
 
 
 def annotate_boxes_with_track_actions(boxes, predictions_by_track, consecutive_by_track, triggered_track_ids, args):
+    threshold = getattr(args, "action_threshold", DEFAULT_FAINT_THRESHOLD)
     for box in boxes:
         track_id = box.get("track_id")
+        box["action_threshold"] = threshold
         if track_id is None:
             box["action_overlay"] = format_action_overlay_text(None, getattr(args, "action_threshold", DEFAULT_FAINT_THRESHOLD))
             continue
         track_id = int(track_id)
         prediction = predictions_by_track.get(track_id)
+        box["faint_probability"] = faint_probability(prediction)
         event_triggered = track_id in triggered_track_ids
         box["action_overlay"] = format_action_overlay_text(
             prediction,

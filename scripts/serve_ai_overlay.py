@@ -19,6 +19,7 @@ from ai.inference.rtsp_runtime import (
 from ai.overlay_http import OverlayState, create_overlay_server
 from ai.streams.video_reader import VideoReader
 from ai.visualization.action_overlay import (
+    annotate_boxes_with_action,
     annotate_boxes_with_track_actions,
     draw_metrics_panel,
     faint_probability,

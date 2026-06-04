@@ -262,6 +262,8 @@ The real-time path now uses IoU-based ByteTrack-style fallback tracking when det
 
 Runtime JSON remains backward-compatible and now also reports `active_tracks`, `max_active_tracks`, `per_track_sequences_generated`, `faint_predictions`, `normal_predictions`, and `events_generated_by_track`.
 
+The RTSP overlay is tuned for operator readability. Normal tracks use a subtle bbox and compact `ID N` label. Tracks whose Faint probability is at or above the configured threshold use a more visible warning bbox and `ID N | Faint p` label. Confirmed post-processed events use the thickest alert bbox and `ALERT | ID N | Faint p` label. Labels have filled backgrounds, adaptive text size, and stay near the bbox without changing model thresholds or event logic.
+
 Acceleration decision rule:
 
 - RTSP/read latency slow or unstable: investigate GStreamer.

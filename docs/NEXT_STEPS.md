@@ -176,6 +176,8 @@ Fight 확장은 현재 YOLO26n-pose + LSTM Normal/Faint 파이프라인이 RTSP�
 
 이벤트 후처리는 `camera_id + track_id` 단위로 debounce/cooldown을 적용한다. 같은 사람이 cooldown 안에 반복 alert를 만들지 않지만, 같은 카메라의 다른 사람은 별도 track으로 판단한다.
 
+overlay 표시는 운영자가 bbox와 track_id를 바로 읽을 수 있도록 개선한다. Normal 상태는 얇은 bbox와 `ID N` 라벨만 표시한다. Faint probability가 현재 threshold 이상이면 warning bbox와 `ID N | Faint p` 라벨을 표시한다. `min_consecutive_faint` 후처리까지 통과한 confirmed event는 가장 두꺼운 alert bbox와 `ALERT | ID N | Faint p` 라벨을 표시한다. 이 변경은 시각화 규칙만 바꾸며 YOLO26n-pose, LSTM checkpoint, threshold 값은 변경하지 않는다.
+
 판단 기준:
 
 - RTSP read latency가 높거나 프레임 입력이 불안정하면 GStreamer 검토.
