@@ -1,6 +1,7 @@
 import json
 import threading
 import time
+import queue
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
@@ -15,6 +16,24 @@ class OverlayState:
         self.connected = False
         self.last_error = ""
         self.lock = threading.Lock()
+        self.event_queues = []
+
+    def register_event_queue(self, q):
+        with self.lock:
+            self.event_queues.append(q)
+
+    def unregister_event_queue(self, q):
+        with self.lock:
+            if q in self.event_queues:
+                self.event_queues.remove(q)
+
+    def push_event(self, event_payload):
+        with self.lock:
+            for q in self.event_queues:
+                try:
+                    q.put_nowait(event_payload)
+                except queue.Full:
+                    pass
 
     def update_frame(self, frame, summary):
         with self.lock:
@@ -56,6 +75,9 @@ class OverlayHandler(BaseHTTPRequestHandler):
         if path == "/summary":
             self.send_json(self.state.status()["summary"])
             return
+        if path == "/events":
+            self.stream_events()
+            return
         if path == "/" or path.startswith("/stream"):
             self.stream()
             return
@@ -72,6 +94,31 @@ class OverlayHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def stream_events(self):
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+
+        q = queue.Queue(maxsize=100)
+        self.state.register_event_queue(q)
+        try:
+            while True:
+                try:
+                    event = q.get(timeout=15.0)
+                    data = json.dumps(event, ensure_ascii=False)
+                    self.wfile.write(f"data: {data}\n\n".encode("utf-8"))
+                    self.wfile.flush()
+                except queue.Empty:
+                    self.wfile.write(b": keepalive\n\n")
+                    self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        finally:
+            self.state.unregister_event_queue(q)
 
     def stream(self):
         import cv2
