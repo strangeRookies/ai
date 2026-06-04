@@ -39,6 +39,7 @@ from scripts.run_rtsp_inference import (
     create_detector,
 )
 from stream.rtsp_reader import redact_url
+from tracking.display_id_mapper import DisplayIdMapper
 from tracking.simple_tracker import SimpleTrackAssigner
 
 
@@ -46,7 +47,7 @@ def initial_summary():
     return initial_overlay_summary()
 
 
-def process_frame(packet, detector, classifier, sequence_buffer, summary, args, post_processor=None, tracker=None, state=None):
+def process_frame(packet, detector, classifier, sequence_buffer, summary, args, post_processor=None, tracker=None, state=None, display_id_mapper=None):
     detections = detector.detect(packet.frame)
     if args.detector_mode == "mock":
         detections = ensure_mock_keypoints(detections)
@@ -54,13 +55,26 @@ def process_frame(packet, detector, classifier, sequence_buffer, summary, args, 
         detections = tracker.update(detections, now=packet.timestamp)
     boxes = normalize_detections(detections)
     frame_keypoint_count = sum(1 for item in detections if item.get("keypoints"))
+    active_tracks = len({int(item["track_id"]) for item in detections if item.get("track_id") is not None})
     summary["frames_processed"] += 1
     summary["bbox_detections"] += len(boxes)
     summary["keypoints_extracted"] += frame_keypoint_count
     summary["latest_frame_bbox"] = len(boxes)
     summary["latest_frame_keypoints"] = frame_keypoint_count
+    summary["active_tracks"] = active_tracks
+    summary["max_active_tracks"] = max(summary.get("max_active_tracks", 0), active_tracks)
     if tracker is not None:
         update_tracking_summary(summary, tracker.diagnostics())
+
+    # Update display ID mapping so operator labels stay compact (1, 2, 3…)
+    if display_id_mapper is not None:
+        active_raw_ids = {int(b["track_id"]) for b in boxes if b.get("track_id") is not None}
+        display_id_mapper.update(active_raw_ids)
+        for box in boxes:
+            raw_id = box.get("track_id")
+            if raw_id is not None:
+                box["display_id"] = display_id_mapper.display_id(int(raw_id))
+        summary["display_id_map"] = display_id_mapper.mapping_snapshot()
 
     classifier_input = getattr(args, "classifier_input", None)
     if classifier_input == "crops":
@@ -105,6 +119,9 @@ def process_frame(packet, detector, classifier, sequence_buffer, summary, args, 
         track_prediction = predictions_by_track[track_id]
         sequence = sequences_by_track[track_id]
         payload = build_inference_event_payload(args, packet, track_prediction, boxes, sequence)
+        # Enrich payload with display_id for frontend
+        if display_id_mapper is not None:
+            payload["display_id"] = display_id_mapper.display_id(int(track_id))
         summary["events_generated"] += 1
         if summary["sample_event"] is None:
             summary["sample_event"] = payload
@@ -150,6 +167,7 @@ class OverlayWorker:
             bbox_smoothing_alpha=self.args.bbox_smoothing_alpha,
             max_missing_seconds=self.args.track_max_missing_seconds,
         )
+        display_id_mapper = DisplayIdMapper()
         while not self.stop_event.is_set():
             if self.args.classifier_input == "crops":
                 sequence_buffer = PerTrackCropSequenceBuffers(
@@ -164,6 +182,8 @@ class OverlayWorker:
                     self.args.sequence_stride,
                     max_track_age_seconds=self.args.track_max_missing_seconds,
                 )
+            # Reset display ID mapping on each camera reconnect so IDs restart from 1
+            display_id_mapper.reset()
             try:
                 with VideoReader(self.args.rtsp_url) as reader:
                     print(f"[ai-overlay] connected: {redact_url(self.args.rtsp_url)}", flush=True)
@@ -171,7 +191,11 @@ class OverlayWorker:
                         packet = reader.read()
                         if packet is None:
                             break
-                        overlay = process_frame(packet, detector, classifier, sequence_buffer, summary, self.args, post_processor=post_processor, tracker=tracker, state=self.state)
+                        overlay = process_frame(
+                            packet, detector, classifier, sequence_buffer, summary, self.args,
+                            post_processor=post_processor, tracker=tracker,
+                            state=self.state, display_id_mapper=display_id_mapper,
+                        )
                         self.state.update_frame(overlay, summary)
                         if self.args.max_frames > 0 and summary["frames_processed"] >= self.args.max_frames:
                             return

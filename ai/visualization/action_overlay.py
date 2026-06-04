@@ -61,8 +61,11 @@ def bbox_visual_state(box, threshold=DEFAULT_FAINT_THRESHOLD):
 
 
 def format_bbox_label(box, threshold=DEFAULT_FAINT_THRESHOLD):
-    track_id = box.get("track_id")
-    track_text = f"ID {int(track_id)}" if track_id is not None else "ID ?"
+    raw_id = box.get("track_id")
+    display_id = box.get("display_id")
+    # Prefer display_id for the operator-facing label; fall back to raw
+    shown_id = display_id if display_id is not None else (int(raw_id) if raw_id is not None else None)
+    track_text = f"ID {shown_id}" if shown_id is not None else "ID ?"
     faint_prob = box.get("faint_probability")
     state = bbox_visual_state(box, threshold)
     if state == "alert":
@@ -81,7 +84,14 @@ def append_track_debug(text, box):
     conf = box.get("track_confidence")
     conf_text = "n/a" if conf is None else f"{float(conf):.2f}"
     age_text = "?" if age is None else str(int(age))
-    return f"{text} | age {age_text} | miss {int(missing)} | conf {conf_text}"
+    # Show raw track_id alongside display_id in debug mode
+    raw_id = box.get("track_id")
+    display_id = box.get("display_id")
+    if raw_id is not None and display_id is not None and int(raw_id) != int(display_id):
+        raw_suffix = f" / raw {int(raw_id)}"
+    else:
+        raw_suffix = ""
+    return f"{text}{raw_suffix} | age {age_text} | miss {int(missing)} | conf {conf_text}"
 
 
 def annotate_boxes_with_action(boxes, prediction, args, consecutive_faint=0, event_triggered=False):
