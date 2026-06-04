@@ -67,6 +67,17 @@ class RtspInferenceTest(unittest.TestCase):
         self.assertGreater(summary["generated_sequences"], 0)
         self.assertGreater(summary["lstm_predictions"], 0)
         self.assertIsNotNone(summary["sample_event"])
+        self.assertIn("runtime_seconds", summary)
+        self.assertIn("effective_fps", summary)
+        self.assertIn("avg_frame_read_ms", summary)
+        self.assertIn("avg_yolo_inference_ms", summary)
+        self.assertIn("avg_lstm_inference_ms", summary)
+        self.assertIn("avg_total_frame_ms", summary)
+        self.assertEqual(summary["bbox_per_frame"], 1.0)
+        self.assertEqual(summary["keypoints_per_frame"], 1.0)
+        self.assertGreater(summary["prediction_per_frame"], 0.0)
+        self.assertIn("gpu_memory", summary)
+        self.assertIn("gpu_memory_warning", summary)
 
     def test_overlay_accepts_keypoints(self):
         frame = np.zeros((32, 32, 3), dtype=np.uint8)

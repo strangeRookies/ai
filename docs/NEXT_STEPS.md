@@ -159,3 +159,21 @@ Fight 확장은 현재 YOLO26n-pose + LSTM Normal/Faint 파이프라인이 RTSP�
 5. MQTT payload에 probability/threshold/post-processing metadata 추가.
 6. 실시간 overlay와 백엔드 event 표시 확인.
 7. Fight class 확장 설계.
+## 8. 4채널 RTSP 장시간 검증
+
+현재 4채널 RTSP + YOLO26n-pose + LSTM smoke test는 통과했다. 최근 300프레임 검증 결과는 다음과 같다.
+
+| camera | frames | bbox | bbox/frame | sequences | LSTM predictions | events |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| cam1 | 300 | 254 | 0.847 | 61 | 61 | 0 |
+| cam2 | 300 | 460 | 1.533 | 71 | 71 | 0 |
+| cam3 | 300 | 416 | 1.387 | 48 | 48 | 0 |
+| cam4 | 300 | 522 | 1.740 | 69 | 69 | 0 |
+
+다음 검증은 `MAX_FRAMES=3000` 장시간 테스트다. `scripts/run_4cam_rtsp_metrics.sh`로 카메라별 JSON을 저장하고, `scripts/summarize_4cam_metrics.py`로 FPS, read latency, YOLO latency, LSTM latency를 요약한다.
+
+판단 기준:
+
+- RTSP read latency가 높거나 프레임 입력이 불안정하면 GStreamer 검토.
+- YOLO latency가 높거나 목표 FPS보다 낮으면 TensorRT 검토.
+- 지표가 안정적이면 GStreamer/TensorRT는 보류하고 ByteTrack, 후처리, MQTT 연동을 우선한다.

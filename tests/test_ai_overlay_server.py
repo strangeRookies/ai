@@ -49,9 +49,13 @@ class AiOverlayServerTest(unittest.TestCase):
         self.assertEqual(summary["frames_processed"], 2)
         self.assertEqual(summary["bbox_detections"], 2)
         self.assertEqual(summary["keypoints_extracted"], 2)
+        self.assertEqual(summary["latest_frame_bbox"], 1)
+        self.assertEqual(summary["latest_frame_keypoints"], 1)
         self.assertEqual(summary["generated_sequences"], 1)
         self.assertEqual(summary["lstm_predictions"], 1)
         self.assertEqual(summary["events_generated"], 1)
+        self.assertIn("effective_fps", summary)
+        self.assertGreaterEqual(summary["effective_fps"], 0.0)
         self.assertIsNotNone(summary["sample_event"])
 
 

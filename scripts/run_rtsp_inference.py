@@ -1,48 +1,29 @@
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from ai.action.classifier import LSTMActionClassifier, MockActionClassifier
+from ai.action.faint_post_processing import (
+    DEFAULT_ACTION_MODEL,
+    DEFAULT_CAMERA_COOLDOWN_SECONDS,
+    DEFAULT_FAINT_THRESHOLD,
+    DEFAULT_MIN_CONSECUTIVE_FAINT,
+    FaintEventPostProcessor,
+    faint_probability,
+    is_alert_prediction,
+)
 from ai.action.keypoint_sequence_buffer import KeypointSequenceBuffer
 from ai.action.sequence_buffer import CropSequenceBuffer
 from ai.publishers.event_publisher import ConsoleEventPublisher, build_event_payload
+from ai.runtime_metrics import RuntimeMetrics
 from ai.streams.video_reader import VideoReader
 from ai.visualization.draw import draw_overlay
 from detector.mock_detector import MockDetector
 from detector.yolo_pose_detector import YoloPoseDetector
-
-
-DEFAULT_FAINT_THRESHOLD = 0.3
-DEFAULT_MIN_CONSECUTIVE_FAINT = 2
-DEFAULT_CAMERA_COOLDOWN_SECONDS = 10.0
-
-
-class FaintEventPostProcessor:
-    def __init__(self, min_consecutive_faint=DEFAULT_MIN_CONSECUTIVE_FAINT, cooldown_seconds=DEFAULT_CAMERA_COOLDOWN_SECONDS):
-        self.min_consecutive_faint = max(1, int(min_consecutive_faint))
-        self.cooldown_seconds = max(0.0, float(cooldown_seconds))
-        self._consecutive_by_camera = {}
-        self._last_event_time_by_camera = {}
-
-    def should_trigger(self, camera_id, prediction, timestamp):
-        if not is_alert_prediction(prediction):
-            self._consecutive_by_camera[camera_id] = 0
-            return False
-        consecutive = int(self._consecutive_by_camera.get(camera_id, 0)) + 1
-        self._consecutive_by_camera[camera_id] = consecutive
-        if consecutive < self.min_consecutive_faint:
-            return False
-        last_event_time = self._last_event_time_by_camera.get(camera_id)
-        if last_event_time is not None and float(timestamp) - float(last_event_time) < self.cooldown_seconds:
-            return False
-        self._last_event_time_by_camera[camera_id] = float(timestamp)
-        return True
-
-    def consecutive_count(self, camera_id):
-        return int(self._consecutive_by_camera.get(camera_id, 0))
 
 
 def create_detector(mode, model, device, imgsz=640, conf=0.25):
@@ -105,21 +86,6 @@ def ensure_mock_keypoints(detections):
     return detections
 
 
-def is_alert_prediction(prediction):
-    return bool(prediction) and prediction.get("label") != "Normal"
-
-
-def faint_probability(prediction):
-    if not prediction:
-        return None
-    probabilities = prediction.get("probabilities") or {}
-    if "Faint" in probabilities:
-        return float(probabilities["Faint"])
-    if prediction.get("label") == "Faint":
-        return float(prediction.get("score", 0.0))
-    return None
-
-
 def maybe_log_debug(packet, boxes, summary, prediction, args):
     every_n = max(0, int(getattr(args, "debug_every_n", 30)))
     missing_detection = len(boxes) == 0
@@ -177,6 +143,7 @@ def run(args):
         cooldown_seconds=getattr(args, "camera_cooldown_seconds", DEFAULT_CAMERA_COOLDOWN_SECONDS),
     )
     publisher = ConsoleEventPublisher()
+    metrics = RuntimeMetrics()
     writer = None
     summary = {
         "rtsp_url": args.rtsp_url,
@@ -204,13 +171,18 @@ def run(args):
 
     with VideoReader(args.rtsp_url) as reader:
         while True:
-            packet = reader.read()
-            if packet is None:
-                break
             if args.max_frames > 0 and summary["frames_processed"] >= args.max_frames:
                 break
+            frame_started_at = time.perf_counter()
+            read_started_at = time.perf_counter()
+            packet = reader.read()
+            metrics.add_read_ms((time.perf_counter() - read_started_at) * 1000.0)
+            if packet is None:
+                break
 
+            yolo_started_at = time.perf_counter()
             detections = detector.detect(packet.frame)
+            metrics.add_yolo_ms((time.perf_counter() - yolo_started_at) * 1000.0)
             if args.detector_mode == "mock":
                 detections = ensure_mock_keypoints(detections)
             boxes = normalize_detections(detections)
@@ -223,7 +195,12 @@ def run(args):
             keypoint_sequence = keypoint_buffer.add(packet.frame_idx, detections, packet.frame.shape)
             crop_sequence = crop_buffer.add(packet.frame_idx, packet.frame, boxes) if crop_buffer else None
             classifier_sequence = crop_sequence if crop_sequence else keypoint_sequence
-            prediction = classifier.predict(classifier_sequence) if classifier_sequence else None
+            if classifier_sequence:
+                lstm_started_at = time.perf_counter()
+                prediction = classifier.predict(classifier_sequence)
+                metrics.add_lstm_ms((time.perf_counter() - lstm_started_at) * 1000.0)
+            else:
+                prediction = None
             if keypoint_sequence:
                 summary["generated_sequences"] += 1
             if prediction:
@@ -248,9 +225,19 @@ def run(args):
                     h, w = overlay.shape[:2]
                     writer = cv2.VideoWriter(args.overlay_output, cv2.VideoWriter_fourcc(*"mp4v"), packet.fps, (w, h))
                 writer.write(overlay)
+            metrics.add_total_frame_ms((time.perf_counter() - frame_started_at) * 1000.0)
 
     if writer is not None:
         writer.release()
+    summary.update(
+        metrics.summary(
+            summary["frames_processed"],
+            summary["bbox_detections"],
+            summary["keypoints_extracted"],
+            summary["generated_sequences"],
+            summary["lstm_predictions"],
+        )
+    )
     return summary
 
 
@@ -266,8 +253,8 @@ def main():
     parser.add_argument("--yolo-model", default="yolo26n-pose.pt")
     parser.add_argument("--device", default="auto")
     parser.add_argument("--imgsz", type=int, default=640)
-    parser.add_argument("--detector-conf", type=float, default=0.25)
-    parser.add_argument("--action-model", default=None)
+    parser.add_argument("--detector-conf", type=float, default=0.10)
+    parser.add_argument("--action-model", default=DEFAULT_ACTION_MODEL)
     parser.add_argument("--action-device", default="auto")
     parser.add_argument("--action-threshold", type=float, default=DEFAULT_FAINT_THRESHOLD, help="Faint probability threshold for LSTM checkpoints with Normal/Faint classes.")
     parser.add_argument("--min-consecutive-faint", type=int, default=DEFAULT_MIN_CONSECUTIVE_FAINT, help="Consecutive Faint sequences required before emitting an event.")

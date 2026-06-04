@@ -243,6 +243,27 @@ The dataset is highly imbalanced, so the final benchmark applies `--max-rows-per
 
 Normal clip sampling is deterministic but no longer raw row-order based. The sampler shuffles within split/class using `--seed`, prefers Normal clips from the same source context as selected Faint clips when frame ranges such as `__004816_004847` are available, and avoids overlapping Faint ranges. For midtests where early Normal clips produce no pose sequence, add `--prefilter-normal-clips`; this scans deterministic Normal candidates with the first configured pose detector and keeps candidates with both person detections and keypoints. The prefilter writes `normal_prefilter_diagnostics.csv`, and each model writes `train_clip_diagnostics.csv` / `eval_clip_diagnostics.csv` with label, path, parsed frame range, person detections, keypoints extracted, generated sequences, and zero-sequence reason.
 
+### 4-channel RTSP verification status
+
+The 4-camera RTSP + YOLO26n-pose + LSTM smoke test has passed on the Ubuntu GPU runtime path. A recent 300-frame verification produced these per-camera counts:
+
+| camera | frames | bbox | bbox/frame | sequences | LSTM predictions | events |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| cam1 | 300 | 254 | 0.847 | 61 | 61 | 0 |
+| cam2 | 300 | 460 | 1.533 | 71 | 71 | 0 |
+| cam3 | 300 | 416 | 1.387 | 48 | 48 | 0 |
+| cam4 | 300 | 522 | 1.740 | 69 | 69 | 0 |
+
+`events_generated=0` is acceptable for this short smoke test because the goal was stream stability, detection throughput, sequence generation, and LSTM prediction flow.
+
+The next verification step is a 3000-frame long test using `scripts/run_4cam_rtsp_metrics.sh`. It writes per-camera JSON under `runs/verification` and should be summarized with `scripts/summarize_4cam_metrics.py`.
+
+Acceleration decision rule:
+
+- RTSP/read latency slow or unstable: investigate GStreamer.
+- YOLO latency high or effective FPS below target: investigate TensorRT.
+- Metrics healthy: defer GStreamer/TensorRT and continue with post-processing, tracking, and event integration.
+
 ## Mock Edge AI MQTT Publisher
 
 `mock_edge_ai.py` publishes random safety event JSON messages to the MQTT topic used by the local development pipeline.
