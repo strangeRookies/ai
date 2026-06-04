@@ -166,6 +166,7 @@ class OverlayWorker:
             min_box_area=self.args.min_box_area,
             bbox_smoothing_alpha=self.args.bbox_smoothing_alpha,
             max_missing_seconds=self.args.track_max_missing_seconds,
+            center_match_ratio=self.args.center_match_ratio,
         )
         display_id_mapper = DisplayIdMapper()
         while not self.stop_event.is_set():
@@ -229,10 +230,11 @@ def main():
     parser.add_argument("--resize-size", type=int, default=224)
     parser.add_argument("--track-thresh", type=float, default=0.10)
     parser.add_argument("--match-thresh", "--tracker-iou-threshold", dest="match_thresh", type=float, default=0.20)
-    parser.add_argument("--track-buffer", type=int, default=45)
+    parser.add_argument("--track-buffer", type=int, default=90)
     parser.add_argument("--min-box-area", type=float, default=100.0)
     parser.add_argument("--bbox-smoothing-alpha", type=float, default=0.60)
-    parser.add_argument("--track-max-missing-seconds", type=float, default=3.0)
+    parser.add_argument("--track-max-missing-seconds", type=float, default=4.0)
+    parser.add_argument("--center-match-ratio", type=float, default=0.70)
     parser.add_argument("--overlay-debug-tracks", action="store_true")
     parser.add_argument("--max-frames", type=int, default=0)
     parser.add_argument("--reconnect-delay", type=float, default=2.0)

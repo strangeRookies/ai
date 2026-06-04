@@ -1,6 +1,6 @@
 import unittest
 
-from tracking.simple_tracker import SimpleTrackAssigner, bbox_iou, smooth_bbox
+from tracking.simple_tracker import SimpleTrackAssigner, bbox_iou, center_distance_ratio, predicted_bbox, smooth_bbox
 
 
 class SimpleTrackerTest(unittest.TestCase):
@@ -42,10 +42,40 @@ class SimpleTrackerTest(unittest.TestCase):
         self.assertEqual(first["track_id"], after_gap["track_id"])
         self.assertGreaterEqual(tracker.diagnostics()["active_tracks"], 1)
 
+    def test_center_match_keeps_id_when_pose_bbox_jumps(self):
+        tracker = SimpleTrackAssigner(match_thresh=0.5, center_match_ratio=0.55, min_box_area=1)
+
+        first = tracker.update([{"bbox": [100, 100, 180, 260], "confidence": 0.9}], now=1.0)[0]
+        jumped = tracker.update([{"bbox": [130, 100, 210, 260], "confidence": 0.9}], now=1.1)[0]
+
+        self.assertEqual(first["track_id"], jumped["track_id"])
+        self.assertLess(bbox_iou(first["raw_bbox"], jumped["raw_bbox"]), 0.5)
+
+    def test_predicted_bbox_bridges_short_motion_gap(self):
+        tracker = SimpleTrackAssigner(match_thresh=0.5, center_match_ratio=0.40, track_buffer=5, min_box_area=1, max_missing_seconds=10)
+
+        first = tracker.update([{"bbox": [0, 0, 100, 100], "confidence": 0.9}], now=1.0)[0]
+        tracker.update([{"bbox": [10, 0, 110, 100], "confidence": 0.9}], now=1.1)
+        tracker.update([], now=1.2)
+        after_gap = tracker.update([{"bbox": [30, 0, 130, 100], "confidence": 0.9}], now=1.3)[0]
+
+        self.assertEqual(first["track_id"], after_gap["track_id"])
+        self.assertIn("predicted_bbox", tracker.diagnostics()["tracks"][str(first["track_id"])])
+
     def test_bbox_smoothing_output(self):
         smoothed = smooth_bbox([0, 0, 100, 100], [10, 0, 110, 100], alpha=0.5)
 
         self.assertEqual(smoothed, [5.0, 0.0, 105.0, 100.0])
+
+    def test_center_distance_ratio(self):
+        ratio = center_distance_ratio([0, 0, 100, 100], [10, 0, 110, 100])
+
+        self.assertLess(ratio, 0.1)
+
+    def test_predicted_bbox_uses_velocity_and_missing_frames(self):
+        track = {"smoothed_bbox": [10, 0, 110, 100], "velocity": [10, 0, 10, 0], "missing_frames": 2}
+
+        self.assertEqual(predicted_bbox(track), [30.0, 0.0, 130.0, 100.0])
 
     def test_filters_low_confidence_and_tiny_boxes(self):
         tracker = SimpleTrackAssigner(track_thresh=0.5, min_box_area=100)

@@ -53,22 +53,23 @@ def run(args):
     tracker = SimpleTrackAssigner(
         track_thresh=getattr(args, "track_thresh", 0.10),
         match_thresh=getattr(args, "match_thresh", 0.20),
-        track_buffer=getattr(args, "track_buffer", 45),
+        track_buffer=getattr(args, "track_buffer", 90),
         min_box_area=getattr(args, "min_box_area", 100.0),
         bbox_smoothing_alpha=getattr(args, "bbox_smoothing_alpha", 0.60),
-        max_missing_seconds=getattr(args, "track_max_missing_seconds", 3.0),
+        max_missing_seconds=getattr(args, "track_max_missing_seconds", 4.0),
+        center_match_ratio=getattr(args, "center_match_ratio", 0.70),
     )
     keypoint_buffers = PerTrackKeypointSequenceBuffers(
         args.sequence_length,
         args.sequence_stride,
-        max_track_age_seconds=getattr(args, "track_max_missing_seconds", 2.0),
+        max_track_age_seconds=getattr(args, "track_max_missing_seconds", 4.0),
     )
     crop_buffers = (
         PerTrackCropSequenceBuffers(
             args.sequence_length,
             args.sequence_stride,
             args.resize_size,
-            max_track_age_seconds=getattr(args, "track_max_missing_seconds", 2.0),
+            max_track_age_seconds=getattr(args, "track_max_missing_seconds", 4.0),
         )
         if args.action_model and classifier_input == "crops"
         else None
@@ -228,10 +229,11 @@ def main():
     parser.add_argument("--resize-size", type=int, default=224)
     parser.add_argument("--track-thresh", type=float, default=0.10)
     parser.add_argument("--match-thresh", "--tracker-iou-threshold", dest="match_thresh", type=float, default=0.20)
-    parser.add_argument("--track-buffer", type=int, default=45)
+    parser.add_argument("--track-buffer", type=int, default=90)
     parser.add_argument("--min-box-area", type=float, default=100.0)
     parser.add_argument("--bbox-smoothing-alpha", type=float, default=0.60)
-    parser.add_argument("--track-max-missing-seconds", type=float, default=3.0)
+    parser.add_argument("--track-max-missing-seconds", type=float, default=4.0)
+    parser.add_argument("--center-match-ratio", type=float, default=0.70)
     args = parser.parse_args()
 
     summary = run(args)

@@ -13,6 +13,7 @@ class SimpleTrackAssigner:
         track_buffer=30,
         min_box_area=10.0,
         bbox_smoothing_alpha=0.6,
+        center_match_ratio=0.70,
     ):
         self.iou_threshold = float(iou_threshold if match_thresh is None else match_thresh)
         self.max_missing_seconds = float(max_missing_seconds)
@@ -20,6 +21,7 @@ class SimpleTrackAssigner:
         self.track_buffer = max(0, int(track_buffer))
         self.min_box_area = max(0.0, float(min_box_area))
         self.bbox_smoothing_alpha = min(max(float(bbox_smoothing_alpha), 0.0), 1.0)
+        self.center_match_ratio = max(0.0, float(center_match_ratio))
         self._next_track_id = 1
         self._tracks = {}
         self._frame_index = 0
@@ -68,16 +70,18 @@ class SimpleTrackAssigner:
 
     def _match_existing_track(self, bbox, assigned_track_ids):
         best_track_id = None
-        best_iou = 0.0
+        best_score = -1.0
         for track_id, track in self._tracks.items():
             if track_id in assigned_track_ids:
                 continue
-            score = bbox_iou(bbox, track.get("smoothed_bbox") or track.get("bbox"))
-            if score > best_iou:
-                best_iou = score
+            iou_score = bbox_iou(bbox, predicted_bbox(track))
+            center_ratio = center_distance_ratio(bbox, predicted_bbox(track))
+            if iou_score < self.iou_threshold and center_ratio > self.center_match_ratio:
+                continue
+            score = iou_score + max(0.0, self.center_match_ratio - center_ratio)
+            if score > best_score:
+                best_score = score
                 best_track_id = track_id
-        if best_iou < self.iou_threshold:
-            return None
         return best_track_id
 
     def _filter_detections(self, detections):
@@ -98,11 +102,13 @@ class SimpleTrackAssigner:
         raw_bbox = detection.get("bbox")
         previous = self._tracks.get(track_id, {})
         smoothed_bbox = smooth_bbox(previous.get("smoothed_bbox") or previous.get("bbox"), raw_bbox, self.bbox_smoothing_alpha)
+        velocity = bbox_velocity(previous.get("raw_bbox") or previous.get("bbox"), raw_bbox)
         age = int(previous.get("age", 0)) + 1
         self._tracks[track_id] = {
             "bbox": raw_bbox,
             "raw_bbox": raw_bbox,
             "smoothed_bbox": smoothed_bbox,
+            "velocity": velocity,
             "last_seen_at": now,
             "age": age,
             "missing_frames": 0,
@@ -145,6 +151,7 @@ class SimpleTrackAssigner:
                 "detection_conf": float(track.get("confidence", 0.0)),
                 "bbox": track.get("bbox"),
                 "smoothed_bbox": track.get("smoothed_bbox"),
+                "predicted_bbox": predicted_bbox(track),
             }
             for track_id, track in sorted(self._tracks.items())
         }
@@ -205,3 +212,39 @@ def smooth_bbox(previous_bbox, current_bbox, alpha):
         round(alpha * float(current_bbox[idx]) + (1.0 - alpha) * float(previous_bbox[idx]), 3)
         for idx in range(4)
     ]
+
+
+def bbox_velocity(previous_bbox, current_bbox):
+    if not previous_bbox or not current_bbox:
+        return [0.0, 0.0, 0.0, 0.0]
+    return [
+        round(float(current_bbox[idx]) - float(previous_bbox[idx]), 3)
+        for idx in range(4)
+    ]
+
+
+def predicted_bbox(track):
+    bbox = track.get("smoothed_bbox") or track.get("bbox")
+    if not bbox:
+        return bbox
+    missing_frames = max(0, int(track.get("missing_frames", 0)))
+    velocity = track.get("velocity") or [0.0, 0.0, 0.0, 0.0]
+    return [
+        round(float(bbox[idx]) + float(velocity[idx]) * missing_frames, 3)
+        for idx in range(4)
+    ]
+
+
+def center_distance_ratio(left, right):
+    if not left or not right or len(left) < 4 or len(right) < 4:
+        return float("inf")
+    lx1, ly1, lx2, ly2 = [float(value) for value in left[:4]]
+    rx1, ry1, rx2, ry2 = [float(value) for value in right[:4]]
+    left_cx = (lx1 + lx2) / 2.0
+    left_cy = (ly1 + ly2) / 2.0
+    right_cx = (rx1 + rx2) / 2.0
+    right_cy = (ry1 + ry2) / 2.0
+    distance = ((left_cx - right_cx) ** 2 + (left_cy - right_cy) ** 2) ** 0.5
+    left_diag = max(((lx2 - lx1) ** 2 + (ly2 - ly1) ** 2) ** 0.5, 1.0)
+    right_diag = max(((rx2 - rx1) ** 2 + (ry2 - ry1) ** 2) ** 0.5, 1.0)
+    return distance / max(left_diag, right_diag)

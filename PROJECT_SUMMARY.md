@@ -30,6 +30,15 @@ Latest benchmark status:
 - 1000/class benchmark: train/val/test each selected 1000 Normal and 1000 Faint; train generated 5,024 sequences; eval generated 4,676 sequences; threshold 0.5 Faint recall 0.586382 and F1 0.617608; threshold 0.3 Faint recall 0.784553 and F1 0.665661; repeated-seed mean Faint recall 0.658198 and mean F1 0.648263. The real-time inference default candidate threshold is now 0.3, with consecutive-Faint and camera-cooldown post-processing to reduce false alarms.
 - Latest expanded benchmark now runs YOLO26n-pose only.
 
+Real-time tracking stability status:
+
+- The selected model stack remains YOLO26n-pose + LSTM Normal/Faint.
+- 4-camera testing is already near 30 FPS, so TensorRT/GStreamer remain deferred while event reliability is improved.
+- The RTSP pipeline now uses per-track sequence buffers and a ByteTrack-style fallback tracker with configurable `track_thresh`, `match_thresh`, `track_buffer`, `min_box_area`, `detector_conf`, `bbox_smoothing_alpha`, and `center_match_ratio`.
+- Track IDs are kept through short detection gaps using `track_buffer` and `track_max_missing_seconds`.
+- Bbox visualization uses EMA smoothing, while raw bbox values remain available in diagnostics.
+- `/summary` exposes active/new/lost tracks, id-switch-like events, per-track age, missing frames, detection confidence, and predicted bbox.
+
 Detailed Korean documentation:
 
 - `docs/MODEL_BENCHMARK_REPORT.md`

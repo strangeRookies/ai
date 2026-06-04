@@ -374,6 +374,24 @@ tracker가 부여하는 raw `track_id`는 세션 전체에서 전역 증가(예:
 
 `/summary` 응답에 `display_id_map` 필드가 추가되어 `raw_to_display`와 `display_to_raw` 매핑을 확인할 수 있다.
 
+## 10. Tracking stability update
+
+현재 목표는 재학습이 아니라 실시간 이벤트 안정화다. YOLO26n-pose와 LSTM 모델은 그대로 유지하고, 사람별 track_id가 짧은 검출 공백과 bbox 흔들림에도 유지되도록 fallback tracker를 보강했다.
+
+- 기본 `track_buffer`는 90 frame으로 늘려 짧은 미검출 구간에서 track을 바로 삭제하지 않는다.
+- 기본 `track_max_missing_seconds`는 4.0초로 늘렸다.
+- bbox IoU가 낮아도 중심 이동 거리가 충분히 가까우면 같은 사람으로 매칭하는 `center_match_ratio`를 추가했다.
+- bbox는 `bbox_smoothing_alpha`로 EMA smoothing 후 overlay에 표시한다.
+- `/summary`에는 active/new/lost track, id-switch-like count, track age, missing frame, confidence, predicted bbox 진단값을 노출한다.
+- 운영 데모에서는 `--overlay-debug-tracks`를 켜면 display ID와 raw track ID, age, miss, confidence를 함께 확인할 수 있다.
+
+다음 확인 순서:
+
+1. 1-camera overlay에서 track ID가 사람별로 유지되는지 확인한다.
+2. 4-camera overlay에서 `/summary`의 `new_tracks`, `lost_tracks`, `id_switch_like_events`가 과도하게 증가하지 않는지 확인한다.
+3. threshold 0.3 기준 false alarm post-processing rule을 조정한다.
+4. MQTT payload 연결은 tracking 안정화 확인 이후 진행한다.
+
 판단 기준:
 
 - RTSP read latency가 높거나 프레임 입력이 불안정하면 GStreamer 검토.
