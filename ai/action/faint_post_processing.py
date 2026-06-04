@@ -11,22 +11,27 @@ class FaintEventPostProcessor:
         self._consecutive_by_camera = {}
         self._last_event_time_by_camera = {}
 
-    def should_trigger(self, camera_id, prediction, timestamp):
+    def should_trigger(self, camera_id, prediction, timestamp, track_id=None):
+        key = event_state_key(camera_id, track_id)
         if not is_alert_prediction(prediction):
-            self._consecutive_by_camera[camera_id] = 0
+            self._consecutive_by_camera[key] = 0
             return False
-        consecutive = int(self._consecutive_by_camera.get(camera_id, 0)) + 1
-        self._consecutive_by_camera[camera_id] = consecutive
+        consecutive = int(self._consecutive_by_camera.get(key, 0)) + 1
+        self._consecutive_by_camera[key] = consecutive
         if consecutive < self.min_consecutive_faint:
             return False
-        last_event_time = self._last_event_time_by_camera.get(camera_id)
+        last_event_time = self._last_event_time_by_camera.get(key)
         if last_event_time is not None and float(timestamp) - float(last_event_time) < self.cooldown_seconds:
             return False
-        self._last_event_time_by_camera[camera_id] = float(timestamp)
+        self._last_event_time_by_camera[key] = float(timestamp)
         return True
 
-    def consecutive_count(self, camera_id):
-        return int(self._consecutive_by_camera.get(camera_id, 0))
+    def consecutive_count(self, camera_id, track_id=None):
+        return int(self._consecutive_by_camera.get(event_state_key(camera_id, track_id), 0))
+
+
+def event_state_key(camera_id, track_id=None):
+    return f"{camera_id}:track:{track_id}" if track_id is not None else str(camera_id)
 
 
 def is_alert_prediction(prediction):

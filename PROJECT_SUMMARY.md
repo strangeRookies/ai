@@ -256,7 +256,11 @@ The 4-camera RTSP + YOLO26n-pose + LSTM smoke test has passed on the Ubuntu GPU 
 
 `events_generated=0` is acceptable for this short smoke test because the goal was stream stability, detection throughput, sequence generation, and LSTM prediction flow.
 
-The next verification step is a 3000-frame long test using `scripts/run_4cam_rtsp_metrics.sh`. It writes per-camera JSON under `runs/verification` and should be summarized with `scripts/summarize_4cam_metrics.py`.
+The 4-camera 3000-frame long metrics test has also passed. Each camera processed 3000 frames at about 29.7 FPS. YOLO26n-pose inference measured about 6.1-6.5 ms/frame and LSTM inference about 0.4 ms/frame, so event reliability is currently more important than TensorRT/GStreamer acceleration.
+
+The real-time path now uses IoU-based ByteTrack-style fallback tracking when detector-native track IDs are not available. Each detected person receives a stable `track_id`, maintains an independent keypoint or crop sequence buffer, and runs LSTM classification only when that track has enough sequence frames. Faint event debouncing is keyed by `camera_id + track_id`, which prevents repeated alerts for the same person during the configured cooldown while allowing a separate person on the same camera to alert independently.
+
+Runtime JSON remains backward-compatible and now also reports `active_tracks`, `max_active_tracks`, `per_track_sequences_generated`, `faint_predictions`, `normal_predictions`, and `events_generated_by_track`.
 
 Acceleration decision rule:
 

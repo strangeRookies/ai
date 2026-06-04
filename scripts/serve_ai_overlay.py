@@ -8,13 +8,18 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from ai.action.keypoint_sequence_buffer import KeypointSequenceBuffer
-from ai.action.sequence_buffer import CropSequenceBuffer
+from ai.action.per_track_sequence_buffer import PerTrackCropSequenceBuffers, PerTrackKeypointSequenceBuffers
+from ai.inference.rtsp_runtime import (
+    build_inference_event_payload,
+    ensure_mock_keypoints,
+    maybe_log_debug,
+    normalize_detections,
+    update_prediction_counts,
+)
 from ai.overlay_http import OverlayState, create_overlay_server
-from ai.publishers.event_publisher import build_event_payload
 from ai.streams.video_reader import VideoReader
 from ai.visualization.action_overlay import (
-    annotate_boxes_with_action,
+    annotate_boxes_with_track_actions,
     draw_metrics_panel,
     faint_probability,
     format_action_overlay_text,
@@ -30,94 +35,86 @@ from scripts.run_rtsp_inference import (
     FaintEventPostProcessor,
     create_classifier,
     create_detector,
-    ensure_mock_keypoints,
-    normalize_detections,
 )
 from stream.rtsp_reader import redact_url
+from tracking.simple_tracker import SimpleTrackAssigner
 
 
 def initial_summary():
     return initial_overlay_summary()
 
 
-def process_frame(packet, detector, classifier, sequence_buffer, summary, args, post_processor=None):
+def process_frame(packet, detector, classifier, sequence_buffer, summary, args, post_processor=None, tracker=None):
     detections = detector.detect(packet.frame)
     if args.detector_mode == "mock":
         detections = ensure_mock_keypoints(detections)
+    if tracker is not None:
+        detections = tracker.update(detections, now=packet.timestamp)
     boxes = normalize_detections(detections)
     frame_keypoint_count = sum(1 for item in detections if item.get("keypoints"))
+    active_tracks = len({int(item["track_id"]) for item in detections if item.get("track_id") is not None})
     summary["frames_processed"] += 1
     summary["bbox_detections"] += len(boxes)
     summary["keypoints_extracted"] += frame_keypoint_count
     summary["latest_frame_bbox"] = len(boxes)
     summary["latest_frame_keypoints"] = frame_keypoint_count
+    summary["active_tracks"] = active_tracks
+    summary["max_active_tracks"] = max(summary.get("max_active_tracks", 0), active_tracks)
 
     classifier_input = getattr(args, "classifier_input", None)
-    if classifier_input is None and hasattr(sequence_buffer, "resize_size"):
-        classifier_input = "crops"
     if classifier_input == "crops":
-        sequence = sequence_buffer.add(packet.frame_idx, packet.frame, boxes)
+        sequences = sequence_buffer.add(packet.frame_idx, packet.frame, boxes, now=packet.timestamp)
     else:
-        sequence = sequence_buffer.add(packet.frame_idx, detections, packet.frame.shape)
-    prediction = classifier.predict(sequence) if sequence else None
-    if sequence:
+        sequences = sequence_buffer.add(packet.frame_idx, detections, packet.frame.shape, now=packet.timestamp)
+    prediction = None
+    predictions_by_track = {}
+    sequences_by_track = {}
+    triggered_track_ids = set()
+    consecutive_by_track = {}
+    for sequence in sequences:
+        prediction = classifier.predict(sequence)
+        track_id = sequence.get("track_id")
+        if track_id is not None:
+            track_id = int(track_id)
+            predictions_by_track[track_id] = prediction
+            sequences_by_track[track_id] = sequence
         summary["generated_sequences"] += 1
-    if prediction:
         summary["lstm_predictions"] += 1
         summary["latest_prediction_label"] = prediction.get("label")
         summary["latest_faint_probability"] = faint_probability(prediction)
-    event_triggered = False
-    consecutive_faint = 0
-    if post_processor is not None:
-        event_triggered = post_processor.should_trigger(args.camera_id, prediction, packet.timestamp)
-        consecutive_faint = post_processor.consecutive_count(args.camera_id)
-    elif prediction and prediction.get("label") != "Normal":
-        event_triggered = True
-        consecutive_faint = 1
-    summary["latest_consecutive_faint"] = consecutive_faint
-    annotate_boxes_with_action(boxes, prediction, args, consecutive_faint, event_triggered)
-    if event_triggered:
-        payload = build_event_payload(
-            camera_id=args.camera_id,
-            frame_idx=packet.frame_idx,
-            timestamp=packet.timestamp,
-            event_type=prediction["label"],
-            score=prediction["score"],
-            boxes=boxes,
-            snapshot_path=None,
-        )
-        payload["sequence_window"] = {"start": sequence["start_frame"], "end": sequence["end_frame"]}
+        update_prediction_counts(summary, prediction)
+    summary["per_track_sequences_generated"] = {
+        str(track_id): count for track_id, count in sequence_buffer.sequences_generated_by_track.items()
+    }
+    for track_id, track_prediction in predictions_by_track.items():
+        event_triggered = False
+        if post_processor is not None:
+            event_triggered = post_processor.should_trigger(args.camera_id, track_prediction, packet.timestamp, track_id=track_id)
+            consecutive_by_track[track_id] = post_processor.consecutive_count(args.camera_id, track_id=track_id)
+        elif track_prediction and track_prediction.get("label") != "Normal":
+            event_triggered = True
+            consecutive_by_track[track_id] = 1
+        if event_triggered:
+            triggered_track_ids.add(track_id)
+            track_key = str(track_id)
+            summary["events_generated_by_track"][track_key] = summary["events_generated_by_track"].get(track_key, 0) + 1
+    summary["latest_consecutive_faint"] = max(consecutive_by_track.values(), default=0)
+    annotate_boxes_with_track_actions(boxes, predictions_by_track, consecutive_by_track, triggered_track_ids, args)
+    for track_id in triggered_track_ids:
+        track_prediction = predictions_by_track[track_id]
+        sequence = sequences_by_track[track_id]
+        payload = build_inference_event_payload(args, packet, track_prediction, boxes, sequence)
         summary["events_generated"] += 1
         if summary["sample_event"] is None:
             summary["sample_event"] = payload
         if args.print_events:
             print(f"[ai-overlay-event] {json.dumps(payload, ensure_ascii=False)}", flush=True)
-    maybe_log_debug(packet, boxes, summary, prediction, args)
+    maybe_log_debug(packet, boxes, summary, prediction, args, prefix="[ai-overlay-debug]")
 
     update_overlay_runtime(summary)
     overlay = draw_overlay(packet.frame, boxes, prediction, packet.frame_idx)
     draw_metrics_panel(overlay, summary, args, prediction)
     return overlay
-
-
-def maybe_log_debug(packet, boxes, summary, prediction, args):
-    every_n = max(0, int(getattr(args, "debug_every_n", 30)))
-    missing_detection = len(boxes) == 0
-    should_log = missing_detection or (every_n > 0 and summary["frames_processed"] % every_n == 0)
-    if not should_log:
-        return
-    faint_prob = faint_probability(prediction)
-    faint_text = "None" if faint_prob is None else f"{faint_prob:.4f}"
-    print(
-        "[ai-overlay-debug] "
-        f"frame={packet.frame_idx} "
-        f"bbox={len(boxes)} "
-        f"keypoints={summary.get('latest_frame_keypoints', 0)} "
-        f"seq={summary['generated_sequences']} "
-        f"pred={summary['lstm_predictions']} "
-        f"latest_faint_prob={faint_text}",
-        flush=True,
-    )
 
 
 class OverlayWorker:
@@ -142,11 +139,24 @@ class OverlayWorker:
             min_consecutive_faint=self.args.min_consecutive_faint,
             cooldown_seconds=self.args.camera_cooldown_seconds,
         )
+        tracker = SimpleTrackAssigner(
+            iou_threshold=self.args.tracker_iou_threshold,
+            max_missing_seconds=self.args.track_max_missing_seconds,
+        )
         while not self.stop_event.is_set():
             if self.args.classifier_input == "crops":
-                sequence_buffer = CropSequenceBuffer(self.args.sequence_length, self.args.sequence_stride, self.args.resize_size)
+                sequence_buffer = PerTrackCropSequenceBuffers(
+                    self.args.sequence_length,
+                    self.args.sequence_stride,
+                    self.args.resize_size,
+                    max_track_age_seconds=self.args.track_max_missing_seconds,
+                )
             else:
-                sequence_buffer = KeypointSequenceBuffer(self.args.sequence_length, self.args.sequence_stride)
+                sequence_buffer = PerTrackKeypointSequenceBuffers(
+                    self.args.sequence_length,
+                    self.args.sequence_stride,
+                    max_track_age_seconds=self.args.track_max_missing_seconds,
+                )
             try:
                 with VideoReader(self.args.rtsp_url) as reader:
                     print(f"[ai-overlay] connected: {redact_url(self.args.rtsp_url)}", flush=True)
@@ -154,7 +164,7 @@ class OverlayWorker:
                         packet = reader.read()
                         if packet is None:
                             break
-                        overlay = process_frame(packet, detector, classifier, sequence_buffer, summary, self.args, post_processor=post_processor)
+                        overlay = process_frame(packet, detector, classifier, sequence_buffer, summary, self.args, post_processor=post_processor, tracker=tracker)
                         self.state.update_frame(overlay, summary)
                         if self.args.max_frames > 0 and summary["frames_processed"] >= self.args.max_frames:
                             return
@@ -186,6 +196,8 @@ def main():
     parser.add_argument("--sequence-length", type=int, default=8)
     parser.add_argument("--sequence-stride", type=int, default=4)
     parser.add_argument("--resize-size", type=int, default=224)
+    parser.add_argument("--tracker-iou-threshold", type=float, default=0.3)
+    parser.add_argument("--track-max-missing-seconds", type=float, default=2.0)
     parser.add_argument("--max-frames", type=int, default=0)
     parser.add_argument("--reconnect-delay", type=float, default=2.0)
     parser.add_argument("--debug-every-n", type=int, default=30)

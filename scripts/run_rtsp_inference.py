@@ -16,14 +16,21 @@ from ai.action.faint_post_processing import (
     faint_probability,
     is_alert_prediction,
 )
-from ai.action.keypoint_sequence_buffer import KeypointSequenceBuffer
-from ai.action.sequence_buffer import CropSequenceBuffer
-from ai.publishers.event_publisher import ConsoleEventPublisher, build_event_payload
+from ai.action.per_track_sequence_buffer import PerTrackCropSequenceBuffers, PerTrackKeypointSequenceBuffers
+from ai.inference.rtsp_runtime import (
+    build_inference_event_payload,
+    ensure_mock_keypoints,
+    maybe_log_debug,
+    normalize_detections,
+    update_prediction_counts,
+)
+from ai.publishers.event_publisher import ConsoleEventPublisher
 from ai.runtime_metrics import RuntimeMetrics
 from ai.streams.video_reader import VideoReader
 from ai.visualization.draw import draw_overlay
 from detector.mock_detector import MockDetector
 from detector.yolo_pose_detector import YoloPoseDetector
+from tracking.simple_tracker import SimpleTrackAssigner
 
 
 def create_detector(mode, model, device, imgsz=640, conf=0.25):
@@ -38,106 +45,29 @@ def create_classifier(action_model, device, action_threshold=DEFAULT_FAINT_THRES
     return MockActionClassifier(default_label="Faint", score=0.80), "mock_lstm"
 
 
-def normalize_detections(detections):
-    boxes = []
-    for detection in detections:
-        bbox = detection.get("bbox")
-        if not bbox or len(bbox) < 4:
-            continue
-        boxes.append(
-            {
-                "x1": float(bbox[0]),
-                "y1": float(bbox[1]),
-                "x2": float(bbox[2]),
-                "y2": float(bbox[3]),
-                "score": float(detection.get("confidence", 0.0)),
-                "class_name": "person",
-                "keypoints": detection.get("keypoints"),
-            }
-        )
-    return boxes
-
-
-def mock_keypoints_for_bbox(bbox):
-    x1, y1, x2, y2 = [float(v) for v in bbox]
-    width = max(x2 - x1, 1.0)
-    height = max(y2 - y1, 1.0)
-    points = []
-    for idx in range(17):
-        col = idx % 5
-        row = idx // 5
-        points.append(
-            {
-                "x": round(x1 + width * (0.2 + col * 0.15), 2),
-                "y": round(y1 + height * (0.1 + row * 0.2), 2),
-                "confidence": 0.9,
-            }
-        )
-    return points
-
-
-def ensure_mock_keypoints(detections):
-    for detection in detections:
-        if detection.get("keypoints"):
-            continue
-        bbox = detection.get("bbox")
-        if bbox:
-            detection["keypoints"] = mock_keypoints_for_bbox(bbox)
-    return detections
-
-
-def maybe_log_debug(packet, boxes, summary, prediction, args):
-    every_n = max(0, int(getattr(args, "debug_every_n", 30)))
-    missing_detection = len(boxes) == 0
-    should_log = missing_detection or (every_n > 0 and summary["frames_processed"] % every_n == 0)
-    if not should_log:
-        return
-    faint_prob = faint_probability(prediction)
-    faint_text = "None" if faint_prob is None else f"{faint_prob:.4f}"
-    print(
-        "[rtsp-inference-debug] "
-        f"frame={packet.frame_idx} "
-        f"bbox={len(boxes)} "
-        f"keypoints={summary.get('latest_frame_keypoints', 0)} "
-        f"seq={summary['generated_sequences']} "
-        f"pred={summary['lstm_predictions']} "
-        f"latest_faint_prob={faint_text}",
-        flush=True,
-    )
-
-
-def build_inference_event_payload(args, packet, prediction, boxes, sequence):
-    payload = build_event_payload(
-        camera_id=args.camera_id,
-        frame_idx=packet.frame_idx,
-        timestamp=packet.timestamp,
-        event_type=prediction["label"],
-        score=prediction["score"],
-        boxes=boxes,
-        snapshot_path=None,
-    )
-    bbox = sequence.get("bbox") if sequence else None
-    track_id = sequence.get("track_id") if sequence else None
-    payload["bbox"] = bbox
-    payload["confidence"] = prediction["score"]
-    payload["threshold"] = getattr(args, "action_threshold", DEFAULT_FAINT_THRESHOLD)
-    payload["track_id"] = track_id
-    payload["severity"] = getattr(args, "event_severity", "HIGH")
-    payload["sequence_window"] = {"start": sequence["start_frame"], "end": sequence["end_frame"]} if sequence else None
-    payload["probabilities"] = prediction.get("probabilities", {})
-    payload["post_processing"] = {
-        "min_consecutive_faint": getattr(args, "min_consecutive_faint", DEFAULT_MIN_CONSECUTIVE_FAINT),
-        "camera_cooldown_seconds": getattr(args, "camera_cooldown_seconds", DEFAULT_CAMERA_COOLDOWN_SECONDS),
-    }
-    return payload
-
-
 def run(args):
     detector = create_detector(args.detector_mode, args.yolo_model, args.device, getattr(args, "imgsz", 640), conf=getattr(args, "detector_conf", 0.25))
     classifier, classifier_mode = create_classifier(args.action_model, args.action_device, getattr(args, "action_threshold", DEFAULT_FAINT_THRESHOLD))
-    keypoint_buffer = KeypointSequenceBuffer(args.sequence_length, args.sequence_stride)
     classifier_input = getattr(args, "classifier_input", "keypoints")
-    crop_buffer = CropSequenceBuffer(args.sequence_length, args.sequence_stride, args.resize_size) if args.action_model and classifier_input == "crops" else None
+    tracker = SimpleTrackAssigner(
+        iou_threshold=getattr(args, "tracker_iou_threshold", 0.3),
+        max_missing_seconds=getattr(args, "track_max_missing_seconds", 2.0),
+    )
+    keypoint_buffers = PerTrackKeypointSequenceBuffers(
+        args.sequence_length,
+        args.sequence_stride,
+        max_track_age_seconds=getattr(args, "track_max_missing_seconds", 2.0),
+    )
+    crop_buffers = (
+        PerTrackCropSequenceBuffers(
+            args.sequence_length,
+            args.sequence_stride,
+            args.resize_size,
+            max_track_age_seconds=getattr(args, "track_max_missing_seconds", 2.0),
+        )
+        if args.action_model and classifier_input == "crops"
+        else None
+    )
     post_processor = FaintEventPostProcessor(
         min_consecutive_faint=getattr(args, "min_consecutive_faint", DEFAULT_MIN_CONSECUTIVE_FAINT),
         cooldown_seconds=getattr(args, "camera_cooldown_seconds", DEFAULT_CAMERA_COOLDOWN_SECONDS),
@@ -159,6 +89,12 @@ def run(args):
         "latest_faint_probability": None,
         "latest_prediction_label": None,
         "latest_frame_keypoints": 0,
+        "active_tracks": 0,
+        "max_active_tracks": 0,
+        "per_track_sequences_generated": {},
+        "faint_predictions": 0,
+        "normal_predictions": 0,
+        "events_generated_by_track": {},
         "frames_processed": 0,
         "bbox_detections": 0,
         "keypoints_extracted": 0,
@@ -185,36 +121,54 @@ def run(args):
             metrics.add_yolo_ms((time.perf_counter() - yolo_started_at) * 1000.0)
             if args.detector_mode == "mock":
                 detections = ensure_mock_keypoints(detections)
+            detections = tracker.update(detections, now=packet.timestamp)
             boxes = normalize_detections(detections)
             frame_keypoint_count = sum(1 for item in detections if item.get("keypoints"))
+            active_tracks = len({int(item["track_id"]) for item in detections if item.get("track_id") is not None})
+            metrics.observe_active_tracks(active_tracks)
             summary["frames_processed"] += 1
             summary["bbox_detections"] += len(boxes)
             summary["keypoints_extracted"] += frame_keypoint_count
             summary["latest_frame_keypoints"] = frame_keypoint_count
+            summary["active_tracks"] = active_tracks
+            summary["max_active_tracks"] = max(summary["max_active_tracks"], active_tracks)
 
-            keypoint_sequence = keypoint_buffer.add(packet.frame_idx, detections, packet.frame.shape)
-            crop_sequence = crop_buffer.add(packet.frame_idx, packet.frame, boxes) if crop_buffer else None
-            classifier_sequence = crop_sequence if crop_sequence else keypoint_sequence
-            if classifier_sequence:
+            keypoint_sequences = keypoint_buffers.add(packet.frame_idx, detections, packet.frame.shape, now=packet.timestamp)
+            crop_sequences = crop_buffers.add(packet.frame_idx, packet.frame, boxes, now=packet.timestamp) if crop_buffers else []
+            classifier_sequences = crop_sequences if crop_sequences else keypoint_sequences
+            prediction = None
+            predictions_by_track = {}
+            sequences_by_track = {}
+            for classifier_sequence in classifier_sequences:
                 lstm_started_at = time.perf_counter()
                 prediction = classifier.predict(classifier_sequence)
                 metrics.add_lstm_ms((time.perf_counter() - lstm_started_at) * 1000.0)
-            else:
-                prediction = None
-            if keypoint_sequence:
+                track_id = classifier_sequence.get("track_id")
+                if track_id is not None:
+                    predictions_by_track[int(track_id)] = prediction
+                    sequences_by_track[int(track_id)] = classifier_sequence
                 summary["generated_sequences"] += 1
-            if prediction:
                 summary["lstm_predictions"] += 1
                 summary["latest_prediction_label"] = prediction.get("label")
                 summary["latest_faint_probability"] = faint_probability(prediction)
-            if post_processor.should_trigger(args.camera_id, prediction, packet.timestamp):
-                sequence_for_event = keypoint_sequence or crop_sequence
-                payload = build_inference_event_payload(args, packet, prediction, boxes, sequence_for_event)
-                if args.dry_run:
-                    publisher.publish(payload)
-                summary["events_generated"] += 1
-                if summary["sample_event"] is None:
-                    summary["sample_event"] = payload
+                update_prediction_counts(summary, prediction)
+            summary["per_track_sequences_generated"] = {
+                str(track_id): count for track_id, count in keypoint_buffers.sequences_generated_by_track.items()
+            }
+            if crop_buffers:
+                summary["per_track_sequences_generated"].update(
+                    {str(track_id): count for track_id, count in crop_buffers.sequences_generated_by_track.items()}
+                )
+            for track_id, track_prediction in predictions_by_track.items():
+                if post_processor.should_trigger(args.camera_id, track_prediction, packet.timestamp, track_id=track_id):
+                    payload = build_inference_event_payload(args, packet, track_prediction, boxes, sequences_by_track.get(track_id))
+                    if args.dry_run:
+                        publisher.publish(payload)
+                    summary["events_generated"] += 1
+                    track_key = str(track_id)
+                    summary["events_generated_by_track"][track_key] = summary["events_generated_by_track"].get(track_key, 0) + 1
+                    if summary["sample_event"] is None:
+                        summary["sample_event"] = payload
             maybe_log_debug(packet, boxes, summary, prediction, args)
 
             if args.overlay_output:
@@ -265,6 +219,8 @@ def main():
     parser.add_argument("--sequence-length", type=int, default=8)
     parser.add_argument("--sequence-stride", type=int, default=4)
     parser.add_argument("--resize-size", type=int, default=224)
+    parser.add_argument("--tracker-iou-threshold", type=float, default=0.3)
+    parser.add_argument("--track-max-missing-seconds", type=float, default=2.0)
     args = parser.parse_args()
 
     summary = run(args)

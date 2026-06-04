@@ -12,6 +12,12 @@ def initial_overlay_summary():
         "generated_sequences": 0,
         "lstm_predictions": 0,
         "events_generated": 0,
+        "active_tracks": 0,
+        "max_active_tracks": 0,
+        "per_track_sequences_generated": {},
+        "faint_predictions": 0,
+        "normal_predictions": 0,
+        "events_generated_by_track": {},
         "latest_faint_probability": None,
         "latest_prediction_label": None,
         "latest_consecutive_faint": 0,
@@ -49,6 +55,25 @@ def annotate_boxes_with_action(boxes, prediction, args, consecutive_faint=0, eve
     return boxes
 
 
+def annotate_boxes_with_track_actions(boxes, predictions_by_track, consecutive_by_track, triggered_track_ids, args):
+    for box in boxes:
+        track_id = box.get("track_id")
+        if track_id is None:
+            box["action_overlay"] = format_action_overlay_text(None, getattr(args, "action_threshold", DEFAULT_FAINT_THRESHOLD))
+            continue
+        track_id = int(track_id)
+        prediction = predictions_by_track.get(track_id)
+        event_triggered = track_id in triggered_track_ids
+        box["action_overlay"] = format_action_overlay_text(
+            prediction,
+            getattr(args, "action_threshold", DEFAULT_FAINT_THRESHOLD),
+            consecutive_by_track.get(track_id, 0),
+            event_triggered,
+        )
+        box["event_triggered"] = bool(event_triggered)
+    return boxes
+
+
 def draw_metrics_panel(frame, summary, args, prediction):
     import cv2
 
@@ -56,7 +81,7 @@ def draw_metrics_panel(frame, summary, args, prediction):
         f"camera: {args.camera_id}  fps: {float(summary.get('effective_fps', 0.0)):.2f}",
         f"detector: {args.detector_mode}",
         f"frames: {summary['frames_processed']}",
-        f"frame bbox: {summary.get('latest_frame_bbox', 0)}  keypoints: {summary.get('latest_frame_keypoints', 0)}",
+        f"frame bbox: {summary.get('latest_frame_bbox', 0)}  keypoints: {summary.get('latest_frame_keypoints', 0)}  tracks: {summary.get('active_tracks', 0)}",
         f"total bbox: {summary['bbox_detections']}  total keypoints: {summary['keypoints_extracted']}",
         f"seq: {summary['generated_sequences']}  pred: {summary['lstm_predictions']}  events: {summary['events_generated']}",
         f"threshold: {getattr(args, 'action_threshold', DEFAULT_FAINT_THRESHOLD):.2f}  consecutive_faint: {summary.get('latest_consecutive_faint', 0)}",

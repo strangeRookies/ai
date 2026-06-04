@@ -6,7 +6,8 @@ def draw_overlay(frame, boxes, prediction, frame_idx):
         x1, y1, x2, y2 = map(int, [box["x1"], box["y1"], box["x2"], box["y2"]])
         color = (0, 0, 255) if box.get("event_triggered") else (0, 255, 0)
         cv2.rectangle(output, (x1, y1), (x2, y2), color, 2)
-        draw_box_label(output, x1, y1, f"person {box['score']:.2f}", color)
+        track_text = f" id={box['track_id']}" if box.get("track_id") is not None else ""
+        draw_box_label(output, x1, y1, f"person{track_text} {box['score']:.2f}", color)
         if box.get("action_overlay"):
             draw_box_label(output, x1, y1 + 20, str(box["action_overlay"]), color)
         draw_keypoints(output, box.get("keypoints"))

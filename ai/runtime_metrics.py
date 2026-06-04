@@ -9,6 +9,7 @@ class RuntimeMetrics:
         self.lstm_ms_total = 0.0
         self.total_frame_ms_total = 0.0
         self.lstm_samples = 0
+        self.max_active_tracks = 0
 
     def add_read_ms(self, value):
         self.read_ms_total += float(value)
@@ -22,6 +23,9 @@ class RuntimeMetrics:
 
     def add_total_frame_ms(self, value):
         self.total_frame_ms_total += float(value)
+
+    def observe_active_tracks(self, active_tracks):
+        self.max_active_tracks = max(self.max_active_tracks, int(active_tracks))
 
     def runtime_seconds(self):
         return max(0.0, time.perf_counter() - self.started_at)
@@ -40,6 +44,7 @@ class RuntimeMetrics:
             "keypoints_per_frame": _rate(int(keypoints_extracted), frames),
             "sequence_per_frame": _rate(int(generated_sequences), frames),
             "prediction_per_frame": _rate(int(lstm_predictions), frames),
+            "max_active_tracks": self.max_active_tracks,
             "gpu_memory": gpu_memory_snapshot(),
             "gpu_memory_warning": gpu_memory_warning(),
         }

@@ -170,7 +170,11 @@ Fight 확장은 현재 YOLO26n-pose + LSTM Normal/Faint 파이프라인이 RTSP�
 | cam3 | 300 | 416 | 1.387 | 48 | 48 | 0 |
 | cam4 | 300 | 522 | 1.740 | 69 | 69 | 0 |
 
-다음 검증은 `MAX_FRAMES=3000` 장시간 테스트다. `scripts/run_4cam_rtsp_metrics.sh`로 카메라별 JSON을 저장하고, `scripts/summarize_4cam_metrics.py`로 FPS, read latency, YOLO latency, LSTM latency를 요약한다.
+`MAX_FRAMES=3000` 장시간 테스트도 통과했다. 각 카메라는 약 29.7 FPS로 3000프레임을 처리했고, YOLO26n-pose latency는 약 6.1~6.5 ms/frame, LSTM latency는 약 0.4 ms/frame 수준이다. 따라서 지금은 TensorRT/GStreamer보다 이벤트 안정성을 우선한다.
+
+실시간 추론은 이제 사람별 `track_id`를 기준으로 동작한다. detector가 track_id를 주지 않으면 IoU 기반 ByteTrack-style fallback tracker가 임시 track_id를 부여한다. 각 사람은 독립적인 sequence buffer를 가지고, 해당 track에 충분한 keypoint frame이 쌓였을 때만 LSTM을 실행한다.
+
+이벤트 후처리는 `camera_id + track_id` 단위로 debounce/cooldown을 적용한다. 같은 사람이 cooldown 안에 반복 alert를 만들지 않지만, 같은 카메라의 다른 사람은 별도 track으로 판단한다.
 
 판단 기준:
 
