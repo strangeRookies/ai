@@ -58,14 +58,14 @@ def bbox_visual_state(box, threshold=DEFAULT_FAINT_THRESHOLD):
 
 def format_bbox_label(box, threshold=DEFAULT_FAINT_THRESHOLD):
     track_id = box.get("track_id")
-    track_text = f"ID {int(track_id)}" if track_id is not None else "ID ?"
+    track_text = f"ID: {int(track_id)}" if track_id is not None else "ID: ?"
     faint_prob = box.get("faint_probability")
     state = bbox_visual_state(box, threshold)
     if state == "alert":
-        prob_text = "n/a" if faint_prob is None else f"{float(faint_prob):.2f}"
-        return f"ALERT | {track_text} | Faint {prob_text}"
+        prob_text = "N/A" if faint_prob is None else f"{float(faint_prob):.2f}"
+        return f"[ALERT] {track_text} (Faint: {prob_text})"
     if state == "warning":
-        return f"{track_text} | Faint {float(faint_prob):.2f}"
+        return f"WARN | {track_text} (Faint: {float(faint_prob):.2f})"
     return track_text
 
 
@@ -105,27 +105,44 @@ def annotate_boxes_with_track_actions(boxes, predictions_by_track, consecutive_b
 def draw_metrics_panel(frame, summary, args, prediction):
     import cv2
 
-    lines = [
-        f"camera: {args.camera_id}  fps: {float(summary.get('effective_fps', 0.0)):.2f}",
-        f"detector: {args.detector_mode}",
-        f"frames: {summary['frames_processed']}",
-        f"frame bbox: {summary.get('latest_frame_bbox', 0)}  keypoints: {summary.get('latest_frame_keypoints', 0)}  tracks: {summary.get('active_tracks', 0)}",
-        f"total bbox: {summary['bbox_detections']}  total keypoints: {summary['keypoints_extracted']}",
-        f"seq: {summary['generated_sequences']}  pred: {summary['lstm_predictions']}  events: {summary['events_generated']}",
-        f"threshold: {getattr(args, 'action_threshold', DEFAULT_FAINT_THRESHOLD):.2f}  consecutive_faint: {summary.get('latest_consecutive_faint', 0)}",
-    ]
-    if prediction:
-        faint_prob = faint_probability(prediction)
-        faint_text = "n/a" if faint_prob is None else f"{faint_prob:.2f}"
-        lines.append(f"label: {prediction['label']}  confidence: {prediction['score']:.2f}  faint: {faint_text}")
+    fps = float(summary.get("effective_fps", 0.0))
+    active_tracks = int(summary.get("active_tracks", 0))
+    latest_bbox = int(summary.get("latest_frame_bbox", 0))
+    
+    # Line 1: System info & detections
+    line1 = f"AI ACTIVE | CAM: {args.camera_id} | FPS: {fps:.1f} | TRACKS: {active_tracks} | BBOX: {latest_bbox}"
+    
+    # Line 2: Inference & sequence rule status
+    faint_prob = faint_probability(prediction) if prediction else summary.get("latest_faint_probability")
+    faint_text = "N/A" if faint_prob is None else f"{float(faint_prob):.2f}"
+    label = prediction.get("label", "Normal") if prediction else "Normal"
+    th = getattr(args, "action_threshold", DEFAULT_FAINT_THRESHOLD)
+    seq = summary.get("latest_consecutive_faint", 0)
+    
+    line2 = f"PRED: {label} | FAINT: {faint_text} (TH: {th:.2f}) | SEQ: {int(seq)}"
 
-    x, y = 12, 62
-    width = 560
-    height = 24 + 24 * len(lines)
-    cv2.rectangle(frame, (x - 8, y - 22), (x + width, y - 22 + height), (20, 20, 20), -1)
-    cv2.rectangle(frame, (x - 8, y - 22), (x + width, y - 22 + height), (80, 220, 120), 1)
-    for idx, line in enumerate(lines):
-        cv2.putText(frame, line, (x, y + idx * 24), cv2.FONT_HERSHEY_SIMPLEX, 0.58, (245, 245, 245), 1, cv2.LINE_AA)
+    x, y = 10, 24
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    scale = 0.45
+    thickness = 1
+    
+    # Compute size of the box based on text length
+    text_w1, _ = cv2.getTextSize(line1, font, scale, thickness)[0]
+    text_w2, _ = cv2.getTextSize(line2, font, scale, thickness)[0]
+    width = max(text_w1, text_w2) + 20
+    height = 38
+    
+    # Draw background with overlay blend for semi-transparency
+    overlay = frame.copy()
+    cv2.rectangle(overlay, (x - 6, y - 14), (x + width, y + height), (15, 23, 42), -1)
+    cv2.rectangle(overlay, (x - 6, y - 14), (x + width, y + height), (74, 222, 128), 1)
+    
+    # Blend overlay with original frame (alpha=0.75)
+    cv2.addWeighted(overlay, 0.75, frame, 0.25, 0, frame)
+    
+    # Draw text
+    cv2.putText(frame, line1, (x, y), font, scale, (241, 245, 249), thickness, cv2.LINE_AA)
+    cv2.putText(frame, line2, (x, y + 20), font, scale, (241, 245, 249), thickness, cv2.LINE_AA)
 
 
 def make_placeholder(message):
