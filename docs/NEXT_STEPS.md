@@ -486,3 +486,40 @@ python benchmark/compare_lstm_extractors.py \
   --audit-thresholds 0.3,0.4,0.5,0.6,0.7 \
   --no-cpu-fallback
 ```
+
+## 12. Final YOLO26n-pose wrapper commands
+
+최종 split 생성 결과:
+
+| split | rows | Normal | Faint |
+| --- | ---: | ---: | ---: |
+| train | 14068 | 7034 | 7034 |
+| val | 3042 | 1521 | 1521 |
+| test | 2784 | 1392 | 1392 |
+
+Leakage check: PASS. Class balance check: PASS.
+
+YOLO는 재학습하지 않는다. `yolo26n-pose.pt`는 고정 pose extractor이고, 최종 작업은 YOLO26n-pose keypoint sequence 기반 LSTM 재학습이다.
+
+GPU PC에서 실행:
+
+```bash
+cd ~/yolo_training/strange_ai
+source .venv/bin/activate
+
+bash scripts/run_yolo26n_final_lstm.sh dry-run
+bash scripts/run_yolo26n_final_lstm.sh sequences
+bash scripts/run_yolo26n_final_lstm.sh train
+bash scripts/run_yolo26n_final_lstm.sh audit
+```
+
+출력 경로:
+
+```text
+benchmark/results/lstm_yolo26n_final_split_dryrun/
+benchmark/results/lstm_yolo26n_final_split/
+benchmark/results/lstm_yolo26n_final_split_test_audit/
+benchmark/results/lstm_yolo26n_final_split_test_audit/threshold_audit/
+```
+
+`threshold_audit`는 threshold `0.3`, `0.4`, `0.5`, `0.6`, `0.7`에 대해 accuracy, precision, Faint recall, F1, false positives, false negatives를 저장하고, Faint recall -> F1 -> false alarm count 순서로 추천 threshold를 고른다.

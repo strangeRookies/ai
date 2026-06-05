@@ -27,6 +27,8 @@ Latest benchmark status:
 - Source coverage: 183 source videos; Faint appears in 174 source videos.
 - Domains: indoor_background, indoor_chromakey, outdoor.
 - Final training split is now prepared by `scripts/create_final_source_video_split.py`. It splits by `source_video` with a 7:1.5:1.5 train/val/test ratio, keeps each source video in exactly one split, preserves domain/Faint source distribution by stratified source buckets when possible, and class-balances each split by sampling Normal rows down to the Faint row count. Outputs are written under `data/splits/final_source_video_split/`.
+- Final generated split counts are train 14,068 rows (Normal 7,034 / Faint 7,034), val 3,042 rows (Normal 1,521 / Faint 1,521), and test 2,784 rows (Normal 1,392 / Faint 1,392). Leakage check and class balance check are PASS.
+- Final YOLO26n-pose LSTM dry-run, sequence generation, training, and test threshold audit are wrapped by `scripts/run_yolo26n_final_lstm.sh`. Outputs are separated from older benchmark runs under `benchmark/results/lstm_yolo26n_final_split_dryrun/`, `benchmark/results/lstm_yolo26n_final_split/`, and `benchmark/results/lstm_yolo26n_final_split_test_audit/`.
 - 300/class benchmark: train/val/test each selected 300 Normal and 300 Faint; generated 1,380 sequences; 108 zero-sequence clips; threshold 0.4 gave the best balance with Faint recall around 0.672 and F1 around 0.650.
 - 1000/class benchmark: train/val/test each selected 1000 Normal and 1000 Faint; train generated 5,024 sequences; eval generated 4,676 sequences; threshold 0.5 Faint recall 0.586382 and F1 0.617608; threshold 0.3 Faint recall 0.784553 and F1 0.665661; repeated-seed mean Faint recall 0.658198 and mean F1 0.648263. The real-time inference default candidate threshold is now 0.3, with consecutive-Faint and camera-cooldown post-processing to reduce false alarms.
 - Latest expanded benchmark now runs YOLO26n-pose only.
@@ -231,6 +233,25 @@ benchmark/results/lstm_final_11n_vs_26n/<model>/best.pt
 Interpret the final result in this order: Faint recall, F1-score, false alarm tendency from the confusion matrix, sequence stability, then runtime feasibility. The report separates pose-only context, sequence generation metrics, and LSTM classification metrics. The current local Codex environment verified the CLI/report workflow and unit tests, but the real smoke/full benchmark must run on the GPU PC because the local workspace does not contain `../ai_fall_experiments/data/metadata/metadata.csv` or the real YOLO/Torch runtime.
 
 The audit outputs do not change final model selection. `eval_predictions.csv` stores per-sequence `true_label`, `pred_label`, `normal_prob`, and `faint_prob`; `threshold_audit.csv` reports Faint recall/F1 at each configured probability threshold; `report.md` and `summary.json` include prediction counts and repeated-seed recall/F1 statistics when enabled.
+
+### Final YOLO26n-pose source split commands
+
+Use these commands on the GPU PC after `data/splits/final_source_video_split/all.csv` exists:
+
+```bash
+bash scripts/run_yolo26n_final_lstm.sh dry-run
+bash scripts/run_yolo26n_final_lstm.sh sequences
+bash scripts/run_yolo26n_final_lstm.sh train
+bash scripts/run_yolo26n_final_lstm.sh audit
+```
+
+The audit wrapper writes accuracy, precision, Faint recall, F1, false positives, false negatives, and the recommended threshold under:
+
+```text
+benchmark/results/lstm_yolo26n_final_split_test_audit/threshold_audit/
+```
+
+Recommendation priority is Faint recall first, then F1, then false alarm count.
 
 YOLO26n-pose is the selected pose extractor for the operational RTSP/LSTM path. The runtime defaults now use `yolo26n-pose.pt`, keypoint-sequence classifier input, and a configurable Faint probability threshold. Point `--action-model` at the selected YOLO26n LSTM checkpoint, for example:
 
