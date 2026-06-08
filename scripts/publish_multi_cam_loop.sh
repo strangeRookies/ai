@@ -43,6 +43,20 @@ done < <(find "$EXPERIMENTS_DIR/data/raw/outdoor" -name "*.mp4" 2>/dev/null | gr
 echo "Found ${#INDOOR_VIDEOS[@]} indoor background videos (filtered)."
 echo "Found ${#OUTDOOR_VIDEOS[@]} outdoor videos (filtered)."
 
+echo "=== Indoor Video List (First 10) ==="
+for i in $(seq 0 $(( ${#INDOOR_VIDEOS[@]} < 10 ? ${#INDOOR_VIDEOS[@]} - 1 : 9 ))); do
+  if [[ -n "${INDOOR_VIDEOS[i]:-}" ]]; then
+    echo "  - $(basename "${INDOOR_VIDEOS[i]}")"
+  fi
+done
+
+echo "=== Outdoor Video List (First 10) ==="
+for i in $(seq 0 $(( ${#OUTDOOR_VIDEOS[@]} < 10 ? ${#OUTDOOR_VIDEOS[@]} - 1 : 9 ))); do
+  if [[ -n "${OUTDOOR_VIDEOS[i]:-}" ]]; then
+    echo "  - $(basename "${OUTDOOR_VIDEOS[i]}")"
+  fi
+done
+
 if [[ ${#INDOOR_VIDEOS[@]} -eq 0 || ${#OUTDOOR_VIDEOS[@]} -eq 0 ]]; then
   echo "Error: No matching videos found. Check paths under $EXPERIMENTS_DIR" >&2
   exit 1
@@ -107,7 +121,9 @@ create_playlist "$PLAYLIST_DIR/cam4.txt" "${CAM4_VIDS[@]}"
 
 # 기존 ffmpeg 프로세스 정리
 echo "Killing any existing RTSP ffmpeg publishers..."
-pkill -f "ffmpeg.*rtsp://.*cam[1-4]" || true
+pkill -9 -f "ffmpeg.*rtsp://.*cam[1-4]" || true
+pkill -9 -f "ffmpeg" || true
+pkill -9 ffmpeg || true
 
 # 3. ffmpeg concat 무한루프 송출 실행
 start_publisher() {
