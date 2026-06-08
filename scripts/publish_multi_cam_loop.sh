@@ -45,87 +45,77 @@ OUTDOOR_VIDEOS=()
 if [[ -n "$CSV_PATH" ]]; then
   echo "Loading non-chromakey videos from metadata CSV: $CSV_PATH"
   
-  # 실내 비디오 로드 (indoor_background)
-  while IFS= read -r line; do
-    if [[ -n "$line" ]]; then
-      # 상대 경로로 기재된 경우 절대 경로로 조율
-      if [[ "$line" != /* && "$line" != ~* ]]; then
-        line="$EXPERIMENTS_DIR/$line"
+  # 통합 Python 스크립트 실행
+  # stdout으로 INDOOR|경로 또는 OUTDOOR|경로 출력, stderr로 카운트 출력
+  while IFS='|' read -r category filepath; do
+    if [[ -n "$filepath" ]]; then
+      if [[ "$category" == "INDOOR" ]]; then
+        INDOOR_VIDEOS+=("$filepath")
+      elif [[ "$category" == "OUTDOOR" ]]; then
+        OUTDOOR_VIDEOS+=("$filepath")
       fi
-      INDOOR_VIDEOS+=("$line")
     fi
   done < <(python3 -c "
-import csv
-vids = set()
-with open('$CSV_PATH', 'r', encoding='utf-8-sig') as f:
-    for r in csv.DictReader(f):
-        domain = r.get('domain', '')
-        path = r.get('clip_path') or r.get('video_path') or r.get('source_video')
-        if not path: continue
-        p = path.lower()
-        bad_keywords = ['실내(크로마키)', 'inside_croki_01', 'croki', '크로마키', 'chroma', 'chromakey', 'green_screen', 'studio', 'chm']
-        if any(bad in p for bad in bad_keywords): continue
-        if 'insidedoor_01' not in p and '실내(원본)' not in p: continue
-        if domain == 'indoor_background':
-            vids.add(path)
-for v in sorted(vids):
-    print(v)
-" 2>/dev/null || python -c "
-import csv
-vids = set()
-with open('$CSV_PATH', 'r', encoding='utf-8-sig') as f:
-    for r in csv.DictReader(f):
-        domain = r.get('domain', '')
-        path = r.get('clip_path') or r.get('video_path') or r.get('source_video')
-        if not path: continue
-        p = path.lower()
-        if domain == 'indoor_chromakey' or 'chroma' in p or 'green' in p or 'studio' in p or 'screen' in p or 'chm' in p: continue
-        if domain == 'indoor_background':
-            vids.add(path)
-for v in sorted(vids):
-    print(v)
-" | shuf || true)
+import csv, sys, os
 
-  # 야외 비디오 로드 (outdoor)
-  while IFS= read -r line; do
-    if [[ -n "$line" ]]; then
-      if [[ "$line" != /* && "$line" != ~* ]]; then
-        line="$EXPERIMENTS_DIR/$line"
-      fi
-      OUTDOOR_VIDEOS+=("$line")
-    fi
-  done < <(python3 -c "
-import csv
-vids = set()
-with open('$CSV_PATH', 'r', encoding='utf-8-sig') as f:
+EXPERIMENTS_DIR = r'''$EXPERIMENTS_DIR'''
+CSV_PATH = r'''$CSV_PATH'''
+
+selected_indoor = set()
+selected_outdoor = set()
+excluded_by_keyword = 0
+excluded_by_domain = 0
+missing_file = 0
+
+bad_keywords = ['croki', '크로마키', 'chroma', 'chromakey', 'background_chromakey', 'inside_croki', 'green_screen', 'studio', 'chm']
+
+with open(CSV_PATH, 'r', encoding='utf-8-sig') as f:
     for r in csv.DictReader(f):
         domain = r.get('domain', '')
-        path = r.get('clip_path') or r.get('video_path') or r.get('source_video')
+        # 1. clip_path 우선, 없으면 video_path 또는 source_video
+        path = r.get('clip_path')
+        if not path:
+            path = r.get('video_path')
+        if not path:
+            path = r.get('source_video')
         if not path: continue
+        
+        # 2. 상대경로면 EXPERIMENTS_DIR 기준으로 절대경로화
+        if not os.path.isabs(path):
+            path = os.path.join(EXPERIMENTS_DIR, path)
+            
+        # 3. 파일 존재 여부 검사
+        if not os.path.exists(path):
+            missing_file += 1
+            continue
+            
         p = path.lower()
-        bad_keywords = ['실내(크로마키)', 'inside_croki_01', 'croki', '크로마키', 'chroma', 'chromakey', 'green_screen', 'studio', 'chm']
-        if any(bad in p for bad in bad_keywords): continue
-        if 'outsidedoor_01' not in p and '실외' not in p: continue
-        if domain == 'outdoor':
-            vids.add(path)
-for v in sorted(vids):
-    print(v)
-" 2>/dev/null || python -c "
-import csv
-vids = set()
-with open('$CSV_PATH', 'r', encoding='utf-8-sig') as f:
-    for r in csv.DictReader(f):
-        domain = r.get('domain', '')
-        path = r.get('clip_path') or r.get('video_path') or r.get('source_video')
-        if not path: continue
-        p = path.lower()
-        bad_keywords = ['실내(크로마키)', 'inside_croki_01', 'croki', '크로마키', 'chroma', 'chromakey', 'green_screen', 'studio', 'chm']
-        if any(bad in p for bad in bad_keywords): continue
-        if 'outsidedoor_01' not in p and '실외' not in p: continue
-        if domain == 'outdoor':
-            vids.add(path)
-for v in sorted(vids):
-    print(v)
+        
+        # 4. 제외 키워드는 경로 필터로만 사용
+        if any(bad in p for bad in bad_keywords):
+            excluded_by_keyword += 1
+            continue
+            
+        # 5. CSV 모드 허용 조건 (domain 기준)
+        if domain == 'indoor_background':
+            selected_indoor.add(path)
+        elif domain == 'outdoor':
+            selected_outdoor.add(path)
+        else:
+            excluded_by_domain += 1
+
+print(f'=== Python CSV Filtering Stats ===', file=sys.stderr)
+print(f'selected_indoor={len(selected_indoor)}', file=sys.stderr)
+print(f'selected_outdoor={len(selected_outdoor)}', file=sys.stderr)
+print(f'excluded_by_keyword={excluded_by_keyword}', file=sys.stderr)
+print(f'excluded_by_domain={excluded_by_domain}', file=sys.stderr)
+print(f'missing_file={missing_file}', file=sys.stderr)
+print(f'==================================', file=sys.stderr)
+
+for v in sorted(selected_indoor):
+    print(f'INDOOR|{v}')
+for v in sorted(selected_outdoor):
+    print(f'OUTDOOR|{v}')
 " | shuf || true)
 
 else
@@ -240,10 +230,10 @@ echo "============================================"
 echo "Verifying generated playlists for bad keywords..."
 for cam in cam1 cam2 cam3 cam4; do
   playlist_file="$PLAYLIST_DIR/${cam}.txt"
-  if grep -i -E "실내\(크로마키\)|inside_croki_01|croki|크로마키|chroma|chromakey|green_screen|studio|chm" "$playlist_file" >/dev/null; then
+  if grep -i -E "croki|크로마키|chroma|chromakey|background_chromakey|inside_croki|green_screen|studio|chm" "$playlist_file" >/dev/null; then
     echo "CRITICAL ERROR: Bad keyword detected in $playlist_file!"
     echo "Failing paths:"
-    grep -i -E "실내\(크로마키\)|inside_croki_01|croki|크로마키|chroma|chromakey|green_screen|studio|chm" "$playlist_file"
+    grep -i -E "croki|크로마키|chroma|chromakey|background_chromakey|inside_croki|green_screen|studio|chm" "$playlist_file"
     exit 1
   fi
 done
