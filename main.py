@@ -147,6 +147,8 @@ def main():
             port=settings.mqtt_port,
             topic=settings.mqtt_topic,
             client_id=settings.mqtt_client_id,
+            username=settings.mqtt_username,
+            password=settings.mqtt_password,
         )
         publisher.connect()
 

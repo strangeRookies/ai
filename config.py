@@ -40,6 +40,8 @@ class Settings:
     mqtt_port: int
     mqtt_topic: str
     mqtt_client_id: str
+    mqtt_username: str
+    mqtt_password: str
     fall_min_duration_seconds: float
     fall_debounce_seconds: float
     fall_candidate_threshold: float
@@ -74,6 +76,8 @@ def load_settings():
         mqtt_port=get_env_int("MQTT_PORT", 1883),
         mqtt_topic=os.getenv("MQTT_TOPIC", "safety/events"),
         mqtt_client_id=os.getenv("MQTT_CLIENT_ID", "edge-ai-001"),
+        mqtt_username=os.getenv("MQTT_USERNAME", ""),
+        mqtt_password=os.getenv("MQTT_PASSWORD", ""),
         fall_min_duration_seconds=get_env_float("FALL_MIN_DURATION_SECONDS", 1.5),
         fall_debounce_seconds=get_env_float("FALL_DEBOUNCE_SECONDS", 10),
         fall_candidate_threshold=get_env_float("FALL_CANDIDATE_THRESHOLD", 0.7),

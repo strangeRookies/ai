@@ -37,6 +37,8 @@ Real-time tracking stability status:
 
 - The selected model stack remains YOLO26n-pose + LSTM Normal/Faint.
 - 4-camera testing is already near 30 FPS, so TensorRT/GStreamer remain deferred while event reliability is improved.
+- RTSP inference now separates the operator-facing event payload from optional debug event logs. MQTT/console payloads contain only camera ID, timestamp, event type, severity, confidence, bbox, track ID, and clip reference when already available. Debug fields such as probabilities, threshold, sequence window, and post-processing settings are written only when `--event-log-dir` is provided.
+- Local MQTT validation now uses EMQX in `infra/local-mqtt/`. RTSP LSTM inference can publish operator-facing event JSON to `safety/events` through environment-driven MQTT settings, while `--dry-run` keeps the existing console publisher path.
 - The RTSP pipeline now uses per-track sequence buffers and a ByteTrack-style fallback tracker with configurable `track_thresh`, `match_thresh`, `track_buffer`, `min_box_area`, `detector_conf`, `bbox_smoothing_alpha`, and `center_match_ratio`.
 - Track IDs are kept through short detection gaps using `track_buffer` and `track_max_missing_seconds`.
 - Bbox visualization uses EMA smoothing, while raw bbox values remain available in diagnostics.
@@ -308,7 +310,7 @@ Acceleration decision rule:
 `mock_edge_ai.py` publishes random safety event JSON messages to the MQTT topic used by the local development pipeline.
 
 ```text
-Python Edge AI -> MQTT Broker (Mosquitto) -> Spring Boot MQTT Subscriber -> WebSocket -> React Frontend
+Python Edge AI -> Local EMQX MQTT Broker -> Spring Boot MQTT Subscriber -> WebSocket -> React Frontend
 ```
 
 This script is a mock publisher for integration testing before OpenCV, YOLOv8-Pose, and RTSP inference are connected.
@@ -322,6 +324,8 @@ MQTT_HOST=localhost
 MQTT_PORT=1883
 MQTT_TOPIC=safety/events
 MQTT_CLIENT_ID=edge-ai-mock-001
+MQTT_USERNAME=
+MQTT_PASSWORD=
 PUBLISH_INTERVAL_SECONDS=3
 ```
 
@@ -333,7 +337,17 @@ pip install -r requirements.txt
 
 ### Run
 
-Make sure Mosquitto MQTT Broker is running, then start the mock publisher:
+Start the local EMQX MQTT broker, then start the mock publisher:
+
+```bash
+docker compose -f infra/local-mqtt/docker-compose.yml up -d
+```
+
+If your Docker CLI does not support the `compose` subcommand, use:
+
+```bash
+docker-compose -f infra/local-mqtt/docker-compose.yml up -d
+```
 
 ```bash
 python mock_edge_ai.py
@@ -355,10 +369,10 @@ In another terminal, subscribe to the MQTT topic:
 mosquitto_sub -h localhost -p 1883 -t safety/events
 ```
 
-If `mosquitto_sub` is not installed locally, use the Mosquitto Docker container:
+If `mosquitto_sub` is not installed locally, use the repo subscriber:
 
 ```bash
-docker exec -it strange-mosquitto mosquitto_sub -h localhost -p 1883 -t safety/events
+python scripts/subscribe_mqtt_events.py
 ```
 
 Expected event shape:
@@ -441,6 +455,8 @@ MQTT_HOST=localhost
 MQTT_PORT=1883
 MQTT_TOPIC=safety/events
 MQTT_CLIENT_ID=edge-ai-001
+MQTT_USERNAME=
+MQTT_PASSWORD=
 ```
 
 ### Run The Pipeline
@@ -474,13 +490,55 @@ python main.py
 
 ### MQTT Verification
 
-Start Mosquitto in `strange_infra`, then subscribe:
+Start local EMQX:
+
+```bash
+docker compose -f infra/local-mqtt/docker-compose.yml up -d
+```
+
+Fallback:
+
+```bash
+docker-compose -f infra/local-mqtt/docker-compose.yml up -d
+```
+
+Dashboard:
+
+```text
+http://localhost:18083
+```
+
+Subscribe with a local MQTT client:
 
 ```bash
 mosquitto_sub -h localhost -p 1883 -t safety/events
 ```
 
-Run the AI server:
+Or use the repo subscriber:
+
+```bash
+python scripts/subscribe_mqtt_events.py
+```
+
+Publish a single local test event without RTSP/LSTM:
+
+```bash
+python scripts/publish_test_mqtt_event.py
+```
+
+Run the RTSP LSTM AI path with MQTT publish enabled:
+
+```bash
+python scripts/run_rtsp_inference.py --rtsp-url rtsp://localhost:8554/cam1 --camera-id cam_01 --publisher mqtt --event-log-dir runs/events/json
+```
+
+Keep the existing console-only dry-run path:
+
+```bash
+python scripts/run_rtsp_inference.py --rtsp-url rtsp://localhost:8554/cam1 --camera-id cam_01 --dry-run --publisher console
+```
+
+Run the older AI server path:
 
 ```bash
 python main.py --once
@@ -505,6 +563,28 @@ Expected event shape:
     "model_name": "yolo26n-pose"
   }
 }
+```
+
+### Spring Boot Local MQTT Settings
+
+If the backend code is in a separate repository, point the Spring Boot MQTT subscriber at the local broker:
+
+```yaml
+mqtt:
+  host: localhost
+  port: 1883
+  topic: safety/events
+```
+
+For AWS, keep the code unchanged and inject only environment values:
+
+```text
+MQTT_HOST=<aws-mqtt-endpoint>
+MQTT_PORT=<aws-mqtt-port>
+MQTT_TOPIC=safety/events
+MQTT_CLIENT_ID=strange-ai-prod
+MQTT_USERNAME=<provided-by-secret-manager>
+MQTT_PASSWORD=<provided-by-secret-manager>
 ```
 
 ### Rule Engine Notes

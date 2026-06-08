@@ -1,10 +1,13 @@
+import json
+import re
+from pathlib import Path
+
 from ai.action.faint_post_processing import (
     DEFAULT_CAMERA_COOLDOWN_SECONDS,
     DEFAULT_FAINT_THRESHOLD,
     DEFAULT_MIN_CONSECUTIVE_FAINT,
     faint_probability,
 )
-from ai.publishers.event_publisher import build_event_payload
 
 
 def normalize_detections(detections):
@@ -83,29 +86,66 @@ def maybe_log_debug(packet, boxes, summary, prediction, args, prefix="[rtsp-infe
 
 
 def build_inference_event_payload(args, packet, prediction, boxes, sequence):
-    payload = build_event_payload(
-        camera_id=args.camera_id,
-        frame_idx=packet.frame_idx,
-        timestamp=packet.timestamp,
-        event_type=prediction["label"],
-        score=prediction["score"],
-        boxes=boxes,
-        snapshot_path=None,
-    )
     bbox = sequence.get("bbox") if sequence else None
     track_id = sequence.get("track_id") if sequence else None
-    payload["bbox"] = bbox
-    payload["confidence"] = prediction["score"]
-    payload["threshold"] = getattr(args, "action_threshold", DEFAULT_FAINT_THRESHOLD)
-    payload["track_id"] = track_id
-    payload["severity"] = getattr(args, "event_severity", "HIGH")
-    payload["sequence_window"] = {"start": sequence["start_frame"], "end": sequence["end_frame"]} if sequence else None
-    payload["probabilities"] = prediction.get("probabilities", {})
-    payload["post_processing"] = {
-        "min_consecutive_faint": getattr(args, "min_consecutive_faint", DEFAULT_MIN_CONSECUTIVE_FAINT),
-        "camera_cooldown_seconds": getattr(args, "camera_cooldown_seconds", DEFAULT_CAMERA_COOLDOWN_SECONDS),
+    payload = {
+        "camera_id": args.camera_id,
+        "timestamp": float(packet.timestamp),
+        "event_type": prediction["label"],
+        "severity": getattr(args, "event_severity", "HIGH"),
+        "confidence": float(prediction["score"]),
+        "bbox": bbox,
+        "track_id": track_id,
     }
+    clip_path = sequence.get("clip_path") if sequence else None
+    clip_url = sequence.get("clip_url") if sequence else None
+    # TODO: Event clip writing is asynchronous, so run_rtsp_inference cannot
+    # attach the final saved MP4 path at trigger time without a larger callback
+    # flow. Include clip_path/clip_url only when an upstream sequence already
+    # provides one.
+    if clip_path:
+        payload["clip_path"] = clip_path
+    if clip_url:
+        payload["clip_url"] = clip_url
     return payload
+
+
+def build_inference_event_log(args, packet, prediction, boxes, sequence):
+    bbox = sequence.get("bbox") if sequence else None
+    track_id = sequence.get("track_id") if sequence else None
+    return {
+        "camera_id": args.camera_id,
+        "frame_idx": int(packet.frame_idx),
+        "timestamp": float(packet.timestamp),
+        "event_type": prediction["label"],
+        "confidence": float(prediction["score"]),
+        "bbox": bbox,
+        "track_id": track_id,
+        "sequence_window": {"start": sequence["start_frame"], "end": sequence["end_frame"]} if sequence else None,
+        "probabilities": prediction.get("probabilities", {}),
+        "threshold": getattr(args, "action_threshold", DEFAULT_FAINT_THRESHOLD),
+        "post_processing": {
+            "min_consecutive_faint": getattr(args, "min_consecutive_faint", DEFAULT_MIN_CONSECUTIVE_FAINT),
+            "camera_cooldown_seconds": getattr(args, "camera_cooldown_seconds", DEFAULT_CAMERA_COOLDOWN_SECONDS),
+        },
+    }
+
+
+def save_inference_event_log(event_log_dir, event_log):
+    output_dir = Path(event_log_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    camera_id = _safe_filename_part(event_log.get("camera_id", "camera"))
+    event_type = _safe_filename_part(event_log.get("event_type", "event"))
+    timestamp = _safe_filename_part(str(event_log.get("timestamp", "0")))
+    track_id = _safe_filename_part(str(event_log.get("track_id", "none")))
+    frame_idx = _safe_filename_part(str(event_log.get("frame_idx", "0")))
+    output_path = output_dir / f"{camera_id}_{event_type}_{timestamp}_track-{track_id}_frame-{frame_idx}.json"
+    output_path.write_text(json.dumps(event_log, indent=2, ensure_ascii=False), encoding="utf-8")
+    return output_path
+
+
+def _safe_filename_part(value):
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", str(value)).strip("_") or "unknown"
 
 
 def update_prediction_counts(summary, prediction):

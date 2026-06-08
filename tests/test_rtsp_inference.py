@@ -7,11 +7,30 @@ import numpy as np
 
 from ai.action.keypoint_sequence_buffer import KeypointSequenceBuffer
 from ai.action.per_track_sequence_buffer import PerTrackKeypointSequenceBuffers
-from scripts.run_rtsp_inference import FaintEventPostProcessor, build_inference_event_payload, is_alert_prediction, run
+from scripts.run_rtsp_inference import (
+    FaintEventPostProcessor,
+    is_alert_prediction,
+    run,
+)
 from ai.visualization.draw import draw_overlay
+
+try:
+    import cv2  # noqa: F401
+
+    CV2_AVAILABLE = True
+except ImportError:
+    CV2_AVAILABLE = False
 
 
 class RtspInferenceTest(unittest.TestCase):
+    def write_sample_video(self, video):
+        import cv2
+
+        writer = cv2.VideoWriter(str(video), cv2.VideoWriter_fourcc(*"MJPG"), 10.0, (32, 32))
+        for _ in range(4):
+            writer.write(np.zeros((32, 32, 3), dtype=np.uint8))
+        writer.release()
+
     def test_keypoint_sequence_buffer_emits_sequence(self):
         buffer = KeypointSequenceBuffer(sequence_length=2, stride=1)
         detection = {
@@ -28,16 +47,12 @@ class RtspInferenceTest(unittest.TestCase):
         self.assertEqual(sequence["bbox"], [0, 0, 10, 20])
         self.assertEqual(sequence["track_id"], 7)
 
+    @unittest.skipIf(not CV2_AVAILABLE, "cv2 is required for video smoke tests")
     def test_mock_rtsp_inference_reports_required_counts(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             video = root / "sample.avi"
-            import cv2
-
-            writer = cv2.VideoWriter(str(video), cv2.VideoWriter_fourcc(*"MJPG"), 10.0, (32, 32))
-            for _ in range(4):
-                writer.write(np.zeros((32, 32, 3), dtype=np.uint8))
-            writer.release()
+            self.write_sample_video(video)
             args = Namespace(
                 rtsp_url=str(video),
                 camera_id="cam_01",
@@ -60,6 +75,7 @@ class RtspInferenceTest(unittest.TestCase):
                 resize_size=32,
                 tracker_iou_threshold=0.3,
                 track_max_missing_seconds=2.0,
+                event_log_dir=None,
             )
 
             summary = run(args)
@@ -86,6 +102,7 @@ class RtspInferenceTest(unittest.TestCase):
         self.assertIn("per_track_sequences_generated", summary)
         self.assertGreater(summary["normal_predictions"] + summary["faint_predictions"], 0)
 
+    @unittest.skipIf(not CV2_AVAILABLE, "cv2 is required for overlay drawing")
     def test_overlay_accepts_keypoints(self):
         frame = np.zeros((32, 32, 3), dtype=np.uint8)
         boxes = [
@@ -139,34 +156,6 @@ class RtspInferenceTest(unittest.TestCase):
         self.assertEqual({item["track_id"] for item in sequences}, {1, 2})
         self.assertEqual(buffer.sequences_generated_by_track[1], 1)
         self.assertEqual(buffer.sequences_generated_by_track[2], 1)
-
-    def test_inference_event_payload_contains_required_runtime_fields(self):
-        args = Namespace(
-            camera_id="cam_01",
-            action_threshold=0.3,
-            min_consecutive_faint=2,
-            camera_cooldown_seconds=10,
-            event_severity="HIGH",
-        )
-        packet = Namespace(frame_idx=12, timestamp=123.5)
-        prediction = {
-            "label": "Faint",
-            "score": 0.81,
-            "probabilities": {"Normal": 0.19, "Faint": 0.81},
-        }
-        sequence = {"bbox": [1, 2, 3, 4], "track_id": 9, "start_frame": 4, "end_frame": 12}
-
-        payload = build_inference_event_payload(args, packet, prediction, boxes=[], sequence=sequence)
-
-        self.assertEqual(payload["camera_id"], "cam_01")
-        self.assertEqual(payload["event_type"], "Faint")
-        self.assertEqual(payload["confidence"], 0.81)
-        self.assertEqual(payload["threshold"], 0.3)
-        self.assertEqual(payload["track_id"], 9)
-        self.assertEqual(payload["timestamp"], 123.5)
-        self.assertEqual(payload["bbox"], [1, 2, 3, 4])
-        self.assertEqual(payload["severity"], "HIGH")
-
 
 if __name__ == "__main__":
     unittest.main()

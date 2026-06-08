@@ -5,7 +5,7 @@ import paho.mqtt.client as mqtt
 
 
 class MqttPublisher:
-    def __init__(self, host, port, topic, client_id):
+    def __init__(self, host, port, topic, client_id, username="", password=""):
         self.host = host
         self.port = port
         self.topic = topic
@@ -15,6 +15,8 @@ class MqttPublisher:
             client_id=client_id,
             protocol=mqtt.MQTTv311,
         )
+        if username:
+            self.client.username_pw_set(username=username, password=password or None)
         self.connected = False
 
     def connect(self):

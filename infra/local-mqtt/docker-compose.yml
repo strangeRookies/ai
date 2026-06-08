@@ -1,0 +1,13 @@
+services:
+  emqx:
+    image: emqx/emqx:5.8.4
+    container_name: strange-local-emqx
+    restart: unless-stopped
+    ports:
+      - "1883:1883"
+      - "18083:18083"
+    environment:
+      EMQX_NAME: strange-local-emqx
+      EMQX_HOST: 127.0.0.1
+      EMQX_DASHBOARD__LISTENERS__HTTP__BIND: 18083
+
