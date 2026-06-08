@@ -182,7 +182,7 @@ def stop_publishers(processes):
 def main():
     parser = argparse.ArgumentParser(description="Run a safe local 4-camera RTSP demo dry-run.")
     parser.add_argument("--config", default="configs/demo_4cams.yaml")
-    parser.add_argument("--dataset-csv", default="../ai_fall_experiments/data/metadata/metadata.csv")
+    parser.add_argument("--dataset-csv", default="data/splits/final_source_video_split/chromakey_audit/test_non_chromakey.csv")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--max-frames", type=int, default=60)
     parser.add_argument("--detector-mode", choices=["mock", "yolo"], default="mock")
