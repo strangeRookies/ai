@@ -64,7 +64,7 @@ with open('$CSV_PATH', 'r', encoding='utf-8-sig') as f:
         if not path: continue
         p = path.lower()
         if domain == 'indoor_chromakey' or 'chroma' in p or 'green' in p or 'studio' in p or 'screen' in p or 'chm' in p or 'croki' in p or '크로마키' in p: continue
-        if 'insidedoor_01' in p:
+        if domain == 'indoor_background':
             vids.add(path)
 for v in sorted(vids):
     print(v)
@@ -102,7 +102,7 @@ with open('$CSV_PATH', 'r', encoding='utf-8-sig') as f:
         if not path: continue
         p = path.lower()
         if domain == 'indoor_chromakey' or 'chroma' in p or 'green' in p or 'studio' in p or 'screen' in p or 'chm' in p or 'croki' in p or '크로마키' in p: continue
-        if 'outsidedoor_01' in p:
+        if domain == 'outdoor':
             vids.add(path)
 for v in sorted(vids):
     print(v)
@@ -116,7 +116,7 @@ with open('$CSV_PATH', 'r', encoding='utf-8-sig') as f:
         if not path: continue
         p = path.lower()
         if domain == 'indoor_chromakey' or 'chroma' in p or 'green' in p or 'studio' in p or 'screen' in p or 'chm' in p or 'croki' in p or '크로마키' in p: continue
-        if 'outsidedoor_01' in p:
+        if domain == 'outdoor':
             vids.add(path)
 for v in sorted(vids):
     print(v)
