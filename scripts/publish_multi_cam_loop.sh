@@ -62,7 +62,8 @@ with open('$CSV_PATH', 'r', encoding='utf-8-sig') as f:
         domain = r.get('domain', '')
         path = r.get('clip_path') or r.get('video_path') or r.get('source_video')
         if not path: continue
-        if domain == 'indoor_chromakey' or 'chroma' in path.lower(): continue
+        p = path.lower()
+        if domain == 'indoor_chromakey' or 'chroma' in p or 'green' in p or 'studio' in p or 'screen' in p or 'chm' in p: continue
         if domain == 'indoor_background':
             vids.add(path)
 for v in sorted(vids):
@@ -75,7 +76,8 @@ with open('$CSV_PATH', 'r', encoding='utf-8-sig') as f:
         domain = r.get('domain', '')
         path = r.get('clip_path') or r.get('video_path') or r.get('source_video')
         if not path: continue
-        if domain == 'indoor_chromakey' or 'chroma' in path.lower(): continue
+        p = path.lower()
+        if domain == 'indoor_chromakey' or 'chroma' in p or 'green' in p or 'studio' in p or 'screen' in p or 'chm' in p: continue
         if domain == 'indoor_background':
             vids.add(path)
 for v in sorted(vids):
@@ -98,7 +100,8 @@ with open('$CSV_PATH', 'r', encoding='utf-8-sig') as f:
         domain = r.get('domain', '')
         path = r.get('clip_path') or r.get('video_path') or r.get('source_video')
         if not path: continue
-        if domain == 'indoor_chromakey' or 'chroma' in path.lower(): continue
+        p = path.lower()
+        if domain == 'indoor_chromakey' or 'chroma' in p or 'green' in p or 'studio' in p or 'screen' in p or 'chm' in p: continue
         if domain == 'outdoor':
             vids.add(path)
 for v in sorted(vids):
@@ -111,7 +114,8 @@ with open('$CSV_PATH', 'r', encoding='utf-8-sig') as f:
         domain = r.get('domain', '')
         path = r.get('clip_path') or r.get('video_path') or r.get('source_video')
         if not path: continue
-        if domain == 'indoor_chromakey' or 'chroma' in path.lower(): continue
+        p = path.lower()
+        if domain == 'indoor_chromakey' or 'chroma' in p or 'green' in p or 'studio' in p or 'screen' in p or 'chm' in p: continue
         if domain == 'outdoor':
             vids.add(path)
 for v in sorted(vids):
@@ -136,8 +140,8 @@ fi
 echo "Found ${#INDOOR_VIDEOS[@]} indoor background videos (filtered)."
 echo "Found ${#OUTDOOR_VIDEOS[@]} outdoor videos (filtered)."
 
-echo "=== Indoor Video List (First 10) ==="
-for i in $(seq 0 $(( ${#INDOOR_VIDEOS[@]} < 10 ? ${#INDOOR_VIDEOS[@]} - 1 : 9 ))); do
+echo "=== Indoor Video List (ALL) ==="
+for i in "${!INDOOR_VIDEOS[@]}"; do
   if [[ -n "${INDOOR_VIDEOS[i]:-}" ]]; then
     echo "  - $(basename "${INDOOR_VIDEOS[i]}")"
   fi
