@@ -63,7 +63,7 @@ with open('$CSV_PATH', 'r', encoding='utf-8-sig') as f:
         path = r.get('clip_path') or r.get('video_path') or r.get('source_video')
         if not path: continue
         p = path.lower()
-        if domain == 'indoor_chromakey' or 'chroma' in p or 'green' in p or 'studio' in p or 'screen' in p or 'chm' in p: continue
+        if domain == 'indoor_chromakey' or 'chroma' in p or 'green' in p or 'studio' in p or 'screen' in p or 'chm' in p or '101-1' in p or '101-2' in p or 'place03' in p: continue
         if domain == 'indoor_background':
             vids.add(path)
 for v in sorted(vids):
@@ -101,7 +101,7 @@ with open('$CSV_PATH', 'r', encoding='utf-8-sig') as f:
         path = r.get('clip_path') or r.get('video_path') or r.get('source_video')
         if not path: continue
         p = path.lower()
-        if domain == 'indoor_chromakey' or 'chroma' in p or 'green' in p or 'studio' in p or 'screen' in p or 'chm' in p: continue
+        if domain == 'indoor_chromakey' or 'chroma' in p or 'green' in p or 'studio' in p or 'screen' in p or 'chm' in p or '101-1' in p or '101-2' in p or 'place03' in p: continue
         if domain == 'outdoor':
             vids.add(path)
 for v in sorted(vids):
@@ -115,7 +115,7 @@ with open('$CSV_PATH', 'r', encoding='utf-8-sig') as f:
         path = r.get('clip_path') or r.get('video_path') or r.get('source_video')
         if not path: continue
         p = path.lower()
-        if domain == 'indoor_chromakey' or 'chroma' in p or 'green' in p or 'studio' in p or 'screen' in p or 'chm' in p: continue
+        if domain == 'indoor_chromakey' or 'chroma' in p or 'green' in p or 'studio' in p or 'screen' in p or 'chm' in p or '101-1' in p or '101-2' in p or 'place03' in p: continue
         if domain == 'outdoor':
             vids.add(path)
 for v in sorted(vids):
