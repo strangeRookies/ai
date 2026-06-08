@@ -24,21 +24,106 @@ RTSP_BASE_URL="${RTSP_BASE_URL:-rtsp://localhost:8554}"
 LOG_DIR="$AI_DIR/runs/rtsp_publisher_logs"
 mkdir -p "$LOG_DIR"
 
-# 1. 비디오 파일 검색 및 크로마키(green screen) 영상 필터링 & 셔플링
-echo "Filtering and shuffling videos..."
-INDOOR_VIDEOS=()
-while IFS= read -r line; do
-  if [[ -n "$line" ]]; then
-    INDOOR_VIDEOS+=("$line")
-  fi
-done < <(find "$EXPERIMENTS_DIR/data/raw/indoor_background" -name "*.mp4" 2>/dev/null | grep -v -i -E "chroma|green|screen|studio|key|chm" | shuf || true)
+# 1. 비디오 파일 로드 및 크로마키(green screen) 영상 필터링 & 셔플링
+CSV_PATH=""
+CANDIDATES=(
+  "data/splits/final_source_video_split/chromakey_audit/test_non_chromakey.csv"
+  "../ai_fall_experiments/data/splits/final_source_video_split/chromakey_audit/test_non_chromakey.csv"
+  "$EXPERIMENTS_DIR/data/splits/final_source_video_split/chromakey_audit/test_non_chromakey.csv"
+)
 
-OUTDOOR_VIDEOS=()
-while IFS= read -r line; do
-  if [[ -n "$line" ]]; then
-    OUTDOOR_VIDEOS+=("$line")
+for cand in "${CANDIDATES[@]}"; do
+  if [[ -f "$cand" ]]; then
+    CSV_PATH="$cand"
+    break
   fi
-done < <(find "$EXPERIMENTS_DIR/data/raw/outdoor" -name "*.mp4" 2>/dev/null | grep -v -i -E "chroma|green|screen|studio|key|chm" | shuf || true)
+done
+
+INDOOR_VIDEOS=()
+OUTDOOR_VIDEOS=()
+
+if [[ -n "$CSV_PATH" ]]; then
+  echo "Loading non-chromakey videos from metadata CSV: $CSV_PATH"
+  
+  # 실내 비디오 로드 (indoor_background)
+  while IFS= read -r line; do
+    if [[ -n "$line" ]]; then
+      # 상대 경로로 기재된 경우 절대 경로로 조율
+      if [[ "$line" != /* && "$line" != ~* ]]; then
+        line="$EXPERIMENTS_DIR/$line"
+      fi
+      INDOOR_VIDEOS+=("$line")
+    fi
+  done < <(python3 -c "
+import csv
+vids = set()
+with open('$CSV_PATH', 'r', encoding='utf-8-sig') as f:
+    for r in csv.DictReader(f):
+        domain = r.get('domain', '')
+        path = r.get('source_video') or r.get('video_path') or r.get('clip_path')
+        if domain == 'indoor_background' and path:
+            vids.add(path)
+for v in sorted(vids):
+    print(v)
+" 2>/dev/null || python -c "
+import csv
+vids = set()
+with open('$CSV_PATH', 'r', encoding='utf-8-sig') as f:
+    for r in csv.DictReader(f):
+        domain = r.get('domain', '')
+        path = r.get('source_video') or r.get('video_path') or r.get('clip_path')
+        if domain == 'indoor_background' and path:
+            vids.add(path)
+for v in sorted(vids):
+    print(v)
+" | shuf || true)
+
+  # 야외 비디오 로드 (outdoor)
+  while IFS= read -r line; do
+    if [[ -n "$line" ]]; then
+      if [[ "$line" != /* && "$line" != ~* ]]; then
+        line="$EXPERIMENTS_DIR/$line"
+      fi
+      OUTDOOR_VIDEOS+=("$line")
+    fi
+  done < <(python3 -c "
+import csv
+vids = set()
+with open('$CSV_PATH', 'r', encoding='utf-8-sig') as f:
+    for r in csv.DictReader(f):
+        domain = r.get('domain', '')
+        path = r.get('source_video') or r.get('video_path') or r.get('clip_path')
+        if domain == 'outdoor' and path:
+            vids.add(path)
+for v in sorted(vids):
+    print(v)
+" 2>/dev/null || python -c "
+import csv
+vids = set()
+with open('$CSV_PATH', 'r', encoding='utf-8-sig') as f:
+    for r in csv.DictReader(f):
+        domain = r.get('domain', '')
+        path = r.get('source_video') or r.get('video_path') or r.get('clip_path')
+        if domain == 'outdoor' and path:
+            vids.add(path)
+for v in sorted(vids):
+    print(v)
+" | shuf || true)
+
+else
+  echo "No test_non_chromakey.csv found. Falling back to directory filtering..."
+  while IFS= read -r line; do
+    if [[ -n "$line" ]]; then
+      INDOOR_VIDEOS+=("$line")
+    fi
+  done < <(find "$EXPERIMENTS_DIR/data/raw/indoor_background" -name "*.mp4" 2>/dev/null | grep -v -i -E "chroma|green|screen|studio|key|chm" | shuf || true)
+
+  while IFS= read -r line; do
+    if [[ -n "$line" ]]; then
+      OUTDOOR_VIDEOS+=("$line")
+    fi
+  done < <(find "$EXPERIMENTS_DIR/data/raw/outdoor" -name "*.mp4" 2>/dev/null | grep -v -i -E "chroma|green|screen|studio|key|chm" | shuf || true)
+fi
 
 echo "Found ${#INDOOR_VIDEOS[@]} indoor background videos (filtered)."
 echo "Found ${#OUTDOOR_VIDEOS[@]} outdoor videos (filtered)."
