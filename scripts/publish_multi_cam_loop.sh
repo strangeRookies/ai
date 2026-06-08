@@ -215,10 +215,40 @@ fi
 INDOOR_SOURCE_VIDEOS=("${INDOOR_SOURCE_VIDEOS[@]:0:3}")
 OUTDOOR_SOURCE_VIDEOS=("${OUTDOOR_SOURCE_VIDEOS[@]:0:3}")
 
-CAM1_VIDS=("${INDOOR_SOURCE_VIDEOS[@]}")
-CAM2_VIDS=("${INDOOR_SOURCE_VIDEOS[@]}")
-CAM3_VIDS=("${OUTDOOR_SOURCE_VIDEOS[@]}")
-CAM4_VIDS=("${OUTDOOR_SOURCE_VIDEOS[@]}")
+CAM1_VIDS=()
+CAM2_VIDS=()
+CAM3_VIDS=()
+CAM4_VIDS=()
+
+split_by_index() {
+  local source_name="$1"
+  local even_target_name="$2"
+  local odd_target_name="$3"
+  local -n source_array="$source_name"
+  local -n even_target="$even_target_name"
+  local -n odd_target="$odd_target_name"
+  local index
+
+  for index in "${!source_array[@]}"; do
+    if (( index % 2 == 0 )); then
+      even_target+=("${source_array[$index]}")
+    else
+      odd_target+=("${source_array[$index]}")
+    fi
+  done
+}
+
+split_by_index INDOOR_SOURCE_VIDEOS CAM1_VIDS CAM2_VIDS
+split_by_index OUTDOOR_SOURCE_VIDEOS CAM3_VIDS CAM4_VIDS
+
+if [[ ${#CAM1_VIDS[@]} -eq 0 || ${#CAM2_VIDS[@]} -eq 0 ]]; then
+  echo "ERROR: indoor demo candidates must produce non-empty cam1 and cam2 playlists." >&2
+  exit 1
+fi
+if [[ ${#CAM3_VIDS[@]} -eq 0 || ${#CAM4_VIDS[@]} -eq 0 ]]; then
+  echo "ERROR: outdoor demo candidates must produce non-empty cam3 and cam4 playlists." >&2
+  exit 1
+fi
 
 print_list() {
   local title="$1"
@@ -273,6 +303,20 @@ validate_playlist_membership() {
   done < "$playlist"
 }
 
+assert_playlists_differ() {
+  local left_label="$1"
+  local left_playlist="$2"
+  local right_label="$3"
+  local right_playlist="$4"
+
+  if cmp -s "$left_playlist" "$right_playlist"; then
+    echo "ERROR: $left_label and $right_label playlists are identical; cameras must split candidate videos." >&2
+    exit 1
+  fi
+
+  echo "Playlist comparison: $left_label and $right_label are different."
+}
+
 print_playlist_file() {
   local title="$1"
   local playlist="$2"
@@ -301,6 +345,8 @@ validate_playlist_keywords \
   "$PLAYLIST_DIR/cam2.txt" \
   "$PLAYLIST_DIR/cam3.txt" \
   "$PLAYLIST_DIR/cam4.txt"
+assert_playlists_differ "cam1" "$PLAYLIST_DIR/cam1.txt" "cam2" "$PLAYLIST_DIR/cam2.txt"
+assert_playlists_differ "cam3" "$PLAYLIST_DIR/cam3.txt" "cam4" "$PLAYLIST_DIR/cam4.txt"
 echo "Playlist validation passed."
 
 echo "Playlist files to publish:"
@@ -328,7 +374,8 @@ start_publisher() {
     -an -vf "scale=640:-2,format=yuv420p" -r 15 \
     -c:v libx264 -preset ultrafast -tune zerolatency -g 15 -bf 0 \
     -f rtsp "$RTSP_BASE_URL/$cam_name" > "$LOG_DIR/${cam_name}.log" 2>&1 &
-  echo "$cam_name started. Log: $LOG_DIR/${cam_name}.log"
+  local publisher_pid="$!"
+  echo "$cam_name started with PID $publisher_pid. Log: $LOG_DIR/${cam_name}.log"
 }
 
 start_publisher "cam1" "$PLAYLIST_DIR/cam1.txt"
