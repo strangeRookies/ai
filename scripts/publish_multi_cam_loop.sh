@@ -10,7 +10,9 @@ CSV_PATH="${CSV_PATH:-$AI_DIR/data/splits/final_source_video_split/chromakey_aud
 RTSP_BASE_URL="${RTSP_BASE_URL:-rtsp://localhost:8554}"
 PLAYLIST_DIR="$AI_DIR/runs/playlists"
 LOG_DIR="$AI_DIR/runs/rtsp_publisher_logs"
-BAD_KEYWORD_REGEX="croki|크로마키|chroma|chromakey|green_screen|studio|chm|indoor_chromakey|inside_croki"
+DEMO_INDOOR_ALLOWLIST="$AI_DIR/runs/demo_indoor_videos.txt"
+DEMO_OUTDOOR_ALLOWLIST="$AI_DIR/runs/demo_outdoor_videos.txt"
+BAD_KEYWORD_REGEX="croki|크로마키|chroma|chromakey|green_screen|studio|chm"
 FFMPEG_BIN="${FFMPEG_BIN:-ffmpeg}"
 PKILL_BIN="${PKILL_BIN:-pkill}"
 
@@ -18,15 +20,11 @@ if [[ ! -f "$CSV_PATH" && -f "$EXPERIMENTS_DIR/data/splits/final_source_video_sp
   CSV_PATH="$EXPERIMENTS_DIR/data/splits/final_source_video_split/chromakey_audit/test_non_chromakey.csv"
 fi
 
-if [[ ! -f "$CSV_PATH" ]]; then
-  echo "ERROR: non-chromakey CSV not found: $CSV_PATH" >&2
-  echo "Generate it first with scripts/audit_chromakey_split.py." >&2
-  exit 1
-fi
-
 mkdir -p "$PLAYLIST_DIR" "$LOG_DIR"
 
-echo "Using non-chromakey CSV: $CSV_PATH"
+echo "Demo indoor allowlist: $DEMO_INDOOR_ALLOWLIST"
+echo "Demo outdoor allowlist: $DEMO_OUTDOOR_ALLOWLIST"
+echo "Fallback non-chromakey CSV: $CSV_PATH"
 echo "Using experiments dataset root: ${EXPERIMENTS_DIR:-<not set>}"
 echo "RTSP base URL: $RTSP_BASE_URL"
 
@@ -35,21 +33,86 @@ if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
   PYTHON_BIN="python"
 fi
 if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
-  echo "ERROR: python3 or python is required to read $CSV_PATH" >&2
+  echo "ERROR: python3 or python is required to read demo allowlists or $CSV_PATH" >&2
   exit 1
 fi
 
-mapfile -t SELECTED_ROWS < <(
-  "$PYTHON_BIN" - "$CSV_PATH" "$EXPERIMENTS_DIR" <<'PY'
+INDOOR_SOURCE_VIDEOS=()
+OUTDOOR_SOURCE_VIDEOS=()
+
+load_allowlist() {
+  local allowlist_path="$1"
+  local label="$2"
+  local -n target_array="$3"
+
+  if [[ ! -f "$allowlist_path" ]]; then
+    return 1
+  fi
+
+  mapfile -t target_array < <(
+    "$PYTHON_BIN" - "$allowlist_path" "$AI_DIR" <<'PY'
+import sys
+from pathlib import Path
+
+allowlist = Path(sys.argv[1])
+ai_dir = Path(sys.argv[2])
+for raw_line in allowlist.read_text(encoding="utf-8-sig").splitlines():
+    line = raw_line.strip()
+    if not line or line.startswith("#"):
+        continue
+    path = Path(line).expanduser()
+    if not path.is_absolute():
+        path = ai_dir / path
+    print(str(path.resolve()))
+PY
+  )
+
+  if [[ ${#target_array[@]} -ne 3 ]]; then
+    echo "ERROR: $label allowlist must contain exactly 3 mp4 paths, found ${#target_array[@]}: $allowlist_path" >&2
+    exit 1
+  fi
+
+  local path
+  for path in "${target_array[@]}"; do
+    if [[ "$path" != *.mp4 ]]; then
+      echo "ERROR: $label allowlist contains a non-mp4 path: $path" >&2
+      exit 1
+    fi
+    if [[ ! -f "$path" ]]; then
+      echo "ERROR: $label allowlist path does not exist: $path" >&2
+      exit 1
+    fi
+    if grep -Eiq "$BAD_KEYWORD_REGEX" <<<"$path"; then
+      echo "ERROR: $label allowlist path contains a chromakey-like keyword: $path" >&2
+      exit 1
+    fi
+  done
+
+  echo "Using $label allowlist: $allowlist_path"
+  return 0
+}
+
+select_from_csv() {
+  local indoor_needed="$1"
+  local outdoor_needed="$2"
+
+  if [[ ! -f "$CSV_PATH" ]]; then
+    echo "ERROR: non-chromakey CSV not found: $CSV_PATH" >&2
+    echo "Generate it first with scripts/audit_chromakey_split.py, or create runs/demo_indoor_videos.txt and runs/demo_outdoor_videos.txt." >&2
+    exit 1
+  fi
+
+  mapfile -t SELECTED_ROWS < <(
+    "$PYTHON_BIN" - "$CSV_PATH" "$EXPERIMENTS_DIR" "$indoor_needed" "$outdoor_needed" <<'PY'
 import csv
-import os
 import re
 import sys
 from pathlib import Path
 
 csv_path = Path(sys.argv[1])
 experiments_dir = Path(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2] else None
-bad = re.compile(r"(croki|크로마키|chroma|chromakey|green_screen|studio|chm|indoor_chromakey|inside_croki)", re.I)
+limits = {"INDOOR": int(sys.argv[3]), "OUTDOOR": int(sys.argv[4])}
+bad = re.compile(r"(croki|크로마키|chroma|chromakey|green_screen|studio|chm)", re.I)
 selected = {"INDOOR": [], "OUTDOOR": []}
 seen = {"INDOOR": set(), "OUTDOOR": set()}
 stats = {
@@ -88,6 +151,8 @@ with csv_path.open("r", encoding="utf-8-sig", newline="") as fp:
         else:
             stats["excluded_domain"] += 1
             continue
+        if limits[bucket] <= 0 or len(selected[bucket]) >= limits[bucket]:
+            continue
 
         raw_path = choose_path(row)
         if not raw_path:
@@ -107,33 +172,43 @@ with csv_path.open("r", encoding="utf-8-sig", newline="") as fp:
             continue
         seen[bucket].add(key)
         selected[bucket].append(key)
+        if all(len(selected[name]) >= limits[name] for name in selected):
+            break
 
 for key, value in stats.items():
     print(f"[csv-select] {key}={value}", file=sys.stderr)
 for bucket in ("INDOOR", "OUTDOOR"):
     print(f"[csv-select] selected_{bucket.lower()}={len(selected[bucket])}", file=sys.stderr)
-    for path in selected[bucket][:3]:
+    for path in selected[bucket]:
         print(f"{bucket}|{path}")
 PY
-)
+  )
 
-INDOOR_SOURCE_VIDEOS=()
-OUTDOOR_SOURCE_VIDEOS=()
-for row in "${SELECTED_ROWS[@]}"; do
-  category="${row%%|*}"
-  path="${row#*|}"
-  case "$category" in
-    INDOOR) INDOOR_SOURCE_VIDEOS+=("$path") ;;
-    OUTDOOR) OUTDOOR_SOURCE_VIDEOS+=("$path") ;;
-  esac
-done
+  local row category path
+  for row in "${SELECTED_ROWS[@]}"; do
+    category="${row%%|*}"
+    path="${row#*|}"
+    case "$category" in
+      INDOOR) INDOOR_SOURCE_VIDEOS+=("$path") ;;
+      OUTDOOR) OUTDOOR_SOURCE_VIDEOS+=("$path") ;;
+    esac
+  done
+}
+
+load_allowlist "$DEMO_INDOOR_ALLOWLIST" "indoor demo" INDOOR_SOURCE_VIDEOS || true
+load_allowlist "$DEMO_OUTDOOR_ALLOWLIST" "outdoor demo" OUTDOOR_SOURCE_VIDEOS || true
+
+if [[ ${#INDOOR_SOURCE_VIDEOS[@]} -lt 3 || ${#OUTDOOR_SOURCE_VIDEOS[@]} -lt 3 ]]; then
+  echo "One or more demo allowlists are missing; falling back to CSV automatic selection for missing camera groups."
+  select_from_csv "$((3 - ${#INDOOR_SOURCE_VIDEOS[@]}))" "$((3 - ${#OUTDOOR_SOURCE_VIDEOS[@]}))"
+fi
 
 if [[ ${#INDOOR_SOURCE_VIDEOS[@]} -lt 3 ]]; then
-  echo "ERROR: Need 3 indoor_background source_video files, found ${#INDOOR_SOURCE_VIDEOS[@]}." >&2
+  echo "ERROR: Need 3 indoor demo source videos, found ${#INDOOR_SOURCE_VIDEOS[@]}." >&2
   exit 1
 fi
 if [[ ${#OUTDOOR_SOURCE_VIDEOS[@]} -lt 3 ]]; then
-  echo "ERROR: Need 3 outdoor source_video files, found ${#OUTDOOR_SOURCE_VIDEOS[@]}." >&2
+  echo "ERROR: Need 3 outdoor demo source videos, found ${#OUTDOOR_SOURCE_VIDEOS[@]}." >&2
   exit 1
 fi
 
@@ -154,13 +229,6 @@ print_list() {
   done
 }
 
-print_list "selected indoor source videos:" "${INDOOR_SOURCE_VIDEOS[@]}"
-print_list "selected outdoor source videos:" "${OUTDOOR_SOURCE_VIDEOS[@]}"
-print_list "cam1 playlist files:" "${CAM1_VIDS[@]}"
-print_list "cam2 playlist files:" "${CAM2_VIDS[@]}"
-print_list "cam3 playlist files:" "${CAM3_VIDS[@]}"
-print_list "cam4 playlist files:" "${CAM4_VIDS[@]}"
-
 write_playlist() {
   local playlist_file="$1"
   shift
@@ -171,16 +239,14 @@ write_playlist() {
   echo "Created playlist: $playlist_file"
 }
 
-write_playlist "$PLAYLIST_DIR/cam1.txt" "${CAM1_VIDS[@]}"
-write_playlist "$PLAYLIST_DIR/cam2.txt" "${CAM2_VIDS[@]}"
-write_playlist "$PLAYLIST_DIR/cam3.txt" "${CAM3_VIDS[@]}"
-write_playlist "$PLAYLIST_DIR/cam4.txt" "${CAM4_VIDS[@]}"
-
 validate_playlist_keywords() {
-  if grep -RniE "$BAD_KEYWORD_REGEX" "$PLAYLIST_DIR"; then
-    echo "ERROR: Chromakey-like keyword detected in generated playlists." >&2
-    exit 1
-  fi
+  local playlist
+  for playlist in "$@"; do
+    if grep -niE "$BAD_KEYWORD_REGEX" "$playlist"; then
+      echo "ERROR: Chromakey-like keyword detected in generated playlist: $playlist" >&2
+      exit 1
+    fi
+  done
 }
 
 validate_playlist_membership() {
@@ -193,13 +259,13 @@ validate_playlist_membership() {
     case "$expected" in
       indoor_background)
         printf '%s\n' "${INDOOR_SOURCE_VIDEOS[@]}" | grep -Fx -- "$path" >/dev/null || {
-          echo "ERROR: $playlist contains non-indoor source_video: $path" >&2
+          echo "ERROR: $playlist contains non-indoor demo source video: $path" >&2
           exit 1
         }
         ;;
       outdoor)
         printf '%s\n' "${OUTDOOR_SOURCE_VIDEOS[@]}" | grep -Fx -- "$path" >/dev/null || {
-          echo "ERROR: $playlist contains non-outdoor source_video: $path" >&2
+          echo "ERROR: $playlist contains non-outdoor demo source video: $path" >&2
           exit 1
         }
         ;;
@@ -207,12 +273,41 @@ validate_playlist_membership() {
   done < "$playlist"
 }
 
+print_playlist_file() {
+  local title="$1"
+  local playlist="$2"
+  echo "$title: $playlist"
+  sed 's/^/  /' "$playlist"
+}
+
+print_list "selected indoor demo source videos:" "${INDOOR_SOURCE_VIDEOS[@]}"
+print_list "selected outdoor demo source videos:" "${OUTDOOR_SOURCE_VIDEOS[@]}"
+print_list "cam1 playlist files:" "${CAM1_VIDS[@]}"
+print_list "cam2 playlist files:" "${CAM2_VIDS[@]}"
+print_list "cam3 playlist files:" "${CAM3_VIDS[@]}"
+print_list "cam4 playlist files:" "${CAM4_VIDS[@]}"
+
+write_playlist "$PLAYLIST_DIR/cam1.txt" "${CAM1_VIDS[@]}"
+write_playlist "$PLAYLIST_DIR/cam2.txt" "${CAM2_VIDS[@]}"
+write_playlist "$PLAYLIST_DIR/cam3.txt" "${CAM3_VIDS[@]}"
+write_playlist "$PLAYLIST_DIR/cam4.txt" "${CAM4_VIDS[@]}"
+
 validate_playlist_membership "$PLAYLIST_DIR/cam1.txt" indoor_background
 validate_playlist_membership "$PLAYLIST_DIR/cam2.txt" indoor_background
 validate_playlist_membership "$PLAYLIST_DIR/cam3.txt" outdoor
 validate_playlist_membership "$PLAYLIST_DIR/cam4.txt" outdoor
-validate_playlist_keywords
+validate_playlist_keywords \
+  "$PLAYLIST_DIR/cam1.txt" \
+  "$PLAYLIST_DIR/cam2.txt" \
+  "$PLAYLIST_DIR/cam3.txt" \
+  "$PLAYLIST_DIR/cam4.txt"
 echo "Playlist validation passed."
+
+echo "Playlist files to publish:"
+print_playlist_file "cam1" "$PLAYLIST_DIR/cam1.txt"
+print_playlist_file "cam2" "$PLAYLIST_DIR/cam2.txt"
+print_playlist_file "cam3" "$PLAYLIST_DIR/cam3.txt"
+print_playlist_file "cam4" "$PLAYLIST_DIR/cam4.txt"
 
 echo "Verification commands:"
 echo "  cat runs/playlists/cam1.txt"
