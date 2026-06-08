@@ -63,8 +63,8 @@ with open('$CSV_PATH', 'r', encoding='utf-8-sig') as f:
         path = r.get('clip_path') or r.get('video_path') or r.get('source_video')
         if not path: continue
         p = path.lower()
-        if domain == 'indoor_chromakey' or 'chroma' in p or 'green' in p or 'studio' in p or 'screen' in p or 'chm' in p or 'place03' in p: continue
-        if domain == 'indoor_background':
+        if domain == 'indoor_chromakey' or 'chroma' in p or 'green' in p or 'studio' in p or 'screen' in p or 'chm' in p or 'croki' in p or '크로마키' in p: continue
+        if 'insidedoor_01' in p:
             vids.add(path)
 for v in sorted(vids):
     print(v)
@@ -101,8 +101,8 @@ with open('$CSV_PATH', 'r', encoding='utf-8-sig') as f:
         path = r.get('clip_path') or r.get('video_path') or r.get('source_video')
         if not path: continue
         p = path.lower()
-        if domain == 'indoor_chromakey' or 'chroma' in p or 'green' in p or 'studio' in p or 'screen' in p or 'chm' in p or 'place03' in p: continue
-        if domain == 'outdoor':
+        if domain == 'indoor_chromakey' or 'chroma' in p or 'green' in p or 'studio' in p or 'screen' in p or 'chm' in p or 'croki' in p or '크로마키' in p: continue
+        if 'outsidedoor_01' in p:
             vids.add(path)
 for v in sorted(vids):
     print(v)
@@ -115,8 +115,8 @@ with open('$CSV_PATH', 'r', encoding='utf-8-sig') as f:
         path = r.get('clip_path') or r.get('video_path') or r.get('source_video')
         if not path: continue
         p = path.lower()
-        if domain == 'indoor_chromakey' or 'chroma' in p or 'green' in p or 'studio' in p or 'screen' in p or 'chm' in p or 'place03' in p: continue
-        if domain == 'outdoor':
+        if domain == 'indoor_chromakey' or 'chroma' in p or 'green' in p or 'studio' in p or 'screen' in p or 'chm' in p or 'croki' in p or '크로마키' in p: continue
+        if 'outsidedoor_01' in p:
             vids.add(path)
 for v in sorted(vids):
     print(v)
@@ -128,13 +128,13 @@ else
     if [[ -n "$line" ]]; then
       INDOOR_VIDEOS+=("$line")
     fi
-  done < <(find "$EXPERIMENTS_DIR/data/raw/indoor_background" -name "*.mp4" 2>/dev/null | grep -v -i -E "chroma|green|screen|studio|key|chm" | shuf || true)
+  done < <(find "$EXPERIMENTS_DIR/data/raw" -path "*/insidedoor_01/*" -name "*.mp4" 2>/dev/null | grep -v -i -E "chroma|green|screen|studio|key|chm|croki|크로마키" | shuf || true)
 
   while IFS= read -r line; do
     if [[ -n "$line" ]]; then
       OUTDOOR_VIDEOS+=("$line")
     fi
-  done < <(find "$EXPERIMENTS_DIR/data/raw/outdoor" -name "*.mp4" 2>/dev/null | grep -v -i -E "chroma|green|screen|studio|key|chm" | shuf || true)
+  done < <(find "$EXPERIMENTS_DIR/data/raw" -path "*/outsidedoor_01*" -name "*.mp4" 2>/dev/null | grep -v -i -E "chroma|green|screen|studio|key|chm|croki|크로마키" | shuf || true)
 fi
 
 echo "Found ${#INDOOR_VIDEOS[@]} indoor background videos (filtered)."
@@ -208,6 +208,21 @@ fi
 [[ ${#CAM2_VIDS[@]} -eq 0 ]] && CAM2_VIDS+=("${OUTDOOR_VIDEOS[0]}")
 [[ ${#CAM3_VIDS[@]} -eq 0 ]] && CAM3_VIDS+=("${OUTDOOR_VIDEOS[0]}")
 [[ ${#CAM4_VIDS[@]} -eq 0 ]] && CAM4_VIDS+=("${OUTDOOR_VIDEOS[0]}")
+
+# 검증 및 로그 출력
+echo "============================================"
+for cam in CAM1 CAM2 CAM3 CAM4; do
+  echo "=== $cam Assigned Videos ==="
+  eval "vids=(\"\${${cam}_VIDS[@]}\")"
+  for v in "${vids[@]}"; do
+    echo "  $v"
+    if echo "$v" | grep -i -E "croki|크로마키|chroma|chromakey" >/dev/null; then
+      echo "CRITICAL ERROR: Chromakey video detected in $cam!"
+      exit 1
+    fi
+  done
+done
+echo "============================================"
 
 # 임시 playlist 파일 디렉토리
 PLAYLIST_DIR="$AI_DIR/runs/playlists"

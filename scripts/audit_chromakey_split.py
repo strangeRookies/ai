@@ -9,7 +9,7 @@ from pathlib import Path
 SPLITS = ("train", "val", "test")
 LABEL_NAMES = ("Normal", "Faint")
 CHROMAKEY_DOMAIN = "indoor_chromakey"
-CHROMAKEY_PATTERN = re.compile(r"(indoor_chromakey|chroma|chromakey|green[_ -]?screen|green|studio|chm)", re.IGNORECASE)
+CHROMAKEY_PATTERN = re.compile(r"(indoor_chromakey|chroma|chromakey|green[_ -]?screen|green|studio|chm|croki|크로마키)", re.IGNORECASE)
 
 
 def read_rows(path):
