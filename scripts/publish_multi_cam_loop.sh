@@ -24,21 +24,21 @@ RTSP_BASE_URL="${RTSP_BASE_URL:-rtsp://localhost:8554}"
 LOG_DIR="$AI_DIR/runs/rtsp_publisher_logs"
 mkdir -p "$LOG_DIR"
 
-# 1. 비디오 파일 검색 및 크로마키(green screen) 영상 필터링
-echo "Filtering videos..."
+# 1. 비디오 파일 검색 및 크로마키(green screen) 영상 필터링 & 셔플링
+echo "Filtering and shuffling videos..."
 INDOOR_VIDEOS=()
 while IFS= read -r line; do
   if [[ -n "$line" ]]; then
     INDOOR_VIDEOS+=("$line")
   fi
-done < <(find "$EXPERIMENTS_DIR/data/raw/indoor_background" -name "*.mp4" 2>/dev/null | grep -v -i -E "chromakey|green|screen" || true)
+done < <(find "$EXPERIMENTS_DIR/data/raw/indoor_background" -name "*.mp4" 2>/dev/null | grep -v -i -E "chroma|green|screen|studio|key|chm" | shuf || true)
 
 OUTDOOR_VIDEOS=()
 while IFS= read -r line; do
   if [[ -n "$line" ]]; then
     OUTDOOR_VIDEOS+=("$line")
   fi
-done < <(find "$EXPERIMENTS_DIR/data/raw/outdoor" -name "*.mp4" 2>/dev/null | grep -v -i -E "chromakey|green|screen" || true)
+done < <(find "$EXPERIMENTS_DIR/data/raw/outdoor" -name "*.mp4" 2>/dev/null | grep -v -i -E "chroma|green|screen|studio|key|chm" | shuf || true)
 
 echo "Found ${#INDOOR_VIDEOS[@]} indoor background videos (filtered)."
 echo "Found ${#OUTDOOR_VIDEOS[@]} outdoor videos (filtered)."
