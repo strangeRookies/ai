@@ -120,10 +120,8 @@ start_publisher() {
   # -re: 실시간 속도로 읽기
   # -c:v libx264 -preset ultrafast -tune zerolatency: 저지연 인코딩
   nohup ffmpeg -re -f concat -safe 0 -stream_loop -1 -i "$playlist_path" \
-    -an \
-    -c:v libx264 \
-    -preset ultrafast \
-    -tune zerolatency \
+    -an -vf "scale=640:-2,format=yuv420p" -r 15 \
+    -c:v libx264 -preset ultrafast -tune zerolatency -g 15 -bf 0 \
     -f rtsp \
     "$RTSP_BASE_URL/$cam_name" > "$LOG_DIR/${cam_name}.log" 2>&1 &
     
