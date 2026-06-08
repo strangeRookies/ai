@@ -63,7 +63,9 @@ with open('$CSV_PATH', 'r', encoding='utf-8-sig') as f:
         path = r.get('clip_path') or r.get('video_path') or r.get('source_video')
         if not path: continue
         p = path.lower()
-        if domain == 'indoor_chromakey' or 'chroma' in p or 'green' in p or 'studio' in p or 'screen' in p or 'chm' in p or 'croki' in p or '크로마키' in p: continue
+        bad_keywords = ['실내(크로마키)', 'inside_croki_01', 'croki', '크로마키', 'chroma', 'chromakey', 'green_screen', 'studio', 'chm']
+        if any(bad in p for bad in bad_keywords): continue
+        if 'insidedoor_01' not in p and '실내(원본)' not in p: continue
         if domain == 'indoor_background':
             vids.add(path)
 for v in sorted(vids):
@@ -101,7 +103,9 @@ with open('$CSV_PATH', 'r', encoding='utf-8-sig') as f:
         path = r.get('clip_path') or r.get('video_path') or r.get('source_video')
         if not path: continue
         p = path.lower()
-        if domain == 'indoor_chromakey' or 'chroma' in p or 'green' in p or 'studio' in p or 'screen' in p or 'chm' in p or 'croki' in p or '크로마키' in p: continue
+        bad_keywords = ['실내(크로마키)', 'inside_croki_01', 'croki', '크로마키', 'chroma', 'chromakey', 'green_screen', 'studio', 'chm']
+        if any(bad in p for bad in bad_keywords): continue
+        if 'outsidedoor_01' not in p and '실외' not in p: continue
         if domain == 'outdoor':
             vids.add(path)
 for v in sorted(vids):
@@ -115,7 +119,9 @@ with open('$CSV_PATH', 'r', encoding='utf-8-sig') as f:
         path = r.get('clip_path') or r.get('video_path') or r.get('source_video')
         if not path: continue
         p = path.lower()
-        if domain == 'indoor_chromakey' or 'chroma' in p or 'green' in p or 'studio' in p or 'screen' in p or 'chm' in p or 'croki' in p or '크로마키' in p: continue
+        bad_keywords = ['실내(크로마키)', 'inside_croki_01', 'croki', '크로마키', 'chroma', 'chromakey', 'green_screen', 'studio', 'chm']
+        if any(bad in p for bad in bad_keywords): continue
+        if 'outsidedoor_01' not in p and '실외' not in p: continue
         if domain == 'outdoor':
             vids.add(path)
 for v in sorted(vids):
@@ -128,13 +134,13 @@ else
     if [[ -n "$line" ]]; then
       INDOOR_VIDEOS+=("$line")
     fi
-  done < <(find "$EXPERIMENTS_DIR/data/raw" -path "*/insidedoor_01/*" -name "*.mp4" 2>/dev/null | grep -v -i -E "chroma|green|screen|studio|key|chm|croki|크로마키" | shuf || true)
+  done < <(find "$EXPERIMENTS_DIR/data/raw" -type f \( -path "*/insidedoor_01/*" -o -path "*/실내(원본)/*" \) -name "*.mp4" 2>/dev/null | grep -v -i -E "실내\(크로마키\)|inside_croki_01|croki|크로마키|chroma|chromakey|green_screen|studio|chm" | shuf || true)
 
   while IFS= read -r line; do
     if [[ -n "$line" ]]; then
       OUTDOOR_VIDEOS+=("$line")
     fi
-  done < <(find "$EXPERIMENTS_DIR/data/raw" -path "*/outsidedoor_01*" -name "*.mp4" 2>/dev/null | grep -v -i -E "chroma|green|screen|studio|key|chm|croki|크로마키" | shuf || true)
+  done < <(find "$EXPERIMENTS_DIR/data/raw" -type f \( -path "*/outsidedoor_01*" -o -path "*/실외/*" \) -name "*.mp4" 2>/dev/null | grep -v -i -E "실내\(크로마키\)|inside_croki_01|croki|크로마키|chroma|chromakey|green_screen|studio|chm" | shuf || true)
 fi
 
 echo "Found ${#INDOOR_VIDEOS[@]} indoor background videos (filtered)."
@@ -216,10 +222,6 @@ for cam in CAM1 CAM2 CAM3 CAM4; do
   eval "vids=(\"\${${cam}_VIDS[@]}\")"
   for v in "${vids[@]}"; do
     echo "  $v"
-    if echo "$v" | grep -i -E "croki|크로마키|chroma|chromakey" >/dev/null; then
-      echo "CRITICAL ERROR: Chromakey video detected in $cam!"
-      exit 1
-    fi
   done
 done
 echo "============================================"
@@ -232,6 +234,21 @@ create_playlist "$PLAYLIST_DIR/cam1.txt" "${CAM1_VIDS[@]}"
 create_playlist "$PLAYLIST_DIR/cam2.txt" "${CAM2_VIDS[@]}"
 create_playlist "$PLAYLIST_DIR/cam3.txt" "${CAM3_VIDS[@]}"
 create_playlist "$PLAYLIST_DIR/cam4.txt" "${CAM4_VIDS[@]}"
+
+# 생성된 playlist 안의 파일 경로에 bad keyword가 있는지 자동 수행 (요구사항 3, 4)
+echo "============================================"
+echo "Verifying generated playlists for bad keywords..."
+for cam in cam1 cam2 cam3 cam4; do
+  playlist_file="$PLAYLIST_DIR/${cam}.txt"
+  if grep -i -E "실내\(크로마키\)|inside_croki_01|croki|크로마키|chroma|chromakey|green_screen|studio|chm" "$playlist_file" >/dev/null; then
+    echo "CRITICAL ERROR: Bad keyword detected in $playlist_file!"
+    echo "Failing paths:"
+    grep -i -E "실내\(크로마키\)|inside_croki_01|croki|크로마키|chroma|chromakey|green_screen|studio|chm" "$playlist_file"
+    exit 1
+  fi
+done
+echo "Playlist verification passed."
+echo "============================================"
 
 # 기존 ffmpeg 프로세스 정리
 echo "Killing any existing RTSP ffmpeg publishers..."
