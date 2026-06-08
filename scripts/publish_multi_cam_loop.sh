@@ -159,11 +159,6 @@ if [[ ${#OUTDOOR_VIDEOS[@]} -eq 0 ]]; then
   exit 1
 fi
 
-if [[ ${#INDOOR_VIDEOS[@]} -eq 0 ]]; then
-  echo "Warning: No indoor videos found after filtering! Using outdoor videos for cam1, cam2 as fallback."
-  INDOOR_VIDEOS=("${OUTDOOR_VIDEOS[@]}")
-fi
-
 # 2. 플레이리스트 생성 함수
 create_playlist() {
   local playlist_file="$1"
@@ -180,37 +175,39 @@ create_playlist() {
   echo "Created playlist: $playlist_file"
 }
 
-# cam1, cam2 -> indoor 비디오들을 분할해서 적절히 섞어 배분
-# cam3, cam4 -> outdoor 비디오들을 분할해서 적절히 섞어 배분
-# 갯수가 적을 수 있으므로 round-robin 배분
-
+# cam1~cam4 비디오 할당 로직
 CAM1_VIDS=()
 CAM2_VIDS=()
-for i in "${!INDOOR_VIDEOS[@]}"; do
-  if (( i % 2 == 0 )); then
-    CAM1_VIDS+=("${INDOOR_VIDEOS[i]}")
-  else
-    CAM2_VIDS+=("${INDOOR_VIDEOS[i]}")
-  fi
-done
-# 홀수개인 경우 대응
-if [[ ${#CAM2_VIDS[@]} -eq 0 ]]; then
-  CAM2_VIDS+=("${INDOOR_VIDEOS[0]}")
-fi
-
 CAM3_VIDS=()
 CAM4_VIDS=()
-for i in "${!OUTDOOR_VIDEOS[@]}"; do
-  if (( i % 2 == 0 )); then
-    CAM3_VIDS+=("${OUTDOOR_VIDEOS[i]}")
-  else
-    CAM4_VIDS+=("${OUTDOOR_VIDEOS[i]}")
-  fi
-done
-# 홀수개인 경우 대응
-if [[ ${#CAM4_VIDS[@]} -eq 0 ]]; then
-  CAM4_VIDS+=("${OUTDOOR_VIDEOS[0]}")
+
+if [[ ${#INDOOR_VIDEOS[@]} -eq 0 ]]; then
+  echo "Warning: No indoor videos found after filtering! Distributing outdoor videos across all 4 cams."
+  for i in "${!OUTDOOR_VIDEOS[@]}"; do
+    mod=$(( i % 4 ))
+    if   (( mod == 0 )); then CAM1_VIDS+=("${OUTDOOR_VIDEOS[i]}")
+    elif (( mod == 1 )); then CAM2_VIDS+=("${OUTDOOR_VIDEOS[i]}")
+    elif (( mod == 2 )); then CAM3_VIDS+=("${OUTDOOR_VIDEOS[i]}")
+    else                      CAM4_VIDS+=("${OUTDOOR_VIDEOS[i]}")
+    fi
+  done
+else
+  for i in "${!INDOOR_VIDEOS[@]}"; do
+    if (( i % 2 == 0 )); then CAM1_VIDS+=("${INDOOR_VIDEOS[i]}")
+    else                      CAM2_VIDS+=("${INDOOR_VIDEOS[i]}")
+    fi
+  done
+  for i in "${!OUTDOOR_VIDEOS[@]}"; do
+    if (( i % 2 == 0 )); then CAM3_VIDS+=("${OUTDOOR_VIDEOS[i]}")
+    else                      CAM4_VIDS+=("${OUTDOOR_VIDEOS[i]}")
+    fi
+  done
 fi
+
+[[ ${#CAM1_VIDS[@]} -eq 0 ]] && CAM1_VIDS+=("${OUTDOOR_VIDEOS[0]}")
+[[ ${#CAM2_VIDS[@]} -eq 0 ]] && CAM2_VIDS+=("${OUTDOOR_VIDEOS[0]}")
+[[ ${#CAM3_VIDS[@]} -eq 0 ]] && CAM3_VIDS+=("${OUTDOOR_VIDEOS[0]}")
+[[ ${#CAM4_VIDS[@]} -eq 0 ]] && CAM4_VIDS+=("${OUTDOOR_VIDEOS[0]}")
 
 # 임시 playlist 파일 디렉토리
 PLAYLIST_DIR="$AI_DIR/runs/playlists"
