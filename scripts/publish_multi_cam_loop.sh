@@ -63,7 +63,7 @@ with open('$CSV_PATH', 'r', encoding='utf-8-sig') as f:
         path = r.get('clip_path') or r.get('video_path') or r.get('source_video')
         if not path: continue
         p = path.lower()
-        if domain == 'indoor_chromakey' or 'chroma' in p or 'green' in p or 'studio' in p or 'screen' in p or 'chm' in p or '101-1' in p or '101-2' in p or 'place03' in p: continue
+        if domain == 'indoor_chromakey' or 'chroma' in p or 'green' in p or 'studio' in p or 'screen' in p or 'chm' in p or 'place03' in p: continue
         if domain == 'indoor_background':
             vids.add(path)
 for v in sorted(vids):
@@ -101,7 +101,7 @@ with open('$CSV_PATH', 'r', encoding='utf-8-sig') as f:
         path = r.get('clip_path') or r.get('video_path') or r.get('source_video')
         if not path: continue
         p = path.lower()
-        if domain == 'indoor_chromakey' or 'chroma' in p or 'green' in p or 'studio' in p or 'screen' in p or 'chm' in p or '101-1' in p or '101-2' in p or 'place03' in p: continue
+        if domain == 'indoor_chromakey' or 'chroma' in p or 'green' in p or 'studio' in p or 'screen' in p or 'chm' in p or 'place03' in p: continue
         if domain == 'outdoor':
             vids.add(path)
 for v in sorted(vids):
@@ -115,7 +115,7 @@ with open('$CSV_PATH', 'r', encoding='utf-8-sig') as f:
         path = r.get('clip_path') or r.get('video_path') or r.get('source_video')
         if not path: continue
         p = path.lower()
-        if domain == 'indoor_chromakey' or 'chroma' in p or 'green' in p or 'studio' in p or 'screen' in p or 'chm' in p or '101-1' in p or '101-2' in p or 'place03' in p: continue
+        if domain == 'indoor_chromakey' or 'chroma' in p or 'green' in p or 'studio' in p or 'screen' in p or 'chm' in p or 'place03' in p: continue
         if domain == 'outdoor':
             vids.add(path)
 for v in sorted(vids):
@@ -154,9 +154,14 @@ for i in $(seq 0 $(( ${#OUTDOOR_VIDEOS[@]} < 10 ? ${#OUTDOOR_VIDEOS[@]} - 1 : 9 
   fi
 done
 
-if [[ ${#INDOOR_VIDEOS[@]} -eq 0 || ${#OUTDOOR_VIDEOS[@]} -eq 0 ]]; then
-  echo "Error: No matching videos found. Check paths under $EXPERIMENTS_DIR" >&2
+if [[ ${#OUTDOOR_VIDEOS[@]} -eq 0 ]]; then
+  echo "Error: No outdoor videos found. Check paths under $EXPERIMENTS_DIR" >&2
   exit 1
+fi
+
+if [[ ${#INDOOR_VIDEOS[@]} -eq 0 ]]; then
+  echo "Warning: No indoor videos found after filtering! Using outdoor videos for cam1, cam2 as fallback."
+  INDOOR_VIDEOS=("${OUTDOOR_VIDEOS[@]}")
 fi
 
 # 2. 플레이리스트 생성 함수
