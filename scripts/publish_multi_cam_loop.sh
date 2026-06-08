@@ -60,8 +60,10 @@ vids = set()
 with open('$CSV_PATH', 'r', encoding='utf-8-sig') as f:
     for r in csv.DictReader(f):
         domain = r.get('domain', '')
-        path = r.get('source_video') or r.get('video_path') or r.get('clip_path')
-        if domain == 'indoor_background' and path:
+        path = r.get('clip_path') or r.get('video_path') or r.get('source_video')
+        if not path: continue
+        if domain == 'indoor_chromakey' or 'chroma' in path.lower(): continue
+        if domain == 'indoor_background':
             vids.add(path)
 for v in sorted(vids):
     print(v)
@@ -71,8 +73,10 @@ vids = set()
 with open('$CSV_PATH', 'r', encoding='utf-8-sig') as f:
     for r in csv.DictReader(f):
         domain = r.get('domain', '')
-        path = r.get('source_video') or r.get('video_path') or r.get('clip_path')
-        if domain == 'indoor_background' and path:
+        path = r.get('clip_path') or r.get('video_path') or r.get('source_video')
+        if not path: continue
+        if domain == 'indoor_chromakey' or 'chroma' in path.lower(): continue
+        if domain == 'indoor_background':
             vids.add(path)
 for v in sorted(vids):
     print(v)
@@ -92,8 +96,10 @@ vids = set()
 with open('$CSV_PATH', 'r', encoding='utf-8-sig') as f:
     for r in csv.DictReader(f):
         domain = r.get('domain', '')
-        path = r.get('source_video') or r.get('video_path') or r.get('clip_path')
-        if domain == 'outdoor' and path:
+        path = r.get('clip_path') or r.get('video_path') or r.get('source_video')
+        if not path: continue
+        if domain == 'indoor_chromakey' or 'chroma' in path.lower(): continue
+        if domain == 'outdoor':
             vids.add(path)
 for v in sorted(vids):
     print(v)
@@ -103,8 +109,10 @@ vids = set()
 with open('$CSV_PATH', 'r', encoding='utf-8-sig') as f:
     for r in csv.DictReader(f):
         domain = r.get('domain', '')
-        path = r.get('source_video') or r.get('video_path') or r.get('clip_path')
-        if domain == 'outdoor' and path:
+        path = r.get('clip_path') or r.get('video_path') or r.get('source_video')
+        if not path: continue
+        if domain == 'indoor_chromakey' or 'chroma' in path.lower(): continue
+        if domain == 'outdoor':
             vids.add(path)
 for v in sorted(vids):
     print(v)
