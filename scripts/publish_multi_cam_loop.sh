@@ -1,268 +1,239 @@
 #!/usr/bin/env bash
-# publish_multi_cam_loop.sh
-# 
-# 실내, 야외 비디오 중 크로마키(그린스크린) 영상을 제외하고 
-# 1~4번 카메라 채널에 각각 무한 반복 재생 플레이리스트로 연동하여 RTSP 송출하는 스크립트입니다.
-
 set -euo pipefail
 
-# 스크립트 실행 위치 기준 경로 설정
+export PATH="/usr/local/bin:/usr/bin:/bin:/mingw64/bin:/mingw32/bin:$PATH"
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AI_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-
-# ai_fall_experiments 디렉토리 경로 탐색 (strange_ai 기준 상위 디렉토리에 존재)
-EXPERIMENTS_DIR="${EXPERIMENTS_DIR:-$(cd "$AI_DIR/../ai_fall_experiments" && pwd 2>/dev/null || echo "")}"
-
-if [[ -z "$EXPERIMENTS_DIR" || ! -d "$EXPERIMENTS_DIR" ]]; then
-  # 만약 위 경로에 없으면, 한 단계 더 위나 형제 디렉토리 탐색
-  EXPERIMENTS_DIR="$(cd "$AI_DIR/.." && pwd)/ai_fall_experiments"
-fi
-
-echo "Using experiments dataset from: $EXPERIMENTS_DIR"
-
+EXPERIMENTS_DIR="${EXPERIMENTS_DIR:-$(cd "$AI_DIR/../ai_fall_experiments" && pwd 2>/dev/null || true)}"
+CSV_PATH="${CSV_PATH:-$AI_DIR/data/splits/final_source_video_split/chromakey_audit/test_non_chromakey.csv}"
 RTSP_BASE_URL="${RTSP_BASE_URL:-rtsp://localhost:8554}"
+PLAYLIST_DIR="$AI_DIR/runs/playlists"
 LOG_DIR="$AI_DIR/runs/rtsp_publisher_logs"
-mkdir -p "$LOG_DIR"
+BAD_KEYWORD_REGEX="croki|크로마키|chroma|chromakey|green_screen|studio|chm|indoor_chromakey|inside_croki"
+FFMPEG_BIN="${FFMPEG_BIN:-ffmpeg}"
+PKILL_BIN="${PKILL_BIN:-pkill}"
 
-# 1. 비디오 파일 로드 및 크로마키(green screen) 영상 필터링 & 셔플링
-CSV_PATH=""
-CANDIDATES=(
-  "data/splits/final_source_video_split/chromakey_audit/test_non_chromakey.csv"
-  "../ai_fall_experiments/data/splits/final_source_video_split/chromakey_audit/test_non_chromakey.csv"
-  "$EXPERIMENTS_DIR/data/splits/final_source_video_split/chromakey_audit/test_non_chromakey.csv"
-)
-
-for cand in "${CANDIDATES[@]}"; do
-  if [[ -f "$cand" ]]; then
-    CSV_PATH="$cand"
-    break
-  fi
-done
-
-INDOOR_VIDEOS=()
-OUTDOOR_VIDEOS=()
-
-if [[ -n "$CSV_PATH" ]]; then
-  echo "Loading non-chromakey videos from metadata CSV: $CSV_PATH"
-  
-  # 통합 Python 스크립트 실행
-  # stdout으로 INDOOR|경로 또는 OUTDOOR|경로 출력, stderr로 카운트 출력
-  while IFS='|' read -r category filepath; do
-    if [[ -n "$filepath" ]]; then
-      if [[ "$category" == "INDOOR" ]]; then
-        INDOOR_VIDEOS+=("$filepath")
-      elif [[ "$category" == "OUTDOOR" ]]; then
-        OUTDOOR_VIDEOS+=("$filepath")
-      fi
-    fi
-  done < <(python3 -c "
-import csv, sys, os
-
-EXPERIMENTS_DIR = r'''$EXPERIMENTS_DIR'''
-CSV_PATH = r'''$CSV_PATH'''
-
-selected_indoor = set()
-selected_outdoor = set()
-excluded_by_keyword = 0
-excluded_by_domain = 0
-missing_file = 0
-
-bad_keywords = ['croki', '크로마키', 'chroma', 'chromakey', 'background_chromakey', 'inside_croki', 'green_screen', 'studio', 'chm']
-
-with open(CSV_PATH, 'r', encoding='utf-8-sig') as f:
-    for r in csv.DictReader(f):
-        domain = r.get('domain', '')
-        # 1. clip_path 우선, 없으면 video_path 또는 source_video
-        path = r.get('clip_path')
-        if not path:
-            path = r.get('video_path')
-        if not path:
-            path = r.get('source_video')
-        if not path: continue
-        
-        # 2. 상대경로면 EXPERIMENTS_DIR 기준으로 절대경로화
-        if not os.path.isabs(path):
-            path = os.path.join(EXPERIMENTS_DIR, path)
-            
-        # 3. 파일 존재 여부 검사
-        if not os.path.exists(path):
-            missing_file += 1
-            continue
-            
-        p = path.lower()
-        
-        # 4. 제외 키워드는 경로 필터로만 사용
-        if any(bad in p for bad in bad_keywords):
-            excluded_by_keyword += 1
-            continue
-            
-        # 5. CSV 모드 허용 조건 (domain 기준)
-        if domain == 'indoor_background':
-            selected_indoor.add(path)
-        elif domain == 'outdoor':
-            selected_outdoor.add(path)
-        else:
-            excluded_by_domain += 1
-
-print(f'=== Python CSV Filtering Stats ===', file=sys.stderr)
-print(f'selected_indoor={len(selected_indoor)}', file=sys.stderr)
-print(f'selected_outdoor={len(selected_outdoor)}', file=sys.stderr)
-print(f'excluded_by_keyword={excluded_by_keyword}', file=sys.stderr)
-print(f'excluded_by_domain={excluded_by_domain}', file=sys.stderr)
-print(f'missing_file={missing_file}', file=sys.stderr)
-print(f'==================================', file=sys.stderr)
-
-for v in sorted(selected_indoor):
-    print(f'INDOOR|{v}')
-for v in sorted(selected_outdoor):
-    print(f'OUTDOOR|{v}')
-" | shuf || true)
-
-else
-  echo "No test_non_chromakey.csv found. Falling back to directory filtering..."
-  while IFS= read -r line; do
-    if [[ -n "$line" ]]; then
-      INDOOR_VIDEOS+=("$line")
-    fi
-  done < <(find "$EXPERIMENTS_DIR/data/raw" -type f \( -path "*/insidedoor_01/*" -o -path "*/실내(원본)/*" \) -name "*.mp4" 2>/dev/null | grep -v -i -E "실내\(크로마키\)|inside_croki_01|croki|크로마키|chroma|chromakey|green_screen|studio|chm" | shuf || true)
-
-  while IFS= read -r line; do
-    if [[ -n "$line" ]]; then
-      OUTDOOR_VIDEOS+=("$line")
-    fi
-  done < <(find "$EXPERIMENTS_DIR/data/raw" -type f \( -path "*/outsidedoor_01*" -o -path "*/실외/*" \) -name "*.mp4" 2>/dev/null | grep -v -i -E "실내\(크로마키\)|inside_croki_01|croki|크로마키|chroma|chromakey|green_screen|studio|chm" | shuf || true)
+if [[ ! -f "$CSV_PATH" && -f "$EXPERIMENTS_DIR/data/splits/final_source_video_split/chromakey_audit/test_non_chromakey.csv" ]]; then
+  CSV_PATH="$EXPERIMENTS_DIR/data/splits/final_source_video_split/chromakey_audit/test_non_chromakey.csv"
 fi
 
-echo "Found ${#INDOOR_VIDEOS[@]} indoor background videos (filtered)."
-echo "Found ${#OUTDOOR_VIDEOS[@]} outdoor videos (filtered)."
-
-echo "=== Indoor Video List (ALL) ==="
-for i in "${!INDOOR_VIDEOS[@]}"; do
-  if [[ -n "${INDOOR_VIDEOS[i]:-}" ]]; then
-    echo "  - $(basename "${INDOOR_VIDEOS[i]}")"
-  fi
-done
-
-echo "=== Outdoor Video List (First 10) ==="
-for i in $(seq 0 $(( ${#OUTDOOR_VIDEOS[@]} < 10 ? ${#OUTDOOR_VIDEOS[@]} - 1 : 9 ))); do
-  if [[ -n "${OUTDOOR_VIDEOS[i]:-}" ]]; then
-    echo "  - $(basename "${OUTDOOR_VIDEOS[i]}")"
-  fi
-done
-
-if [[ ${#OUTDOOR_VIDEOS[@]} -eq 0 ]]; then
-  echo "Error: No outdoor videos found. Check paths under $EXPERIMENTS_DIR" >&2
+if [[ ! -f "$CSV_PATH" ]]; then
+  echo "ERROR: non-chromakey CSV not found: $CSV_PATH" >&2
+  echo "Generate it first with scripts/audit_chromakey_split.py." >&2
   exit 1
 fi
 
-# 2. 플레이리스트 생성 함수
-create_playlist() {
+mkdir -p "$PLAYLIST_DIR" "$LOG_DIR"
+
+echo "Using non-chromakey CSV: $CSV_PATH"
+echo "Using experiments dataset root: ${EXPERIMENTS_DIR:-<not set>}"
+echo "RTSP base URL: $RTSP_BASE_URL"
+
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
+  PYTHON_BIN="python"
+fi
+if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
+  echo "ERROR: python3 or python is required to read $CSV_PATH" >&2
+  exit 1
+fi
+
+mapfile -t SELECTED_ROWS < <(
+  "$PYTHON_BIN" - "$CSV_PATH" "$EXPERIMENTS_DIR" <<'PY'
+import csv
+import os
+import re
+import sys
+from pathlib import Path
+
+csv_path = Path(sys.argv[1])
+experiments_dir = Path(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2] else None
+bad = re.compile(r"(croki|크로마키|chroma|chromakey|green_screen|studio|chm|indoor_chromakey|inside_croki)", re.I)
+selected = {"INDOOR": [], "OUTDOOR": []}
+seen = {"INDOOR": set(), "OUTDOOR": set()}
+stats = {
+    "rows": 0,
+    "missing_path": 0,
+    "missing_file": 0,
+    "excluded_keyword": 0,
+    "excluded_domain": 0,
+    "duplicates": 0,
+}
+
+
+def choose_path(row: dict[str, str]) -> str:
+    return (row.get("source_video") or row.get("video_path") or row.get("clip_path") or "").strip()
+
+
+def resolve(path: str) -> Path:
+    candidate = Path(path)
+    if candidate.is_absolute():
+        return candidate
+    if experiments_dir:
+        joined = experiments_dir / candidate
+        if joined.exists():
+            return joined
+    return (Path.cwd() / candidate).resolve()
+
+
+with csv_path.open("r", encoding="utf-8-sig", newline="") as fp:
+    for row in csv.DictReader(fp):
+        stats["rows"] += 1
+        domain = (row.get("domain") or "").strip()
+        if domain == "indoor_background":
+            bucket = "INDOOR"
+        elif domain == "outdoor":
+            bucket = "OUTDOOR"
+        else:
+            stats["excluded_domain"] += 1
+            continue
+
+        raw_path = choose_path(row)
+        if not raw_path:
+            stats["missing_path"] += 1
+            continue
+        resolved = resolve(raw_path)
+        text = str(resolved)
+        if bad.search(text):
+            stats["excluded_keyword"] += 1
+            continue
+        if not resolved.exists():
+            stats["missing_file"] += 1
+            continue
+        key = str(resolved)
+        if key in seen[bucket]:
+            stats["duplicates"] += 1
+            continue
+        seen[bucket].add(key)
+        selected[bucket].append(key)
+
+for key, value in stats.items():
+    print(f"[csv-select] {key}={value}", file=sys.stderr)
+for bucket in ("INDOOR", "OUTDOOR"):
+    print(f"[csv-select] selected_{bucket.lower()}={len(selected[bucket])}", file=sys.stderr)
+    for path in selected[bucket][:3]:
+        print(f"{bucket}|{path}")
+PY
+)
+
+INDOOR_SOURCE_VIDEOS=()
+OUTDOOR_SOURCE_VIDEOS=()
+for row in "${SELECTED_ROWS[@]}"; do
+  category="${row%%|*}"
+  path="${row#*|}"
+  case "$category" in
+    INDOOR) INDOOR_SOURCE_VIDEOS+=("$path") ;;
+    OUTDOOR) OUTDOOR_SOURCE_VIDEOS+=("$path") ;;
+  esac
+done
+
+if [[ ${#INDOOR_SOURCE_VIDEOS[@]} -lt 3 ]]; then
+  echo "ERROR: Need 3 indoor_background source_video files, found ${#INDOOR_SOURCE_VIDEOS[@]}." >&2
+  exit 1
+fi
+if [[ ${#OUTDOOR_SOURCE_VIDEOS[@]} -lt 3 ]]; then
+  echo "ERROR: Need 3 outdoor source_video files, found ${#OUTDOOR_SOURCE_VIDEOS[@]}." >&2
+  exit 1
+fi
+
+INDOOR_SOURCE_VIDEOS=("${INDOOR_SOURCE_VIDEOS[@]:0:3}")
+OUTDOOR_SOURCE_VIDEOS=("${OUTDOOR_SOURCE_VIDEOS[@]:0:3}")
+
+CAM1_VIDS=("${INDOOR_SOURCE_VIDEOS[@]}")
+CAM2_VIDS=("${INDOOR_SOURCE_VIDEOS[@]}")
+CAM3_VIDS=("${OUTDOOR_SOURCE_VIDEOS[@]}")
+CAM4_VIDS=("${OUTDOOR_SOURCE_VIDEOS[@]}")
+
+print_list() {
+  local title="$1"
+  shift
+  echo "$title"
+  for path in "$@"; do
+    echo "  $path"
+  done
+}
+
+print_list "selected indoor source videos:" "${INDOOR_SOURCE_VIDEOS[@]}"
+print_list "selected outdoor source videos:" "${OUTDOOR_SOURCE_VIDEOS[@]}"
+print_list "cam1 playlist files:" "${CAM1_VIDS[@]}"
+print_list "cam2 playlist files:" "${CAM2_VIDS[@]}"
+print_list "cam3 playlist files:" "${CAM3_VIDS[@]}"
+print_list "cam4 playlist files:" "${CAM4_VIDS[@]}"
+
+write_playlist() {
   local playlist_file="$1"
   shift
-  local vids=("$@")
-  
   rm -f "$playlist_file"
-  for vid in "${vids[@]}"; do
-    # ffmpeg concat을 위한 absolute path 매핑
-    local abs_path
-    abs_path="$(cd "$(dirname "$vid")" && pwd)/$(basename "$vid")"
-    echo "file '$abs_path'" >> "$playlist_file"
+  for path in "$@"; do
+    printf "file '%s'\n" "$path" >> "$playlist_file"
   done
   echo "Created playlist: $playlist_file"
 }
 
-# cam1~cam4 비디오 할당 로직
-CAM1_VIDS=()
-CAM2_VIDS=()
-CAM3_VIDS=()
-CAM4_VIDS=()
+write_playlist "$PLAYLIST_DIR/cam1.txt" "${CAM1_VIDS[@]}"
+write_playlist "$PLAYLIST_DIR/cam2.txt" "${CAM2_VIDS[@]}"
+write_playlist "$PLAYLIST_DIR/cam3.txt" "${CAM3_VIDS[@]}"
+write_playlist "$PLAYLIST_DIR/cam4.txt" "${CAM4_VIDS[@]}"
 
-if [[ ${#INDOOR_VIDEOS[@]} -eq 0 ]]; then
-  echo "Warning: No indoor videos found after filtering! Distributing outdoor videos across all 4 cams."
-  for i in "${!OUTDOOR_VIDEOS[@]}"; do
-    mod=$(( i % 4 ))
-    if   (( mod == 0 )); then CAM1_VIDS+=("${OUTDOOR_VIDEOS[i]}")
-    elif (( mod == 1 )); then CAM2_VIDS+=("${OUTDOOR_VIDEOS[i]}")
-    elif (( mod == 2 )); then CAM3_VIDS+=("${OUTDOOR_VIDEOS[i]}")
-    else                      CAM4_VIDS+=("${OUTDOOR_VIDEOS[i]}")
-    fi
-  done
-else
-  for i in "${!INDOOR_VIDEOS[@]}"; do
-    if (( i % 2 == 0 )); then CAM1_VIDS+=("${INDOOR_VIDEOS[i]}")
-    else                      CAM2_VIDS+=("${INDOOR_VIDEOS[i]}")
-    fi
-  done
-  for i in "${!OUTDOOR_VIDEOS[@]}"; do
-    if (( i % 2 == 0 )); then CAM3_VIDS+=("${OUTDOOR_VIDEOS[i]}")
-    else                      CAM4_VIDS+=("${OUTDOOR_VIDEOS[i]}")
-    fi
-  done
-fi
-
-[[ ${#CAM1_VIDS[@]} -eq 0 ]] && CAM1_VIDS+=("${OUTDOOR_VIDEOS[0]}")
-[[ ${#CAM2_VIDS[@]} -eq 0 ]] && CAM2_VIDS+=("${OUTDOOR_VIDEOS[0]}")
-[[ ${#CAM3_VIDS[@]} -eq 0 ]] && CAM3_VIDS+=("${OUTDOOR_VIDEOS[0]}")
-[[ ${#CAM4_VIDS[@]} -eq 0 ]] && CAM4_VIDS+=("${OUTDOOR_VIDEOS[0]}")
-
-# 검증 및 로그 출력
-echo "============================================"
-for cam in CAM1 CAM2 CAM3 CAM4; do
-  echo "=== $cam Assigned Videos ==="
-  eval "vids=(\"\${${cam}_VIDS[@]}\")"
-  for v in "${vids[@]}"; do
-    echo "  $v"
-  done
-done
-echo "============================================"
-
-# 임시 playlist 파일 디렉토리
-PLAYLIST_DIR="$AI_DIR/runs/playlists"
-mkdir -p "$PLAYLIST_DIR"
-
-create_playlist "$PLAYLIST_DIR/cam1.txt" "${CAM1_VIDS[@]}"
-create_playlist "$PLAYLIST_DIR/cam2.txt" "${CAM2_VIDS[@]}"
-create_playlist "$PLAYLIST_DIR/cam3.txt" "${CAM3_VIDS[@]}"
-create_playlist "$PLAYLIST_DIR/cam4.txt" "${CAM4_VIDS[@]}"
-
-# 생성된 playlist 안의 파일 경로에 bad keyword가 있는지 자동 수행 (요구사항 3, 4)
-echo "============================================"
-echo "Verifying generated playlists for bad keywords..."
-for cam in cam1 cam2 cam3 cam4; do
-  playlist_file="$PLAYLIST_DIR/${cam}.txt"
-  if grep -i -E "croki|크로마키|chroma|chromakey|background_chromakey|inside_croki|green_screen|studio|chm" "$playlist_file" >/dev/null; then
-    echo "CRITICAL ERROR: Bad keyword detected in $playlist_file!"
-    echo "Failing paths:"
-    grep -i -E "croki|크로마키|chroma|chromakey|background_chromakey|inside_croki|green_screen|studio|chm" "$playlist_file"
+validate_playlist_keywords() {
+  if grep -RniE "$BAD_KEYWORD_REGEX" "$PLAYLIST_DIR"; then
+    echo "ERROR: Chromakey-like keyword detected in generated playlists." >&2
     exit 1
   fi
-done
-echo "Playlist verification passed."
-echo "============================================"
+}
 
-# 기존 ffmpeg 프로세스 정리
-echo "Killing any existing RTSP ffmpeg publishers..."
-pkill -9 -f "ffmpeg.*rtsp://.*cam[1-4]" || true
-pkill -9 -f "ffmpeg" || true
-pkill -9 ffmpeg || true
+validate_playlist_membership() {
+  local playlist="$1"
+  local expected="$2"
+  local line path
+  while IFS= read -r line; do
+    path="${line#file \'}"
+    path="${path%\'}"
+    case "$expected" in
+      indoor_background)
+        printf '%s\n' "${INDOOR_SOURCE_VIDEOS[@]}" | grep -Fx -- "$path" >/dev/null || {
+          echo "ERROR: $playlist contains non-indoor source_video: $path" >&2
+          exit 1
+        }
+        ;;
+      outdoor)
+        printf '%s\n' "${OUTDOOR_SOURCE_VIDEOS[@]}" | grep -Fx -- "$path" >/dev/null || {
+          echo "ERROR: $playlist contains non-outdoor source_video: $path" >&2
+          exit 1
+        }
+        ;;
+    esac
+  done < "$playlist"
+}
 
-# 3. ffmpeg concat 무한루프 송출 실행
+validate_playlist_membership "$PLAYLIST_DIR/cam1.txt" indoor_background
+validate_playlist_membership "$PLAYLIST_DIR/cam2.txt" indoor_background
+validate_playlist_membership "$PLAYLIST_DIR/cam3.txt" outdoor
+validate_playlist_membership "$PLAYLIST_DIR/cam4.txt" outdoor
+validate_playlist_keywords
+echo "Playlist validation passed."
+
+echo "Verification commands:"
+echo "  cat runs/playlists/cam1.txt"
+echo "  cat runs/playlists/cam2.txt"
+echo "  cat runs/playlists/cam3.txt"
+echo "  cat runs/playlists/cam4.txt"
+echo "  grep -RniE \"$BAD_KEYWORD_REGEX\" runs/playlists"
+echo "  ps aux | grep ffmpeg | grep -v grep"
+
+echo "Killing existing RTSP ffmpeg publishers for cam1~cam4..."
+"$PKILL_BIN" -9 -f "ffmpeg.*rtsp://.*cam[1-4]" || true
+
 start_publisher() {
   local cam_name="$1"
   local playlist_path="$2"
-  
-  echo "Starting publisher for $cam_name..."
-  # -safe 0: 절대경로 사용 허용
-  # -stream_loop -1: 플레이리스트 무한반복
-  # -re: 실시간 속도로 읽기
-  # -c:v libx264 -preset ultrafast -tune zerolatency: 저지연 인코딩
-  nohup ffmpeg -re -f concat -safe 0 -stream_loop -1 -i "$playlist_path" \
+  echo "Starting publisher for $cam_name with $playlist_path"
+  nohup "$FFMPEG_BIN" -re -f concat -safe 0 -stream_loop -1 -i "$playlist_path" \
     -an -vf "scale=640:-2,format=yuv420p" -r 15 \
     -c:v libx264 -preset ultrafast -tune zerolatency -g 15 -bf 0 \
-    -f rtsp \
-    "$RTSP_BASE_URL/$cam_name" > "$LOG_DIR/${cam_name}.log" 2>&1 &
-    
-  echo "$cam_name started. Log at $LOG_DIR/${cam_name}.log"
+    -f rtsp "$RTSP_BASE_URL/$cam_name" > "$LOG_DIR/${cam_name}.log" 2>&1 &
+  echo "$cam_name started. Log: $LOG_DIR/${cam_name}.log"
 }
 
 start_publisher "cam1" "$PLAYLIST_DIR/cam1.txt"
@@ -271,4 +242,3 @@ start_publisher "cam3" "$PLAYLIST_DIR/cam3.txt"
 start_publisher "cam4" "$PLAYLIST_DIR/cam4.txt"
 
 echo "All RTSP camera publishers have been started in background."
-echo "Use 'ps aux | grep ffmpeg' to monitor them."
