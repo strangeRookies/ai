@@ -41,13 +41,14 @@ from scripts.run_rtsp_inference import (
 from stream.rtsp_reader import redact_url
 from tracking.display_id_mapper import DisplayIdMapper
 from tracking.simple_tracker import SimpleTrackAssigner
+from ai.publishers.event_publisher import create_event_publisher
 
 
 def initial_summary():
     return initial_overlay_summary()
 
 
-def process_frame(packet, detector, classifier, sequence_buffer, summary, args, post_processor=None, tracker=None, state=None, display_id_mapper=None):
+def process_frame(packet, detector, classifier, sequence_buffer, summary, args, post_processor=None, tracker=None, state=None, display_id_mapper=None, publisher=None):
     detections = detector.detect(packet.frame)
     if args.detector_mode == "mock":
         detections = ensure_mock_keypoints(detections)
@@ -127,6 +128,8 @@ def process_frame(packet, detector, classifier, sequence_buffer, summary, args, 
             summary["sample_event"] = payload
         if args.print_events:
             print(f"[ai-overlay-event] {json.dumps(payload, ensure_ascii=False)}", flush=True)
+        if publisher is not None:
+            publisher.publish(payload)
         if state is not None:
             state.push_event(payload)
     maybe_log_debug(packet, boxes, summary, prediction, args, prefix="[ai-overlay-debug]")
@@ -154,6 +157,8 @@ class OverlayWorker:
     def _run(self):
         detector = create_detector(self.args.detector_mode, self.args.yolo_model, self.args.device, self.args.imgsz, conf=self.args.detector_conf)
         classifier, _classifier_mode = create_classifier(self.args.action_model, self.args.action_device, self.args.action_threshold)
+        publisher, publisher_mode = create_event_publisher(self.args)
+        print(f"[ai-overlay] initialized event publisher: {publisher_mode}", flush=True)
         summary = initial_summary()
         post_processor = FaintEventPostProcessor(
             min_consecutive_faint=self.args.min_consecutive_faint,
@@ -196,6 +201,7 @@ class OverlayWorker:
                             packet, detector, classifier, sequence_buffer, summary, self.args,
                             post_processor=post_processor, tracker=tracker,
                             state=self.state, display_id_mapper=display_id_mapper,
+                            publisher=publisher
                         )
                         self.state.update_frame(overlay, summary)
                         if self.args.max_frames > 0 and summary["frames_processed"] >= self.args.max_frames:
@@ -240,6 +246,16 @@ def main():
     parser.add_argument("--reconnect-delay", type=float, default=2.0)
     parser.add_argument("--debug-every-n", type=int, default=30)
     parser.add_argument("--print-events", action="store_true")
+    
+    # MQTT Options
+    parser.add_argument("--publisher", choices=["mqtt", "console"], help="Event publisher mode (default: from env or console if dry-run)")
+    parser.add_argument("--mqtt-host", help="MQTT broker host (default: localhost)")
+    parser.add_argument("--mqtt-port", type=int, help="MQTT broker port (default: 1883)")
+    parser.add_argument("--mqtt-topic", help="MQTT topic (default: safety/events)")
+    parser.add_argument("--mqtt-client-id", help="MQTT client ID")
+    parser.add_argument("--mqtt-username", help="MQTT username")
+    parser.add_argument("--mqtt-password", help="MQTT password")
+    
     args = parser.parse_args()
 
     state = OverlayState()
