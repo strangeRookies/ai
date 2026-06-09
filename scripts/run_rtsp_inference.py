@@ -7,7 +7,6 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from ai.action.classifier import LSTMActionClassifier, MockActionClassifier
 from ai.action.faint_post_processing import (
     DEFAULT_ACTION_MODEL,
     DEFAULT_CAMERA_COOLDOWN_SECONDS,
@@ -21,10 +20,15 @@ from ai.action.per_track_sequence_buffer import PerTrackCropSequenceBuffers, Per
 from ai.inference.rtsp_runtime import (
     build_inference_event_log,
     build_inference_event_payload,
+    create_classifier,
+    create_detection_postprocessor,
+    create_detector,
     ensure_mock_keypoints,
     maybe_log_debug,
+    maybe_save_event_snapshot,
     normalize_detections,
     save_inference_event_log,
+    update_detections_with_postprocessor,
     update_prediction_counts,
     update_tracking_summary,
 )
@@ -32,36 +36,13 @@ from ai.publishers.event_publisher import create_event_publisher
 from ai.runtime_metrics import RuntimeMetrics
 from ai.streams.video_reader import VideoReader
 from ai.visualization.draw import draw_overlay
-from detector.mock_detector import MockDetector
-from detector.yolo_pose_detector import YoloPoseDetector
-from tracking.simple_tracker import SimpleTrackAssigner
-
-
-def create_detector(mode, model, device, imgsz=640, conf=0.25):
-    if mode == "mock":
-        return MockDetector(model_name="mock-pose-detector")
-    return YoloPoseDetector(model, device=device, imgsz=imgsz, conf=conf)
-
-
-def create_classifier(action_model, device, action_threshold=DEFAULT_FAINT_THRESHOLD):
-    if action_model:
-        return LSTMActionClassifier(action_model, device=device, faint_threshold=action_threshold), "lstm_checkpoint"
-    return MockActionClassifier(default_label="Faint", score=0.80), "mock_lstm"
 
 
 def run(args):
     detector = create_detector(args.detector_mode, args.yolo_model, args.device, getattr(args, "imgsz", 640), conf=getattr(args, "detector_conf", 0.25))
     classifier, classifier_mode = create_classifier(args.action_model, args.action_device, getattr(args, "action_threshold", DEFAULT_FAINT_THRESHOLD))
     classifier_input = getattr(args, "classifier_input", "keypoints")
-    tracker = SimpleTrackAssigner(
-        track_thresh=getattr(args, "track_thresh", 0.10),
-        match_thresh=getattr(args, "match_thresh", 0.20),
-        track_buffer=getattr(args, "track_buffer", 90),
-        min_box_area=getattr(args, "min_box_area", 100.0),
-        bbox_smoothing_alpha=getattr(args, "bbox_smoothing_alpha", 0.60),
-        max_missing_seconds=getattr(args, "track_max_missing_seconds", 4.0),
-        center_match_ratio=getattr(args, "center_match_ratio", 0.70),
-    )
+    detection_postprocessor, postprocessing_mode = create_detection_postprocessor(args)
     keypoint_buffers = PerTrackKeypointSequenceBuffers(
         args.sequence_length,
         args.sequence_stride,
@@ -92,6 +73,7 @@ def run(args):
         "yolo_model": args.yolo_model if args.detector_mode == "real" else None,
         "classifier_mode": classifier_mode,
         "classifier_input": classifier_input,
+        "postprocessing_mode": postprocessing_mode,
         "action_threshold": getattr(args, "action_threshold", DEFAULT_FAINT_THRESHOLD),
         "min_consecutive_faint": getattr(args, "min_consecutive_faint", DEFAULT_MIN_CONSECUTIVE_FAINT),
         "camera_cooldown_seconds": getattr(args, "camera_cooldown_seconds", DEFAULT_CAMERA_COOLDOWN_SECONDS),
@@ -135,10 +117,15 @@ def run(args):
                 metrics.add_yolo_ms((time.perf_counter() - yolo_started_at) * 1000.0)
                 if args.detector_mode == "mock":
                     detections = ensure_mock_keypoints(detections)
-                detections = tracker.update(detections, now=packet.timestamp)
+                detections = update_detections_with_postprocessor(
+                    detection_postprocessor,
+                    detections,
+                    packet.frame,
+                    packet.timestamp,
+                )
                 boxes = normalize_detections(detections)
                 frame_keypoint_count = sum(1 for item in detections if item.get("keypoints"))
-                update_tracking_summary(summary, tracker.diagnostics())
+                update_tracking_summary(summary, detection_postprocessor.diagnostics())
                 metrics.observe_active_tracks(summary["active_tracks"])
                 summary["frames_processed"] += 1
                 summary["bbox_detections"] += len(boxes)
@@ -174,7 +161,15 @@ def run(args):
                 for track_id, track_prediction in predictions_by_track.items():
                     if post_processor.should_trigger(args.camera_id, track_prediction, packet.timestamp, track_id=track_id):
                         sequence = sequences_by_track.get(track_id)
-                        payload = build_inference_event_payload(args, packet, track_prediction, boxes, sequence)
+                        snapshot_path = maybe_save_event_snapshot(args, packet, boxes, track_prediction)
+                        payload = build_inference_event_payload(
+                            args,
+                            packet,
+                            track_prediction,
+                            boxes,
+                            sequence,
+                            snapshot_path=snapshot_path,
+                        )
                         event_log = build_inference_event_log(args, packet, track_prediction, boxes, sequence)
                         if getattr(args, "event_log_dir", None):
                             save_inference_event_log(args.event_log_dir, event_log)

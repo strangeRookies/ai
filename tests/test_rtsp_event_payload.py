@@ -38,6 +38,33 @@ class RtspEventPayloadTest(unittest.TestCase):
         self.assertNotIn("threshold", payload)
         self.assertNotIn("post_processing", payload)
 
+    def test_inference_event_payload_omits_track_id_when_missing(self):
+        args = Namespace(camera_id="cam_01", event_severity="HIGH")
+        packet = Namespace(frame_idx=12, timestamp=123.5)
+        prediction = {"label": "Faint", "score": 0.81}
+        sequence = {"bbox": [1, 2, 3, 4], "start_frame": 4, "end_frame": 12}
+
+        payload = build_inference_event_payload(args, packet, prediction, boxes=[], sequence=sequence)
+
+        self.assertNotIn("track_id", payload)
+        self.assertEqual(payload["bbox"], [1, 2, 3, 4])
+
+    def test_inference_event_payload_includes_snapshot_path_when_available(self):
+        args = Namespace(camera_id="cam_01", event_severity="HIGH")
+        packet = Namespace(frame_idx=12, timestamp=123.5)
+        prediction = {"label": "Faint", "score": 0.81}
+
+        payload = build_inference_event_payload(
+            args,
+            packet,
+            prediction,
+            boxes=[],
+            sequence=None,
+            snapshot_path="runs/snapshots/cam_01_faint.jpg",
+        )
+
+        self.assertEqual(payload["snapshot_path"], "runs/snapshots/cam_01_faint.jpg")
+
     def test_inference_event_payload_includes_clip_reference_when_available(self):
         args = Namespace(camera_id="cam_01", event_severity="HIGH")
         packet = Namespace(frame_idx=12, timestamp=123.5)

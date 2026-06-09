@@ -538,6 +538,36 @@ Keep the existing console-only dry-run path:
 python scripts/run_rtsp_inference.py --rtsp-url rtsp://localhost:8554/cam1 --camera-id cam_01 --dry-run --publisher console
 ```
 
+Optional Supervision post-processing is available but disabled by default:
+
+```text
+ENABLE_SUPERVISION_POSTPROCESSING=false
+```
+
+When the flag is unset or false, the RTSP path keeps the existing YOLO26n-pose detections, fallback tracker, per-track keypoint sequence buffers, LSTM Faint/Normal classifier input, and MQTT publish flow. To dry-run the optional Supervision ByteTrack path without publishing to MQTT:
+
+```bash
+ENABLE_SUPERVISION_POSTPROCESSING=true python scripts/run_rtsp_inference.py \
+  --rtsp-url rtsp://localhost:8554/cam1 \
+  --camera-id cam_01 \
+  --detector-mode real \
+  --yolo-model yolo26n-pose.pt \
+  --action-model benchmark/results/lstm_final_11n_vs_26n_audit/YOLO26n-pose/best.pt \
+  --classifier-input keypoints \
+  --dry-run \
+  --publisher console \
+  --max-frames 60
+```
+
+On Windows PowerShell:
+
+```powershell
+$env:ENABLE_SUPERVISION_POSTPROCESSING="true"
+python scripts/run_rtsp_inference.py --rtsp-url rtsp://localhost:8554/cam1 --camera-id cam_01 --detector-mode real --yolo-model yolo26n-pose.pt --classifier-input keypoints --dry-run --publisher console --max-frames 60
+```
+
+If `FAINT_SNAPSHOT_DIR` is set, confirmed Faint events also save an annotated local snapshot and include `snapshot_path` in the event payload. `track_id` is included only when the active tracker has assigned one.
+
 Run the older AI server path:
 
 ```bash
@@ -601,13 +631,13 @@ Detection
 -> Event schema v1.0
 ```
 
-`SimpleTrackAssigner` is a lightweight IoU-based adapter so detections without native tracker IDs still get stable-enough `track_id` values in local testing. It is intentionally isolated behind `tracking/simple_tracker.py` so ByteTrack can replace it later without changing the event rule or MQTT schema.
+`SimpleTrackAssigner` is a lightweight IoU-based adapter so detections without native tracker IDs still get stable-enough `track_id` values in local testing. The optional Supervision post-processing path can use ByteTrack when `ENABLE_SUPERVISION_POSTPROCESSING=true`, without changing the event rule or MQTT schema.
 
 `FallRuleEngine` confirms an event only after the candidate score passes the threshold in at least `FALL_DECISION_REQUIRED` of the last `FALL_DECISION_WINDOW` observations and remains active for `FALL_MIN_DURATION_SECONDS`. This keeps the diagram's "2 out of recent 3" decision rule while preserving duration and cooldown safeguards.
 
 TODO:
 
-- Replace `SimpleTrackAssigner` with ByteTrack or another production tracker for stable `track_id` across crowded real streams.
+- Validate optional Supervision ByteTrack on the GPU PC before deciding whether it should replace the default `SimpleTrackAssigner` path.
 - Expand rule modules for unconscious, bed fall, unauthorized exit, and violence detection.
 - Add RTSP benchmark tooling in `benchmark/benchmark_rtsp.py`.
 - Calibrate thresholds with real non-sensitive sample videos.

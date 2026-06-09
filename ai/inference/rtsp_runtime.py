@@ -1,13 +1,20 @@
 import json
+import os
 import re
 from pathlib import Path
 
+from ai.action.classifier import LSTMActionClassifier, MockActionClassifier
 from ai.action.faint_post_processing import (
+    DEFAULT_ACTION_MODEL,
     DEFAULT_CAMERA_COOLDOWN_SECONDS,
     DEFAULT_FAINT_THRESHOLD,
     DEFAULT_MIN_CONSECUTIVE_FAINT,
     faint_probability,
 )
+from ai.postprocess.supervision_postprocessor import SupervisionPostProcessor
+from detector.mock_detector import MockDetector
+from detector.yolo_pose_detector import YoloPoseDetector
+from tracking.simple_tracker import SimpleTrackAssigner
 
 
 def normalize_detections(detections):
@@ -34,6 +41,45 @@ def normalize_detections(detections):
             }
         )
     return boxes
+
+
+def create_detector(mode, model, device, imgsz=640, conf=0.25):
+    if mode == "mock":
+        return MockDetector(model_name="mock-pose-detector")
+    return YoloPoseDetector(model, device=device, imgsz=imgsz, conf=conf)
+
+
+def create_classifier(action_model=DEFAULT_ACTION_MODEL, device="auto", action_threshold=DEFAULT_FAINT_THRESHOLD):
+    if action_model:
+        return LSTMActionClassifier(action_model, device=device, faint_threshold=action_threshold), "lstm_checkpoint"
+    return MockActionClassifier(default_label="Faint", score=0.80), "mock_lstm"
+
+
+def env_flag(name, default=False):
+    raw = os.getenv(name)
+    if raw is None:
+        return bool(default)
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def create_detection_postprocessor(args):
+    if env_flag("ENABLE_SUPERVISION_POSTPROCESSING", False):
+        return SupervisionPostProcessor(), "supervision"
+    return SimpleTrackAssigner(
+        track_thresh=getattr(args, "track_thresh", 0.10),
+        match_thresh=getattr(args, "match_thresh", 0.20),
+        track_buffer=getattr(args, "track_buffer", 90),
+        min_box_area=getattr(args, "min_box_area", 100.0),
+        bbox_smoothing_alpha=getattr(args, "bbox_smoothing_alpha", 0.60),
+        max_missing_seconds=getattr(args, "track_max_missing_seconds", 4.0),
+        center_match_ratio=getattr(args, "center_match_ratio", 0.70),
+    ), "simple_tracker"
+
+
+def update_detections_with_postprocessor(postprocessor, detections, frame, timestamp):
+    if isinstance(postprocessor, SupervisionPostProcessor):
+        return postprocessor.process(detections, frame)
+    return postprocessor.update(detections, now=timestamp)
 
 
 def mock_keypoints_for_bbox(bbox):
@@ -85,7 +131,7 @@ def maybe_log_debug(packet, boxes, summary, prediction, args, prefix="[rtsp-infe
     )
 
 
-def build_inference_event_payload(args, packet, prediction, boxes, sequence):
+def build_inference_event_payload(args, packet, prediction, boxes, sequence, snapshot_path=None):
     bbox = sequence.get("bbox") if sequence else None
     track_id = sequence.get("track_id") if sequence else None
     payload = {
@@ -95,8 +141,11 @@ def build_inference_event_payload(args, packet, prediction, boxes, sequence):
         "severity": getattr(args, "event_severity", "HIGH"),
         "confidence": float(prediction["score"]),
         "bbox": bbox,
-        "track_id": track_id,
     }
+    if track_id is not None:
+        payload["track_id"] = track_id
+    if snapshot_path:
+        payload["snapshot_path"] = str(snapshot_path)
     clip_path = sequence.get("clip_path") if sequence else None
     clip_url = sequence.get("clip_url") if sequence else None
     # TODO: Event clip writing is asynchronous, so run_rtsp_inference cannot
@@ -108,6 +157,30 @@ def build_inference_event_payload(args, packet, prediction, boxes, sequence):
     if clip_url:
         payload["clip_url"] = clip_url
     return payload
+
+
+def maybe_save_event_snapshot(args, packet, boxes, prediction):
+    snapshot_dir = os.getenv("FAINT_SNAPSHOT_DIR") or getattr(args, "snapshot_dir", None)
+    if not snapshot_dir or prediction.get("label") != "Faint":
+        return None
+    try:
+        import cv2
+    except ImportError as exc:
+        raise RuntimeError("opencv-python is required to save event snapshots") from exc
+
+    from ai.visualization.draw import draw_overlay
+
+    output_dir = Path(snapshot_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    filename = (
+        f"{_safe_filename_part(args.camera_id)}_"
+        f"frame-{_safe_filename_part(str(packet.frame_idx))}_"
+        f"{_safe_filename_part(str(packet.timestamp))}.jpg"
+    )
+    output_path = output_dir / filename
+    annotated_frame = draw_overlay(packet.frame, boxes, prediction, packet.frame_idx)
+    cv2.imwrite(str(output_path), annotated_frame)
+    return str(output_path)
 
 
 def build_inference_event_log(args, packet, prediction, boxes, sequence):
