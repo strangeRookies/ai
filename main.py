@@ -9,9 +9,10 @@ from config import load_settings
 from detector.mock_detector import MockDetector
 from detector.yolo_pose_detector import YoloPoseDetector
 from messaging.event_schema import build_safety_event
-from messaging.mqtt_publisher import MqttPublisher
 from rules.fall_rule import FallRuleEngine
+from rules.track_sequence import PerTrackSequenceBuffer
 from stream.rtsp_reader import RtspFrameReader, redact_url
+from tracking.simple_tracker import SimpleTrackAssigner
 
 
 def parse_args():
@@ -63,20 +64,50 @@ def rtsp_frames(settings):
         reader.stop()
 
 
+class DryRunPublisher:
+    def connect(self):
+        return None
+
+    def publish_event(self, event):
+        print(f"[edge-ai] dry-run event: {event}", flush=True)
+
+    def close(self):
+        return None
+
+
 def build_fall_event(settings, detection, rule_score, pose_state):
+    model_name = detection.get("model_name")
     return build_safety_event(
         event_type="fall_detected",
         camera_id=settings.camera_id,
         severity="HIGH",
-        message="쓰러짐 의심 상황이 감지되었습니다.",
+        message="Fall-like safety event detected.",
         source="edge-ai",
         track_id=detection.get("track_id"),
+        status=detection.get("event_status", "confirmed"),
+        confidence=rule_score,
+        bbox=detection.get("bbox"),
+        model={
+            "detector": model_name,
+            "classifier": "rule-fusion-v1",
+        },
+        evidence={
+            "snapshot_url": None,
+            "clip_url": None,
+            "pre_seconds": None,
+            "post_seconds": None,
+        },
         metadata={
-            "bbox": detection.get("bbox"),
-            "confidence": detection.get("confidence"),
+            "detector_confidence": detection.get("confidence"),
             "rule_score": rule_score,
             "pose_state": pose_state,
-            "model_name": detection.get("model_name"),
+            "model_name": model_name,
+            "sequence_length": detection.get("sequence_length"),
+            "sequence_ready": detection.get("sequence_ready"),
+            "decision_window": detection.get("decision_window"),
+            "decision_votes": detection.get("decision_votes"),
+            "keypoint_confidence": detection.get("keypoint_confidence"),
+            "keypoint_missing_rate": detection.get("keypoint_missing_rate"),
         },
     )
 
@@ -93,15 +124,32 @@ def main():
     rule_engine = FallRuleEngine(
         min_duration_seconds=settings.fall_min_duration_seconds,
         debounce_seconds=settings.fall_debounce_seconds,
+        candidate_threshold=settings.fall_candidate_threshold,
+        decision_window=settings.fall_decision_window,
+        decision_required=settings.fall_decision_required,
+    )
+    tracker = SimpleTrackAssigner(
+        iou_threshold=settings.track_iou_threshold,
+        max_missing_seconds=settings.track_max_missing_seconds,
+    )
+    sequence_buffer = PerTrackSequenceBuffer(
+        sequence_length=settings.sequence_length,
+        max_track_age_seconds=settings.sequence_max_track_age_seconds,
     )
 
-    publisher = MqttPublisher(
-        host=settings.mqtt_host,
-        port=settings.mqtt_port,
-        topic=settings.mqtt_topic,
-        client_id=settings.mqtt_client_id,
-    )
-    if not args.dry_run:
+    if args.dry_run:
+        publisher = DryRunPublisher()
+    else:
+        from messaging.mqtt_publisher import MqttPublisher
+
+        publisher = MqttPublisher(
+            host=settings.mqtt_host,
+            port=settings.mqtt_port,
+            topic=settings.mqtt_topic,
+            client_id=settings.mqtt_client_id,
+            username=settings.mqtt_username,
+            password=settings.mqtt_password,
+        )
         publisher.connect()
 
     clip_worker = None
@@ -131,12 +179,11 @@ def main():
                 enqueue_event_clip(clip_queue, clip_task)
 
             detections = detector.detect(frame)
+            detections = tracker.update(detections)
+            detections = sequence_buffer.update(detections)
             for detection, rule_score, pose_state in rule_engine.evaluate(detections):
                 event = build_fall_event(settings, detection, rule_score, pose_state)
-                if args.dry_run:
-                    print(f"[edge-ai] dry-run event: {event}", flush=True)
-                else:
-                    publisher.publish_event(event)
+                publisher.publish_event(event)
                 if clip_buffer:
                     clip_buffer.trigger_event(
                         event_type=event["type"],

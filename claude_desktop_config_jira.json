@@ -1,0 +1,20 @@
+{
+  "mcpServers": {
+    "jira-community": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "jira-mcp"
+      ],
+      "env": {
+        "JIRA_URL": "https://your-domain.atlassian.net",
+        "JIRA_EMAIL": "your-email@example.com",
+        "JIRA_API_TOKEN": "YOUR_JIRA_API_TOKEN_HERE"
+      }
+    },
+    "atlassian-official-rovo": {
+      "url": "https://mcp.atlassian.com/v1/sse",
+      "transport": "sse"
+    }
+  }
+}

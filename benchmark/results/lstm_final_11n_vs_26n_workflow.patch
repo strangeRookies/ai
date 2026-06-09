@@ -1,0 +1,2569 @@
+﻿From 4b14b0abb499ee31a5be35a15f1fb752dcfb86c6 Mon Sep 17 00:00:00 2001
+From: "DESKTOP-58UIFAP\\user" <anjin0910@gmail.com>
+Date: Tue, 2 Jun 2026 13:06:04 +0900
+Subject: [PATCH 1/7] Add final LSTM extractor benchmark workflow
+
+---
+ PROJECT_SUMMARY.md                      |  54 +++++++++++
+ benchmark/benchmark_models.py           |  42 ++++++++-
+ benchmark/compare_lstm_extractors.py    | 114 +++++++++++++++++++++++-
+ tests/test_benchmark_fall_candidate.py  |  18 +++-
+ tests/test_lstm_extractor_comparison.py |  57 +++++++++++-
+ 5 files changed, 278 insertions(+), 7 deletions(-)
+
+diff --git a/PROJECT_SUMMARY.md b/PROJECT_SUMMARY.md
+index 904f669..4de258b 100644
+--- a/PROJECT_SUMMARY.md
++++ b/PROJECT_SUMMARY.md
+@@ -129,6 +129,60 @@ benchmark/results/lstm_extractor_comparison/
+ 
+ The comparison prioritizes Faint recall and stable sequence generation over temporary fall-candidate rule counts. It reports clips processed, person detections, keypoints extracted, generated sequences, zero-sequence clips, keypoint missing rate, fallback usage, LSTM accuracy, precision, recall, F1-score, and confusion matrix.
+ 
++### Final LSTM Benchmark: YOLOv11n-pose vs YOLO26n-pose
++
++The final LSTM extractor benchmark is now scoped to the two remaining pose backbones only:
++
++- YOLOv11n-pose (`yolo11n-pose.pt`)
++- YOLO26n-pose (`yolo26n-pose.pt`)
++
++Older YOLOv8 and `s` variants are previous pose-model candidates and should not be rerun for the final LSTM comparison unless a specific regression check requires it.
++
++Run the GPU-PC smoke test first:
++
++```bash
++python benchmark/compare_lstm_extractors.py \
++  --metadata-csv ../ai_fall_experiments/data/metadata/metadata.csv \
++  --detector-mode real \
++  --models YOLOv11n-pose:yolo11n-pose.pt,YOLO26n-pose:yolo26n-pose.pt \
++  --device 0 \
++  --imgsz 640 \
++  --output-dir benchmark/results/lstm_final_11n_vs_26n \
++  --max-rows-per-split 1 \
++  --max-frames 120 \
++  --epochs 1
++```
++
++If the smoke test completes, run the full final benchmark:
++
++```bash
++python benchmark/compare_lstm_extractors.py \
++  --metadata-csv ../ai_fall_experiments/data/metadata/metadata.csv \
++  --detector-mode real \
++  --models YOLOv11n-pose:yolo11n-pose.pt,YOLO26n-pose:yolo26n-pose.pt \
++  --device 0 \
++  --imgsz 640 \
++  --output-dir benchmark/results/lstm_final_11n_vs_26n \
++  --max-rows-per-split 30 \
++  --max-frames 0 \
++  --epochs 10
++```
++
++Required outputs are written under:
++
++```text
++benchmark/results/lstm_final_11n_vs_26n/
++benchmark/results/lstm_final_11n_vs_26n/summary.csv
++benchmark/results/lstm_final_11n_vs_26n/summary.json
++benchmark/results/lstm_final_11n_vs_26n/report.md
++benchmark/results/lstm_final_11n_vs_26n/<model>/summary.json
++benchmark/results/lstm_final_11n_vs_26n/<model>/confusion_matrix.csv
++benchmark/results/lstm_final_11n_vs_26n/<model>/history.json
++benchmark/results/lstm_final_11n_vs_26n/<model>/best.pt
++```
++
++Interpret the final result in this order: Faint recall, F1-score, false alarm tendency from the confusion matrix, sequence stability, then runtime feasibility. The report separates pose-only context, sequence generation metrics, and LSTM classification metrics. The current local Codex environment verified the CLI/report workflow and unit tests, but the real smoke/full benchmark must run on the GPU PC because the local workspace does not contain `../ai_fall_experiments/data/metadata/metadata.csv` or the real YOLO/Torch runtime.
++
+ ## Mock Edge AI MQTT Publisher
+ 
+ `mock_edge_ai.py` publishes random safety event JSON messages to the MQTT topic used by the local development pipeline.
+diff --git a/benchmark/benchmark_models.py b/benchmark/benchmark_models.py
+index f9bf8a8..d1a71b4 100644
+--- a/benchmark/benchmark_models.py
++++ b/benchmark/benchmark_models.py
+@@ -91,6 +91,11 @@ def parse_args():
+     parser = argparse.ArgumentParser(description="Benchmark YOLO pose models on sample videos.")
+     parser.add_argument("--config", default=str(DEFAULT_CONFIG), help="Path to benchmark YAML config.")
+     parser.add_argument("--video-dir", default="sample_videos", help="Directory containing input videos.")
++    parser.add_argument(
++        "--models",
++        default="",
++        help="Optional comma-separated model labels or weight names to benchmark, e.g. YOLO26n-pose or yolo26n-pose.pt.",
++    )
+     parser.add_argument("--imgsz", type=int, default=640, help="Inference image size.")
+     parser.add_argument("--device", default="auto", help="CUDA device index, 'cpu', or 'auto'.")
+     parser.add_argument("--max-frames", type=int, default=0, help="Optional maximum measured frames per video.")
+@@ -142,6 +147,38 @@ def candidate_status_name(model_entry):
+     return model_entry.get("name") or ", ".join(model_entry.get("candidates", [])) or "unknown"
+ 
+ 
++def normalize_model_selector(value):
++    text = str(value).strip().lower()
++    return text[:-3] if text.endswith(".pt") else text
++
++
++def model_entry_selectors(model_entry):
++    selectors = {normalize_model_selector(candidate_status_name(model_entry))}
++    for candidate in model_entry.get("candidates", []):
++        selectors.add(normalize_model_selector(candidate))
++    return selectors
++
++
++def filter_model_entries(model_entries, requested_models):
++    requested = {normalize_model_selector(item) for item in str(requested_models).split(",") if item.strip()}
++    if not requested:
++        return list(model_entries)
++
++    selected = []
++    matched = set()
++    for model_entry in model_entries:
++        selectors = model_entry_selectors(model_entry)
++        if selectors & requested:
++            selected.append(model_entry)
++            matched.update(selectors & requested)
++
++    missing = sorted(requested - matched)
++    if missing:
++        available = sorted({selector for model_entry in model_entries for selector in model_entry_selectors(model_entry)})
++        raise ValueError(f"Unknown model selector(s): {', '.join(missing)}. Available: {', '.join(available)}")
++    return selected
++
++
+ def load_first_available_model(model_entry):
+     if YOLO is None:
+         raise RuntimeError(f"ultralytics import failed: {ULTRALYTICS_IMPORT_ERROR}")
+@@ -548,6 +585,7 @@ def main():
+     args = parse_args()
+     config = load_config(args.config)
+     device = resolve_device(str(args.device))
++    model_entries = filter_model_entries(config.get("models", []), args.models)
+     videos = list_videos(args.video_dir, config.get("video_extensions", [".mp4", ".avi", ".mov", ".mkv"]))
+ 
+     if not videos:
+@@ -560,7 +598,7 @@ def main():
+                 args.imgsz,
+                 "SKIPPED: sample_videos folder is empty or has no supported video files",
+             )
+-            for model_entry in config.get("models", [])
++            for model_entry in model_entries
+         ]
+         csv_path, md_path = save_results(rows, args.results_dir)
+         print(f"Saved empty benchmark report: {csv_path}")
+@@ -568,7 +606,7 @@ def main():
+         return 0
+ 
+     rows = []
+-    for model_entry in config.get("models", []):
++    for model_entry in model_entries:
+         configured_name = candidate_status_name(model_entry)
+         try:
+             loaded_name, model = load_first_available_model(model_entry)
+diff --git a/benchmark/compare_lstm_extractors.py b/benchmark/compare_lstm_extractors.py
+index 97a7ad3..cc2fd72 100644
+--- a/benchmark/compare_lstm_extractors.py
++++ b/benchmark/compare_lstm_extractors.py
+@@ -3,6 +3,7 @@ import csv
+ import json
+ import random
+ import sys
++import time
+ from collections import Counter
+ from pathlib import Path
+ 
+@@ -151,7 +152,7 @@ def collect_split_sequences(rows, split_name, detector, args):
+                 # 경로에 processed 또는 clips가 있으면 잘려진 32프레임짜리 클립이므로 점프하지 않습니다.
+                 is_processed_clip = "processed" in str(video_path).lower() or "clips" in str(video_path).lower()
+                 if start_frame > 0 and not is_processed_clip and getattr(reader, "cap", None) is not None:
+-                    reader.cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
++                    reader.cap.set(reader.cv2.CAP_PROP_POS_FRAMES, start_frame)
+                     reader.frame_idx = start_frame
+                 while True:
+                     packet = reader.read()
+@@ -301,9 +302,34 @@ def classification_metrics(y_true, y_pred):
+         "recall": round(recall, 6),
+         "f1_score": round(f1, 6),
+         "confusion_matrix": {"labels": ["Normal", "Faint"], "matrix": matrix},
++        "per_class_metrics": per_class_metrics(matrix),
+     }
+ 
+ 
++def per_class_metrics(matrix):
++    labels = ["Normal", "Faint"]
++    total = sum(sum(row) for row in matrix)
++    metrics = {}
++    for class_id, label in enumerate(labels):
++        true_positive = matrix[class_id][class_id]
++        false_positive = sum(matrix[row][class_id] for row in range(len(labels)) if row != class_id)
++        false_negative = sum(matrix[class_id][column] for column in range(len(labels)) if column != class_id)
++        true_negative = total - true_positive - false_positive - false_negative
++        precision = true_positive / max(true_positive + false_positive, 1)
++        recall = true_positive / max(true_positive + false_negative, 1)
++        f1 = (2 * precision * recall) / max(precision + recall, 1e-12)
++        metrics[label] = {
++            "precision": round(precision, 6),
++            "recall": round(recall, 6),
++            "f1_score": round(f1, 6),
++            "support": int(sum(matrix[class_id])),
++            "false_positive": int(false_positive),
++            "false_negative": int(false_negative),
++            "true_negative": int(true_negative),
++        }
++    return metrics
++
++
+ def empty_metrics(reason="not_run"):
+     return {
+         "status": reason,
+@@ -312,6 +338,7 @@ def empty_metrics(reason="not_run"):
+         "recall": None,
+         "f1_score": None,
+         "confusion_matrix": {"labels": ["Normal", "Faint"], "matrix": [[0, 0], [0, 0]]},
++        "per_class_metrics": {},
+     }
+ 
+ 
+@@ -335,6 +362,7 @@ def write_csv(path, rows):
+ 
+ 
+ def compare_model(spec, rows, args, output_dir):
++    started = time.perf_counter()
+     detector = create_pose_detector(args.detector_mode, spec["model"], args.device, args.imgsz, conf=args.detector_conf)
+     model_dir = output_dir / spec["label"]
+     model_dir.mkdir(parents=True, exist_ok=True)
+@@ -356,6 +384,8 @@ def compare_model(spec, rows, args, output_dir):
+             metrics["status"] = "OK"
+         except Exception as exc:
+             metrics = empty_metrics(f"failed: {exc}")
++    runtime_seconds = round(time.perf_counter() - started, 4)
++    write_confusion_matrix_csv(model_dir / "confusion_matrix.csv", metrics.get("confusion_matrix", {}))
+     summary = {
+         "model_label": spec["label"],
+         "pose_model": spec["model"] if args.detector_mode == "real" else "mock",
+@@ -365,6 +395,7 @@ def compare_model(spec, rows, args, output_dir):
+         "train_sequence_summary": train_summary,
+         "eval_sequence_summary": eval_summary,
+         "lstm_metrics": metrics,
++        "runtime_seconds": runtime_seconds,
+     }
+     (model_dir / "summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
+     return summary
+@@ -377,9 +408,11 @@ def choose_best_model(summaries):
+             candidates,
+             key=lambda item: (
+                 item["lstm_metrics"]["recall"],
++                item["lstm_metrics"]["f1_score"],
++                -false_alarm_count(item["lstm_metrics"].get("confusion_matrix", {})),
+                 item["eval_sequence_summary"]["generated_sequences"],
+                 -item["eval_sequence_summary"]["zero_sequence_clips"],
+-                item["lstm_metrics"]["f1_score"],
++                -item["eval_sequence_summary"]["keypoint_missing_rate"],
+             ),
+         )["model_label"]
+     return max(
+@@ -392,6 +425,13 @@ def choose_best_model(summaries):
+     )["model_label"] if summaries else None
+ 
+ 
++def false_alarm_count(confusion_matrix):
++    matrix = confusion_matrix.get("matrix") or [[0, 0], [0, 0]]
++    if not matrix or not matrix[0] or len(matrix[0]) < 2:
++        return 0
++    return int(matrix[0][1])
++
++
+ def write_final_summary(output_dir, summaries):
+     rows = []
+     for item in summaries:
+@@ -401,6 +441,7 @@ def write_final_summary(output_dir, summaries):
+             {
+                 "model_label": item["model_label"],
+                 "pose_model": item["pose_model"],
++                "clips_requested": eval_summary["clips_requested"],
+                 "clips_processed": eval_summary["clips_processed"],
+                 "person_detections": eval_summary["person_detections"],
+                 "keypoints_extracted": eval_summary["keypoints_extracted"],
+@@ -413,6 +454,7 @@ def write_final_summary(output_dir, summaries):
+                 "recall": metrics.get("recall"),
+                 "f1_score": metrics.get("f1_score"),
+                 "metrics_status": metrics.get("status"),
++                "runtime_seconds": item.get("runtime_seconds"),
+             }
+         )
+     output_dir.mkdir(parents=True, exist_ok=True)
+@@ -423,9 +465,77 @@ def write_final_summary(output_dir, summaries):
+         "models": summaries,
+     }
+     (output_dir / "summary.json").write_text(json.dumps(final, indent=2, ensure_ascii=False), encoding="utf-8")
++    write_markdown_report(output_dir / "report.md", final, rows)
+     return final
+ 
+ 
++def write_confusion_matrix_csv(path, confusion_matrix):
++    labels = confusion_matrix.get("labels") or ["Normal", "Faint"]
++    matrix = confusion_matrix.get("matrix") or [[0, 0], [0, 0]]
++    rows = []
++    for label, values in zip(labels, matrix):
++        row = {"actual": label}
++        for predicted_label, value in zip(labels, values):
++            row[f"predicted_{predicted_label}"] = int(value)
++        rows.append(row)
++    write_csv(path, rows)
++
++
++def write_markdown_report(path, final, rows):
++    lines = [
++        "# Final LSTM Pose Extractor Benchmark",
++        "",
++        "## Scope",
++        "",
++        "This report focuses on the LSTM classification benchmark. Pose-only model speed/quality is a separate benchmark, and sequence generation is reported here only as the input stability layer for LSTM training/evaluation.",
++        "",
++        "## Pose-Only Benchmark",
++        "",
++        "Not rerun by this script. Previous pose-only results should not be used alone to select the final fall/Faint classifier.",
++        "",
++        "## Sequence Generation Benchmark",
++        "",
++        "| model_label | clips_requested | clips_processed | person_detections | keypoints_extracted | generated_sequences | zero_sequence_clips | keypoint_missing_rate | runtime_seconds |",
++        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
++    ]
++    for row in rows:
++        lines.append(
++            "| {model_label} | {clips_requested} | {clips_processed} | {person_detections} | {keypoints_extracted} | {generated_sequences} | {zero_sequence_clips} | {keypoint_missing_rate} | {runtime_seconds} |".format(
++                **row
++            )
++        )
++    lines.extend(
++        [
++            "",
++            "## LSTM Classification Benchmark",
++            "",
++            "| model_label | accuracy | precision | Faint recall | F1-score | metrics_status |",
++            "| --- | --- | --- | --- | --- | --- |",
++        ]
++    )
++    for row in rows:
++        lines.append(
++            "| {model_label} | {accuracy} | {precision} | {recall} | {f1_score} | {metrics_status} |".format(
++                **row
++            )
++        )
++    lines.extend(
++        [
++            "",
++            "## Selection Policy",
++            "",
++            final["selection_policy"],
++            "",
++            f"Current best model for downstream LSTM: `{final['best_model_for_downstream_lstm']}`",
++            "",
++            "Evaluation priority: Faint recall, F1-score, false alarm tendency from confusion matrix, sequence stability, then runtime feasibility.",
++            "",
++            "Per-model details are saved under each model directory as `summary.json`, `train_clips.json`, `eval_clips.json`, sequence CSV files, `history.json` when training runs, and `confusion_matrix.csv`.",
++        ]
++    )
++    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
++
++
+ def main():
+     args = parse_args()
+     output_dir = Path(args.output_dir)
+diff --git a/tests/test_benchmark_fall_candidate.py b/tests/test_benchmark_fall_candidate.py
+index fce7b08..6e7e178 100644
+--- a/tests/test_benchmark_fall_candidate.py
++++ b/tests/test_benchmark_fall_candidate.py
+@@ -1,9 +1,25 @@
+ import unittest
+ 
+-from benchmark.benchmark_models import evaluate_fall_candidate, is_fall_candidate
++from benchmark.benchmark_models import BUILTIN_CONFIG, evaluate_fall_candidate, filter_model_entries, is_fall_candidate
+ 
+ 
+ class BenchmarkFallCandidateTest(unittest.TestCase):
++    def test_filter_model_entries_selects_yolo26n_by_label(self):
++        selected = filter_model_entries(BUILTIN_CONFIG["models"], "YOLO26n-pose")
++
++        self.assertEqual(len(selected), 1)
++        self.assertEqual(selected[0]["name"], "YOLO26n-pose")
++
++    def test_filter_model_entries_selects_yolo26n_by_weight_name_without_extension(self):
++        selected = filter_model_entries(BUILTIN_CONFIG["models"], "yolo26n-pose")
++
++        self.assertEqual(len(selected), 1)
++        self.assertEqual(selected[0]["candidates"], ["yolo26n-pose.pt"])
++
++    def test_filter_model_entries_rejects_unknown_model_selector(self):
++        with self.assertRaisesRegex(ValueError, "Unknown model selector"):
++            filter_model_entries(BUILTIN_CONFIG["models"], "yolo999n-pose")
++
+     def test_fall_candidate_reports_torso_ratio_details(self):
+         keypoints = [[0.0, 0.0] for _ in range(17)]
+         conf = [1.0 for _ in range(17)]
+diff --git a/tests/test_lstm_extractor_comparison.py b/tests/test_lstm_extractor_comparison.py
+index d844b48..0bc5300 100644
+--- a/tests/test_lstm_extractor_comparison.py
++++ b/tests/test_lstm_extractor_comparison.py
+@@ -1,4 +1,6 @@
+ import unittest
++from tempfile import TemporaryDirectory
++from pathlib import Path
+ 
+ import numpy as np
+ 
+@@ -8,6 +10,7 @@ from benchmark.compare_lstm_extractors import (
+     keypoints_to_feature,
+     parse_model_specs,
+     summarize_split,
++    write_final_summary,
+ )
+ 
+ 
+@@ -36,18 +39,36 @@ class LstmExtractorComparisonTest(unittest.TestCase):
+         self.assertEqual(metrics["recall"], 0.5)
+         self.assertEqual(metrics["f1_score"], 0.5)
+         self.assertEqual(metrics["confusion_matrix"]["matrix"], [[1, 1], [1, 1]])
++        self.assertEqual(metrics["per_class_metrics"]["Normal"]["recall"], 0.5)
++        self.assertEqual(metrics["per_class_metrics"]["Faint"]["recall"], 0.5)
+ 
+     def test_choose_best_model_prioritizes_faint_recall_then_sequences(self):
+         summaries = [
+             {
+                 "model_label": "YOLO26n-pose",
+                 "eval_sequence_summary": {"generated_sequences": 10, "zero_sequence_clips": 0, "keypoint_missing_rate": 0.1},
+-                "lstm_metrics": {"recall": 0.8, "f1_score": 0.7},
++                "lstm_metrics": {"recall": 0.8, "f1_score": 0.7, "confusion_matrix": {"matrix": [[9, 1], [2, 8]]}},
+             },
+             {
+                 "model_label": "YOLOv11n-pose",
+                 "eval_sequence_summary": {"generated_sequences": 50, "zero_sequence_clips": 0, "keypoint_missing_rate": 0.1},
+-                "lstm_metrics": {"recall": 0.7, "f1_score": 0.9},
++                "lstm_metrics": {"recall": 0.7, "f1_score": 0.9, "confusion_matrix": {"matrix": [[9, 1], [3, 7]]}},
++            },
++        ]
++
++        self.assertEqual(choose_best_model(summaries), "YOLO26n-pose")
++
++    def test_choose_best_model_uses_f1_before_sequence_count_when_recall_ties(self):
++        summaries = [
++            {
++                "model_label": "YOLO26n-pose",
++                "eval_sequence_summary": {"generated_sequences": 10, "zero_sequence_clips": 0, "keypoint_missing_rate": 0.1},
++                "lstm_metrics": {"recall": 0.8, "f1_score": 0.9, "confusion_matrix": {"matrix": [[9, 1], [2, 8]]}},
++            },
++            {
++                "model_label": "YOLOv11n-pose",
++                "eval_sequence_summary": {"generated_sequences": 50, "zero_sequence_clips": 0, "keypoint_missing_rate": 0.1},
++                "lstm_metrics": {"recall": 0.8, "f1_score": 0.7, "confusion_matrix": {"matrix": [[9, 1], [2, 8]]}},
+             },
+         ]
+ 
+@@ -78,6 +99,38 @@ class LstmExtractorComparisonTest(unittest.TestCase):
+ 
+         self.assertEqual(specs, [{"label": "A", "model": "a.pt"}, {"label": "B", "model": "b.pt"}])
+ 
++    def test_write_final_summary_creates_markdown_report_with_required_sections(self):
++        summaries = [
++            {
++                "model_label": "YOLOv11n-pose",
++                "pose_model": "yolo11n-pose.pt",
++                "eval_sequence_summary": {
++                    "clips_requested": 1,
++                    "clips_processed": 1,
++                    "person_detections": 4,
++                    "keypoints_extracted": 4,
++                    "generated_sequences": 2,
++                    "zero_sequence_clips": 0,
++                    "keypoint_missing_rate": 0.1,
++                    "fallback_usage": 0,
++                },
++                "lstm_metrics": {"accuracy": 0.5, "precision": 0.5, "recall": 0.5, "f1_score": 0.5, "status": "OK"},
++                "runtime_seconds": 1.25,
++            }
++        ]
++        with TemporaryDirectory() as tmpdir:
++            output_dir = Path(tmpdir)
++
++            write_final_summary(output_dir, summaries)
++
++            report = (output_dir / "report.md").read_text(encoding="utf-8")
++            self.assertIn("## Pose-Only Benchmark", report)
++            self.assertIn("## Sequence Generation Benchmark", report)
++            self.assertIn("## LSTM Classification Benchmark", report)
++            self.assertIn("YOLOv11n-pose", report)
++            self.assertTrue((output_dir / "summary.csv").exists())
++            self.assertTrue((output_dir / "summary.json").exists())
++
+ 
+ if __name__ == "__main__":
+     unittest.main()
+-- 
+2.54.0.windows.1
+
+
+From 35f5d1588becba84e4a182b2b0045195c24c9ea2 Mon Sep 17 00:00:00 2001
+From: "DESKTOP-58UIFAP\\user" <anjin0910@gmail.com>
+Date: Tue, 2 Jun 2026 13:17:26 +0900
+Subject: [PATCH 2/7] Balance LSTM benchmark sampling by class
+
+---
+ PROJECT_SUMMARY.md                      |  2 +
+ benchmark/compare_lstm_extractors.py    | 64 +++++++++++++++++++++----
+ tests/test_lstm_extractor_comparison.py | 37 +++++++++++++-
+ 3 files changed, 92 insertions(+), 11 deletions(-)
+
+diff --git a/PROJECT_SUMMARY.md b/PROJECT_SUMMARY.md
+index 4de258b..0de84ed 100644
+--- a/PROJECT_SUMMARY.md
++++ b/PROJECT_SUMMARY.md
+@@ -183,6 +183,8 @@ benchmark/results/lstm_final_11n_vs_26n/<model>/best.pt
+ 
+ Interpret the final result in this order: Faint recall, F1-score, false alarm tendency from the confusion matrix, sequence stability, then runtime feasibility. The report separates pose-only context, sequence generation metrics, and LSTM classification metrics. The current local Codex environment verified the CLI/report workflow and unit tests, but the real smoke/full benchmark must run on the GPU PC because the local workspace does not contain `../ai_fall_experiments/data/metadata/metadata.csv` or the real YOLO/Torch runtime.
+ 
++The dataset is highly imbalanced, so the final benchmark applies `--max-rows-per-split` per class within each split. For example, `--max-rows-per-split 30` selects up to 30 Normal and 30 Faint rows for each of train, val, and test when available. The generated `summary.json` and `report.md` include selected class counts for train/val/test before reporting sequence generation and LSTM classification metrics.
++
+ ## Mock Edge AI MQTT Publisher
+ 
+ `mock_edge_ai.py` publishes random safety event JSON messages to the MQTT topic used by the local development pipeline.
+diff --git a/benchmark/compare_lstm_extractors.py b/benchmark/compare_lstm_extractors.py
+index cc2fd72..563f7dc 100644
+--- a/benchmark/compare_lstm_extractors.py
++++ b/benchmark/compare_lstm_extractors.py
+@@ -16,7 +16,7 @@ from ai.action.classifier import LSTMActionModel
+ from ai.streams.video_reader import VideoReader
+ from detector.mock_detector import MockDetector
+ from detector.yolo_pose_detector import YoloPoseDetector
+-from scripts.run_dataset_evaluation import label_name, limit_rows_by_split, read_dataset_rows
++from scripts.run_dataset_evaluation import label_name, read_dataset_rows
+ from scripts.run_rtsp_inference import ensure_mock_keypoints
+ 
+ 
+@@ -78,6 +78,35 @@ def row_label_id(row):
+     return CLASS_TO_ID.get(label_name(row), 0)
+ 
+ 
++def limit_rows_by_split_and_class(rows, max_rows_per_split):
++    if max_rows_per_split <= 0:
++        return rows
++    counts = Counter()
++    limited = []
++    for row in rows:
++        split = row.get("split") or "unspecified"
++        label = label_name(row)
++        key = (split, label)
++        if counts[key] >= max_rows_per_split:
++            continue
++        limited.append(row)
++        counts[key] += 1
++    return limited
++
++
++def dataset_class_counts(rows):
++    counts = {}
++    for row in rows:
++        split = row.get("split") or "unspecified"
++        label = label_name(row)
++        split_counts = counts.setdefault(split, {"Normal": 0, "Faint": 0, "total": 0})
++        if label not in split_counts:
++            split_counts[label] = 0
++        split_counts[label] += 1
++        split_counts["total"] += 1
++    return {split: counts[split] for split in sorted(counts)}
++
++
+ def keypoints_to_feature(detection, frame_shape, keypoint_conf_threshold):
+     height, width = frame_shape[:2]
+     keypoints = detection.get("keypoints") or []
+@@ -208,7 +237,7 @@ def collect_split_sequences(rows, split_name, detector, args):
+     return x_rows, y_rows, clip_summaries, sequence_rows, dict(totals)
+ 
+ 
+-def summarize_split(rows, y_rows, totals):
++def summarize_split(rows, y_rows, totals, requested_class_counts=None):
+     counts = Counter(ID_TO_CLASS[int(label)] for label in y_rows)
+     total_keypoints = totals.get("total_keypoints", 0)
+     return {
+@@ -222,6 +251,7 @@ def summarize_split(rows, y_rows, totals):
+         "fallback_usage": int(totals.get("fallback_usage", 0)),
+         "fallback_usage_ratio": 0.0,
+         "sequence_class_counts": {"Normal": counts.get("Normal", 0), "Faint": counts.get("Faint", 0)},
++        "requested_class_counts": requested_class_counts or {"Normal": 0, "Faint": 0, "total": 0},
+     }
+ 
+ 
+@@ -361,7 +391,7 @@ def write_csv(path, rows):
+         writer.writerows(rows)
+ 
+ 
+-def compare_model(spec, rows, args, output_dir):
++def compare_model(spec, rows, args, output_dir, selected_class_counts):
+     started = time.perf_counter()
+     detector = create_pose_detector(args.detector_mode, spec["model"], args.device, args.imgsz, conf=args.detector_conf)
+     model_dir = output_dir / spec["label"]
+@@ -372,8 +402,8 @@ def compare_model(spec, rows, args, output_dir):
+     write_csv(model_dir / "eval_sequences.csv", eval_sequences)
+     (model_dir / "train_clips.json").write_text(json.dumps(train_clips, indent=2, ensure_ascii=False), encoding="utf-8")
+     (model_dir / "eval_clips.json").write_text(json.dumps(eval_clips, indent=2, ensure_ascii=False), encoding="utf-8")
+-    train_summary = summarize_split(rows, train_y, train_totals)
+-    eval_summary = summarize_split(rows, eval_y, eval_totals)
++    train_summary = summarize_split(rows, train_y, train_totals, selected_class_counts.get(args.train_split))
++    eval_summary = summarize_split(rows, eval_y, eval_totals, selected_class_counts.get(args.eval_split))
+     if args.dry_run:
+         metrics = empty_metrics("dry_run")
+     elif not train_x or not eval_x:
+@@ -394,6 +424,7 @@ def compare_model(spec, rows, args, output_dir):
+         "eval_split": args.eval_split,
+         "train_sequence_summary": train_summary,
+         "eval_sequence_summary": eval_summary,
++        "selected_dataset_class_counts": selected_class_counts,
+         "lstm_metrics": metrics,
+         "runtime_seconds": runtime_seconds,
+     }
+@@ -432,7 +463,7 @@ def false_alarm_count(confusion_matrix):
+     return int(matrix[0][1])
+ 
+ 
+-def write_final_summary(output_dir, summaries):
++def write_final_summary(output_dir, summaries, selected_class_counts=None):
+     rows = []
+     for item in summaries:
+         eval_summary = item["eval_sequence_summary"]
+@@ -462,6 +493,7 @@ def write_final_summary(output_dir, summaries):
+     final = {
+         "selection_policy": "Prioritize Faint recall and stable sequence generation; fall_candidate_count is reference-only.",
+         "best_model_for_downstream_lstm": choose_best_model(summaries),
++        "selected_dataset_class_counts": selected_class_counts or {},
+         "models": summaries,
+     }
+     (output_dir / "summary.json").write_text(json.dumps(final, indent=2, ensure_ascii=False), encoding="utf-8")
+@@ -493,11 +525,22 @@ def write_markdown_report(path, final, rows):
+         "",
+         "Not rerun by this script. Previous pose-only results should not be used alone to select the final fall/Faint classifier.",
+         "",
++        "## Selected Dataset Class Counts",
++        "",
++        "| split | Normal | Faint | total |",
++        "| --- | --- | --- | --- |",
++    ]
++    for split, counts in final.get("selected_dataset_class_counts", {}).items():
++        lines.append(f"| {split} | {counts.get('Normal', 0)} | {counts.get('Faint', 0)} | {counts.get('total', 0)} |")
++    lines.extend(
++        [
++        "",
+         "## Sequence Generation Benchmark",
+         "",
+         "| model_label | clips_requested | clips_processed | person_detections | keypoints_extracted | generated_sequences | zero_sequence_clips | keypoint_missing_rate | runtime_seconds |",
+         "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+-    ]
++        ]
++    )
+     for row in rows:
+         lines.append(
+             "| {model_label} | {clips_requested} | {clips_processed} | {person_detections} | {keypoints_extracted} | {generated_sequences} | {zero_sequence_clips} | {keypoint_missing_rate} | {runtime_seconds} |".format(
+@@ -539,10 +582,11 @@ def write_markdown_report(path, final, rows):
+ def main():
+     args = parse_args()
+     output_dir = Path(args.output_dir)
+-    rows = limit_rows_by_split(read_dataset_rows(args.metadata_csv), args.max_rows_per_split)
++    rows = limit_rows_by_split_and_class(read_dataset_rows(args.metadata_csv), args.max_rows_per_split)
++    selected_class_counts = dataset_class_counts(rows)
+     specs = parse_model_specs(args.models)
+-    summaries = [compare_model(spec, rows, args, output_dir) for spec in specs]
+-    final = write_final_summary(output_dir, summaries)
++    summaries = [compare_model(spec, rows, args, output_dir, selected_class_counts) for spec in specs]
++    final = write_final_summary(output_dir, summaries, selected_class_counts)
+     print(json.dumps(final, indent=2, ensure_ascii=False))
+ 
+ 
+diff --git a/tests/test_lstm_extractor_comparison.py b/tests/test_lstm_extractor_comparison.py
+index 0bc5300..1e1a597 100644
+--- a/tests/test_lstm_extractor_comparison.py
++++ b/tests/test_lstm_extractor_comparison.py
+@@ -7,7 +7,9 @@ import numpy as np
+ from benchmark.compare_lstm_extractors import (
+     choose_best_model,
+     classification_metrics,
++    dataset_class_counts,
+     keypoints_to_feature,
++    limit_rows_by_split_and_class,
+     parse_model_specs,
+     summarize_split,
+     write_final_summary,
+@@ -89,11 +91,39 @@ class LstmExtractorComparisonTest(unittest.TestCase):
+                 "missing_keypoints": 3,
+                 "total_keypoints": 51,
+             },
++            requested_class_counts={"Normal": 3, "Faint": 3, "total": 6},
+         )
+ 
+         self.assertEqual(summary["sequence_class_counts"], {"Normal": 1, "Faint": 2})
++        self.assertEqual(summary["requested_class_counts"], {"Normal": 3, "Faint": 3, "total": 6})
+         self.assertEqual(summary["keypoint_missing_rate"], round(3 / 51, 6))
+ 
++    def test_limit_rows_by_split_and_class_caps_each_class_independently(self):
++        rows = []
++        for split in ("train", "val", "test"):
++            rows.extend({"split": split, "label": "0", "clip_id": f"{split}-normal-{idx}"} for idx in range(5))
++            rows.extend({"split": split, "label": "1", "clip_id": f"{split}-faint-{idx}"} for idx in range(4))
++
++        limited = limit_rows_by_split_and_class(rows, 3)
++        counts = dataset_class_counts(limited)
++
++        self.assertEqual(len(limited), 18)
++        self.assertEqual(counts["train"], {"Normal": 3, "Faint": 3, "total": 6})
++        self.assertEqual(counts["val"], {"Normal": 3, "Faint": 3, "total": 6})
++        self.assertEqual(counts["test"], {"Normal": 3, "Faint": 3, "total": 6})
++
++    def test_limit_rows_by_split_and_class_keeps_available_minority_rows(self):
++        rows = [
++            {"split": "train", "label": "0", "clip_id": "n0"},
++            {"split": "train", "label": "0", "clip_id": "n1"},
++            {"split": "train", "label": "0", "clip_id": "n2"},
++            {"split": "train", "label": "1", "clip_id": "f0"},
++        ]
++
++        limited = limit_rows_by_split_and_class(rows, 2)
++
++        self.assertEqual(dataset_class_counts(limited)["train"], {"Normal": 2, "Faint": 1, "total": 3})
++
+     def test_parse_model_specs_accepts_label_model_pairs(self):
+         specs = parse_model_specs("A:a.pt,B:b.pt")
+ 
+@@ -118,13 +148,18 @@ class LstmExtractorComparisonTest(unittest.TestCase):
+                 "runtime_seconds": 1.25,
+             }
+         ]
++        selected_class_counts = {"train": {"Normal": 30, "Faint": 30, "total": 60}, "val": {"Normal": 30, "Faint": 30, "total": 60}, "test": {"Normal": 30, "Faint": 30, "total": 60}}
+         with TemporaryDirectory() as tmpdir:
+             output_dir = Path(tmpdir)
+ 
+-            write_final_summary(output_dir, summaries)
++            write_final_summary(output_dir, summaries, selected_class_counts)
+ 
+             report = (output_dir / "report.md").read_text(encoding="utf-8")
+             self.assertIn("## Pose-Only Benchmark", report)
++            self.assertIn("## Selected Dataset Class Counts", report)
++            self.assertIn("| train | 30 | 30 | 60 |", report)
++            self.assertIn("| val | 30 | 30 | 60 |", report)
++            self.assertIn("| test | 30 | 30 | 60 |", report)
+             self.assertIn("## Sequence Generation Benchmark", report)
+             self.assertIn("## LSTM Classification Benchmark", report)
+             self.assertIn("YOLOv11n-pose", report)
+-- 
+2.54.0.windows.1
+
+
+From f21d04065d7d16b37354d6464e6ad8ecfd9a7c0e Mon Sep 17 00:00:00 2001
+From: "DESKTOP-58UIFAP\\user" <anjin0910@gmail.com>
+Date: Tue, 2 Jun 2026 13:29:58 +0900
+Subject: [PATCH 3/7] Fix LSTM benchmark device and status reporting
+
+---
+ benchmark/compare_lstm_extractors.py    | 69 +++++++++++++++++++++----
+ tests/test_lstm_extractor_comparison.py | 50 +++++++++++++++++-
+ 2 files changed, 107 insertions(+), 12 deletions(-)
+
+diff --git a/benchmark/compare_lstm_extractors.py b/benchmark/compare_lstm_extractors.py
+index 563f7dc..4baf153 100644
+--- a/benchmark/compare_lstm_extractors.py
++++ b/benchmark/compare_lstm_extractors.py
+@@ -261,7 +261,7 @@ def train_and_evaluate(train_x, train_y, eval_x, eval_y, args, output_dir):
+     from torch.utils.data import DataLoader, TensorDataset
+ 
+     set_seed(args.seed, torch)
+-    device = torch.device("cuda:0" if args.device == "auto" and torch.cuda.is_available() else ("cpu" if args.device == "auto" else args.device))
++    device = torch.device(normalize_torch_device(args.device, torch))
+     train_tensor = torch.from_numpy(np.stack(train_x).astype(np.float32))
+     train_labels = torch.from_numpy(np.asarray(train_y, dtype=np.int64))
+     eval_tensor = torch.from_numpy(np.stack(eval_x).astype(np.float32))
+@@ -301,6 +301,20 @@ def train_and_evaluate(train_x, train_y, eval_x, eval_y, args, output_dir):
+     return history[-1] if history else empty_metrics()
+ 
+ 
++def normalize_torch_device(device_arg, torch_module):
++    raw = str(device_arg).strip().lower()
++    cuda_available = bool(torch_module.cuda.is_available())
++    if raw in {"auto", ""}:
++        return "cuda:0" if cuda_available else "cpu"
++    if raw == "cpu":
++        return "cpu"
++    if raw.startswith("cuda"):
++        return raw if cuda_available else "cpu"
++    if raw.isdigit():
++        return f"cuda:{raw}" if cuda_available else "cpu"
++    return "cpu"
++
++
+ def evaluate_lstm(model, loader, device):
+     import torch
+ 
+@@ -369,6 +383,8 @@ def empty_metrics(reason="not_run"):
+         "f1_score": None,
+         "confusion_matrix": {"labels": ["Normal", "Faint"], "matrix": [[0, 0], [0, 0]]},
+         "per_class_metrics": {},
++        "train_sequence_class_counts": {"Normal": 0, "Faint": 0},
++        "eval_sequence_class_counts": {"Normal": 0, "Faint": 0},
+     }
+ 
+ 
+@@ -391,6 +407,27 @@ def write_csv(path, rows):
+         writer.writerows(rows)
+ 
+ 
++def sequence_class_counts(y_rows):
++    counts = Counter(ID_TO_CLASS[int(label)] for label in y_rows)
++    return {"Normal": counts.get("Normal", 0), "Faint": counts.get("Faint", 0)}
++
++
++def lstm_readiness_status(train_y, eval_y):
++    if not train_y:
++        return "no_train_sequences"
++    if not eval_y:
++        return "no_eval_sequences"
++    if len(train_y) < 2 or len(eval_y) < 2:
++        return "insufficient_sequences"
++    train_counts = sequence_class_counts(train_y)
++    eval_counts = sequence_class_counts(eval_y)
++    if train_counts["Normal"] == 0 or train_counts["Faint"] == 0:
++        return "missing_class_in_train"
++    if eval_counts["Normal"] == 0 or eval_counts["Faint"] == 0:
++        return "missing_class_in_eval"
++    return "OK"
++
++
+ def compare_model(spec, rows, args, output_dir, selected_class_counts):
+     started = time.perf_counter()
+     detector = create_pose_detector(args.detector_mode, spec["model"], args.device, args.imgsz, conf=args.detector_conf)
+@@ -404,16 +441,22 @@ def compare_model(spec, rows, args, output_dir, selected_class_counts):
+     (model_dir / "eval_clips.json").write_text(json.dumps(eval_clips, indent=2, ensure_ascii=False), encoding="utf-8")
+     train_summary = summarize_split(rows, train_y, train_totals, selected_class_counts.get(args.train_split))
+     eval_summary = summarize_split(rows, eval_y, eval_totals, selected_class_counts.get(args.eval_split))
++    train_sequence_counts = sequence_class_counts(train_y)
++    eval_sequence_counts = sequence_class_counts(eval_y)
+     if args.dry_run:
+         metrics = empty_metrics("dry_run")
+-    elif not train_x or not eval_x:
+-        metrics = empty_metrics("no_sequences")
+     else:
+-        try:
+-            metrics = train_and_evaluate(train_x, train_y, eval_x, eval_y, args, model_dir)
+-            metrics["status"] = "OK"
+-        except Exception as exc:
+-            metrics = empty_metrics(f"failed: {exc}")
++        readiness_status = lstm_readiness_status(train_y, eval_y)
++        if readiness_status != "OK":
++            metrics = empty_metrics(readiness_status)
++        else:
++            try:
++                metrics = train_and_evaluate(train_x, train_y, eval_x, eval_y, args, model_dir)
++                metrics["status"] = "OK"
++            except Exception as exc:
++                metrics = empty_metrics(f"failed: {exc}")
++    metrics["train_sequence_class_counts"] = train_sequence_counts
++    metrics["eval_sequence_class_counts"] = eval_sequence_counts
+     runtime_seconds = round(time.perf_counter() - started, 4)
+     write_confusion_matrix_csv(model_dir / "confusion_matrix.csv", metrics.get("confusion_matrix", {}))
+     summary = {
+@@ -480,6 +523,10 @@ def write_final_summary(output_dir, summaries, selected_class_counts=None):
+                 "zero_sequence_clips": eval_summary["zero_sequence_clips"],
+                 "keypoint_missing_rate": eval_summary["keypoint_missing_rate"],
+                 "fallback_usage": eval_summary["fallback_usage"],
++                "train_sequence_normal": metrics.get("train_sequence_class_counts", {}).get("Normal", 0),
++                "train_sequence_faint": metrics.get("train_sequence_class_counts", {}).get("Faint", 0),
++                "eval_sequence_normal": metrics.get("eval_sequence_class_counts", {}).get("Normal", 0),
++                "eval_sequence_faint": metrics.get("eval_sequence_class_counts", {}).get("Faint", 0),
+                 "accuracy": metrics.get("accuracy"),
+                 "precision": metrics.get("precision"),
+                 "recall": metrics.get("recall"),
+@@ -552,13 +599,13 @@ def write_markdown_report(path, final, rows):
+             "",
+             "## LSTM Classification Benchmark",
+             "",
+-            "| model_label | accuracy | precision | Faint recall | F1-score | metrics_status |",
+-            "| --- | --- | --- | --- | --- | --- |",
++            "| model_label | train Normal | train Faint | eval Normal | eval Faint | accuracy | precision | Faint recall | F1-score | metrics_status |",
++            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+         ]
+     )
+     for row in rows:
+         lines.append(
+-            "| {model_label} | {accuracy} | {precision} | {recall} | {f1_score} | {metrics_status} |".format(
++            "| {model_label} | {train_sequence_normal} | {train_sequence_faint} | {eval_sequence_normal} | {eval_sequence_faint} | {accuracy} | {precision} | {recall} | {f1_score} | {metrics_status} |".format(
+                 **row
+             )
+         )
+diff --git a/tests/test_lstm_extractor_comparison.py b/tests/test_lstm_extractor_comparison.py
+index 1e1a597..aa15069 100644
+--- a/tests/test_lstm_extractor_comparison.py
++++ b/tests/test_lstm_extractor_comparison.py
+@@ -10,12 +10,28 @@ from benchmark.compare_lstm_extractors import (
+     dataset_class_counts,
+     keypoints_to_feature,
+     limit_rows_by_split_and_class,
++    lstm_readiness_status,
++    normalize_torch_device,
+     parse_model_specs,
++    sequence_class_counts,
+     summarize_split,
+     write_final_summary,
+ )
+ 
+ 
++class FakeCuda:
++    def __init__(self, available):
++        self.available = available
++
++    def is_available(self):
++        return self.available
++
++
++class FakeTorch:
++    def __init__(self, cuda_available):
++        self.cuda = FakeCuda(cuda_available)
++
++
+ class LstmExtractorComparisonTest(unittest.TestCase):
+     def test_keypoints_to_feature_normalizes_xy_and_counts_missing(self):
+         detection = {
+@@ -44,6 +60,17 @@ class LstmExtractorComparisonTest(unittest.TestCase):
+         self.assertEqual(metrics["per_class_metrics"]["Normal"]["recall"], 0.5)
+         self.assertEqual(metrics["per_class_metrics"]["Faint"]["recall"], 0.5)
+ 
++    def test_normalize_torch_device_converts_numeric_gpu_id_to_cuda_device(self):
++        self.assertEqual(normalize_torch_device("0", FakeTorch(True)), "cuda:0")
++        self.assertEqual(normalize_torch_device(0, FakeTorch(True)), "cuda:0")
++        self.assertEqual(normalize_torch_device("cuda:0", FakeTorch(True)), "cuda:0")
++        self.assertEqual(normalize_torch_device("cpu", FakeTorch(True)), "cpu")
++
++    def test_normalize_torch_device_falls_back_to_cpu_when_cuda_unavailable(self):
++        self.assertEqual(normalize_torch_device("0", FakeTorch(False)), "cpu")
++        self.assertEqual(normalize_torch_device("cuda:0", FakeTorch(False)), "cpu")
++        self.assertEqual(normalize_torch_device("auto", FakeTorch(False)), "cpu")
++
+     def test_choose_best_model_prioritizes_faint_recall_then_sequences(self):
+         summaries = [
+             {
+@@ -98,6 +125,17 @@ class LstmExtractorComparisonTest(unittest.TestCase):
+         self.assertEqual(summary["requested_class_counts"], {"Normal": 3, "Faint": 3, "total": 6})
+         self.assertEqual(summary["keypoint_missing_rate"], round(3 / 51, 6))
+ 
++    def test_lstm_readiness_status_reports_specific_sequence_and_class_gaps(self):
++        self.assertEqual(lstm_readiness_status([], [0, 1]), "no_train_sequences")
++        self.assertEqual(lstm_readiness_status([0, 1], []), "no_eval_sequences")
++        self.assertEqual(lstm_readiness_status([0], [0, 1]), "insufficient_sequences")
++        self.assertEqual(lstm_readiness_status([0, 0], [0, 1]), "missing_class_in_train")
++        self.assertEqual(lstm_readiness_status([0, 1], [1, 1]), "missing_class_in_eval")
++        self.assertEqual(lstm_readiness_status([0, 1], [0, 1]), "OK")
++
++    def test_sequence_class_counts_reports_normal_and_faint_sequences(self):
++        self.assertEqual(sequence_class_counts([0, 1, 1]), {"Normal": 1, "Faint": 2})
++
+     def test_limit_rows_by_split_and_class_caps_each_class_independently(self):
+         rows = []
+         for split in ("train", "val", "test"):
+@@ -144,7 +182,15 @@ class LstmExtractorComparisonTest(unittest.TestCase):
+                     "keypoint_missing_rate": 0.1,
+                     "fallback_usage": 0,
+                 },
+-                "lstm_metrics": {"accuracy": 0.5, "precision": 0.5, "recall": 0.5, "f1_score": 0.5, "status": "OK"},
++                "lstm_metrics": {
++                    "accuracy": 0.5,
++                    "precision": 0.5,
++                    "recall": 0.5,
++                    "f1_score": 0.5,
++                    "status": "OK",
++                    "train_sequence_class_counts": {"Normal": 2, "Faint": 1},
++                    "eval_sequence_class_counts": {"Normal": 1, "Faint": 1},
++                },
+                 "runtime_seconds": 1.25,
+             }
+         ]
+@@ -162,6 +208,8 @@ class LstmExtractorComparisonTest(unittest.TestCase):
+             self.assertIn("| test | 30 | 30 | 60 |", report)
+             self.assertIn("## Sequence Generation Benchmark", report)
+             self.assertIn("## LSTM Classification Benchmark", report)
++            self.assertIn("train Normal", report)
++            self.assertIn("| YOLOv11n-pose | 2 | 1 | 1 | 1 | 0.5 | 0.5 | 0.5 | 0.5 | OK |", report)
+             self.assertIn("YOLOv11n-pose", report)
+             self.assertTrue((output_dir / "summary.csv").exists())
+             self.assertTrue((output_dir / "summary.json").exists())
+-- 
+2.54.0.windows.1
+
+
+From e097d679a1914fc32e2108f5eccf2e11a6808a7c Mon Sep 17 00:00:00 2001
+From: "DESKTOP-58UIFAP\\user" <anjin0910@gmail.com>
+Date: Tue, 2 Jun 2026 13:38:26 +0900
+Subject: [PATCH 4/7] Warn on LSTM CUDA fallback
+
+---
+ benchmark/compare_lstm_extractors.py    | 54 +++++++++++++++++++++----
+ tests/test_lstm_extractor_comparison.py | 15 +++++++
+ 2 files changed, 62 insertions(+), 7 deletions(-)
+
+diff --git a/benchmark/compare_lstm_extractors.py b/benchmark/compare_lstm_extractors.py
+index 4baf153..f6481aa 100644
+--- a/benchmark/compare_lstm_extractors.py
++++ b/benchmark/compare_lstm_extractors.py
+@@ -27,6 +27,11 @@ MODEL_SPECS = [
+ ]
+ CLASS_TO_ID = {"Normal": 0, "Faint": 1}
+ ID_TO_CLASS = {0: "Normal", 1: "Faint"}
++CUDA_CPU_FALLBACK_WARNING = "CUDA requested but unavailable; LSTM ran on CPU fallback."
++
++
++class CpuFallbackDisabledError(RuntimeError):
++    pass
+ 
+ 
+ def parse_args():
+@@ -51,6 +56,7 @@ def parse_args():
+     parser.add_argument("--seed", type=int, default=42)
+     parser.add_argument("--detector-conf", type=float, default=0.15, help="YOLO Pose detector confidence threshold.")
+     parser.add_argument("--dry-run", action="store_true", help="Generate extractor sequence stats only; skip LSTM training.")
++    parser.add_argument("--no-cpu-fallback", action="store_true", help="Fail LSTM training when CUDA is requested but unavailable.")
+     return parser.parse_args()
+ 
+ 
+@@ -261,7 +267,8 @@ def train_and_evaluate(train_x, train_y, eval_x, eval_y, args, output_dir):
+     from torch.utils.data import DataLoader, TensorDataset
+ 
+     set_seed(args.seed, torch)
+-    device = torch.device(normalize_torch_device(args.device, torch))
++    resolved_device = normalize_torch_device(args.device, torch, no_cpu_fallback=args.no_cpu_fallback)
++    device = torch.device(resolved_device)
+     train_tensor = torch.from_numpy(np.stack(train_x).astype(np.float32))
+     train_labels = torch.from_numpy(np.asarray(train_y, dtype=np.int64))
+     eval_tensor = torch.from_numpy(np.stack(eval_x).astype(np.float32))
+@@ -298,10 +305,18 @@ def train_and_evaluate(train_x, train_y, eval_x, eval_y, args, output_dir):
+     output_dir.mkdir(parents=True, exist_ok=True)
+     torch.save({"model_state": model.state_dict(), "model_config": model_config, "classes": ["Normal", "Faint"]}, output_dir / "best.pt")
+     (output_dir / "history.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
+-    return history[-1] if history else empty_metrics()
++    metrics = history[-1] if history else empty_metrics()
++    metrics["torch_device"] = str(device)
++    metrics["warnings"] = torch_device_warnings(args.device, torch, resolved_device)
++    return metrics
+ 
+ 
+-def normalize_torch_device(device_arg, torch_module):
++def is_cuda_requested(device_arg):
++    raw = str(device_arg).strip().lower()
++    return raw.startswith("cuda") or raw.isdigit()
++
++
++def normalize_torch_device(device_arg, torch_module, no_cpu_fallback=False):
+     raw = str(device_arg).strip().lower()
+     cuda_available = bool(torch_module.cuda.is_available())
+     if raw in {"auto", ""}:
+@@ -309,12 +324,22 @@ def normalize_torch_device(device_arg, torch_module):
+     if raw == "cpu":
+         return "cpu"
+     if raw.startswith("cuda"):
++        if not cuda_available and no_cpu_fallback:
++            raise CpuFallbackDisabledError(f"{CUDA_CPU_FALLBACK_WARNING} Use --device cpu or enable CUDA.")
+         return raw if cuda_available else "cpu"
+     if raw.isdigit():
++        if not cuda_available and no_cpu_fallback:
++            raise CpuFallbackDisabledError(f"{CUDA_CPU_FALLBACK_WARNING} Use --device cpu or enable CUDA.")
+         return f"cuda:{raw}" if cuda_available else "cpu"
+     return "cpu"
+ 
+ 
++def torch_device_warnings(device_arg, torch_module, resolved_device):
++    if is_cuda_requested(device_arg) and str(resolved_device).lower() == "cpu" and not torch_module.cuda.is_available():
++        return [CUDA_CPU_FALLBACK_WARNING]
++    return []
++
++
+ def evaluate_lstm(model, loader, device):
+     import torch
+ 
+@@ -385,6 +410,8 @@ def empty_metrics(reason="not_run"):
+         "per_class_metrics": {},
+         "train_sequence_class_counts": {"Normal": 0, "Faint": 0},
+         "eval_sequence_class_counts": {"Normal": 0, "Faint": 0},
++        "torch_device": None,
++        "warnings": [],
+     }
+ 
+ 
+@@ -453,6 +480,8 @@ def compare_model(spec, rows, args, output_dir, selected_class_counts):
+             try:
+                 metrics = train_and_evaluate(train_x, train_y, eval_x, eval_y, args, model_dir)
+                 metrics["status"] = "OK"
++            except CpuFallbackDisabledError:
++                raise
+             except Exception as exc:
+                 metrics = empty_metrics(f"failed: {exc}")
+     metrics["train_sequence_class_counts"] = train_sequence_counts
+@@ -532,6 +561,8 @@ def write_final_summary(output_dir, summaries, selected_class_counts=None):
+                 "recall": metrics.get("recall"),
+                 "f1_score": metrics.get("f1_score"),
+                 "metrics_status": metrics.get("status"),
++                "torch_device": metrics.get("torch_device"),
++                "warnings": "; ".join(metrics.get("warnings", [])),
+                 "runtime_seconds": item.get("runtime_seconds"),
+             }
+         )
+@@ -541,6 +572,7 @@ def write_final_summary(output_dir, summaries, selected_class_counts=None):
+         "selection_policy": "Prioritize Faint recall and stable sequence generation; fall_candidate_count is reference-only.",
+         "best_model_for_downstream_lstm": choose_best_model(summaries),
+         "selected_dataset_class_counts": selected_class_counts or {},
++        "warnings": sorted({warning for item in summaries for warning in item["lstm_metrics"].get("warnings", [])}),
+         "models": summaries,
+     }
+     (output_dir / "summary.json").write_text(json.dumps(final, indent=2, ensure_ascii=False), encoding="utf-8")
+@@ -572,11 +604,19 @@ def write_markdown_report(path, final, rows):
+         "",
+         "Not rerun by this script. Previous pose-only results should not be used alone to select the final fall/Faint classifier.",
+         "",
+-        "## Selected Dataset Class Counts",
+-        "",
+-        "| split | Normal | Faint | total |",
+-        "| --- | --- | --- | --- |",
+     ]
++    if final.get("warnings"):
++        lines.extend(["## Warnings", ""])
++        lines.extend(f"- {warning}" for warning in final["warnings"])
++        lines.append("")
++    lines.extend(
++        [
++            "## Selected Dataset Class Counts",
++            "",
++            "| split | Normal | Faint | total |",
++            "| --- | --- | --- | --- |",
++        ]
++    )
+     for split, counts in final.get("selected_dataset_class_counts", {}).items():
+         lines.append(f"| {split} | {counts.get('Normal', 0)} | {counts.get('Faint', 0)} | {counts.get('total', 0)} |")
+     lines.extend(
+diff --git a/tests/test_lstm_extractor_comparison.py b/tests/test_lstm_extractor_comparison.py
+index aa15069..aa22a17 100644
+--- a/tests/test_lstm_extractor_comparison.py
++++ b/tests/test_lstm_extractor_comparison.py
+@@ -1,3 +1,4 @@
++import json
+ import unittest
+ from tempfile import TemporaryDirectory
+ from pathlib import Path
+@@ -5,6 +6,8 @@ from pathlib import Path
+ import numpy as np
+ 
+ from benchmark.compare_lstm_extractors import (
++    CUDA_CPU_FALLBACK_WARNING,
++    CpuFallbackDisabledError,
+     choose_best_model,
+     classification_metrics,
+     dataset_class_counts,
+@@ -71,6 +74,12 @@ class LstmExtractorComparisonTest(unittest.TestCase):
+         self.assertEqual(normalize_torch_device("cuda:0", FakeTorch(False)), "cpu")
+         self.assertEqual(normalize_torch_device("auto", FakeTorch(False)), "cpu")
+ 
++    def test_normalize_torch_device_can_disable_cpu_fallback_for_requested_cuda(self):
++        with self.assertRaises(CpuFallbackDisabledError):
++            normalize_torch_device("0", FakeTorch(False), no_cpu_fallback=True)
++        with self.assertRaises(CpuFallbackDisabledError):
++            normalize_torch_device("cuda:0", FakeTorch(False), no_cpu_fallback=True)
++
+     def test_choose_best_model_prioritizes_faint_recall_then_sequences(self):
+         summaries = [
+             {
+@@ -190,6 +199,8 @@ class LstmExtractorComparisonTest(unittest.TestCase):
+                     "status": "OK",
+                     "train_sequence_class_counts": {"Normal": 2, "Faint": 1},
+                     "eval_sequence_class_counts": {"Normal": 1, "Faint": 1},
++                    "warnings": [CUDA_CPU_FALLBACK_WARNING],
++                    "torch_device": "cpu",
+                 },
+                 "runtime_seconds": 1.25,
+             }
+@@ -201,7 +212,10 @@ class LstmExtractorComparisonTest(unittest.TestCase):
+             write_final_summary(output_dir, summaries, selected_class_counts)
+ 
+             report = (output_dir / "report.md").read_text(encoding="utf-8")
++            summary = json.loads((output_dir / "summary.json").read_text(encoding="utf-8"))
+             self.assertIn("## Pose-Only Benchmark", report)
++            self.assertIn("## Warnings", report)
++            self.assertIn(CUDA_CPU_FALLBACK_WARNING, report)
+             self.assertIn("## Selected Dataset Class Counts", report)
+             self.assertIn("| train | 30 | 30 | 60 |", report)
+             self.assertIn("| val | 30 | 30 | 60 |", report)
+@@ -211,6 +225,7 @@ class LstmExtractorComparisonTest(unittest.TestCase):
+             self.assertIn("train Normal", report)
+             self.assertIn("| YOLOv11n-pose | 2 | 1 | 1 | 1 | 0.5 | 0.5 | 0.5 | 0.5 | OK |", report)
+             self.assertIn("YOLOv11n-pose", report)
++            self.assertEqual(summary["warnings"], [CUDA_CPU_FALLBACK_WARNING])
+             self.assertTrue((output_dir / "summary.csv").exists())
+             self.assertTrue((output_dir / "summary.json").exists())
+ 
+-- 
+2.54.0.windows.1
+
+
+From dc4ea556c56a4e79a0a51015d7e5a1b5d069b68a Mon Sep 17 00:00:00 2001
+From: "DESKTOP-58UIFAP\\user" <anjin0910@gmail.com>
+Date: Tue, 2 Jun 2026 13:55:17 +0900
+Subject: [PATCH 5/7] Improve Normal sampling for LSTM benchmark
+
+---
+ PROJECT_SUMMARY.md                      |   2 +
+ benchmark/compare_lstm_extractors.py    | 196 ++++++++++++++++++++++--
+ tests/test_lstm_extractor_comparison.py |  25 +++
+ 3 files changed, 212 insertions(+), 11 deletions(-)
+
+diff --git a/PROJECT_SUMMARY.md b/PROJECT_SUMMARY.md
+index 0de84ed..3dbebc4 100644
+--- a/PROJECT_SUMMARY.md
++++ b/PROJECT_SUMMARY.md
+@@ -185,6 +185,8 @@ Interpret the final result in this order: Faint recall, F1-score, false alarm te
+ 
+ The dataset is highly imbalanced, so the final benchmark applies `--max-rows-per-split` per class within each split. For example, `--max-rows-per-split 30` selects up to 30 Normal and 30 Faint rows for each of train, val, and test when available. The generated `summary.json` and `report.md` include selected class counts for train/val/test before reporting sequence generation and LSTM classification metrics.
+ 
++Normal clip sampling is deterministic but no longer raw row-order based. The sampler shuffles within split/class using `--seed`, prefers Normal clips from the same source context as selected Faint clips when frame ranges such as `__004816_004847` are available, and avoids overlapping Faint ranges. For midtests where early Normal clips produce no pose sequence, add `--prefilter-normal-clips`; this scans deterministic Normal candidates with the first configured pose detector and keeps candidates with both person detections and keypoints. The prefilter writes `normal_prefilter_diagnostics.csv`, and each model writes `train_clip_diagnostics.csv` / `eval_clip_diagnostics.csv` with label, path, parsed frame range, person detections, keypoints extracted, generated sequences, and zero-sequence reason.
++
+ ## Mock Edge AI MQTT Publisher
+ 
+ `mock_edge_ai.py` publishes random safety event JSON messages to the MQTT topic used by the local development pipeline.
+diff --git a/benchmark/compare_lstm_extractors.py b/benchmark/compare_lstm_extractors.py
+index f6481aa..9cffdf5 100644
+--- a/benchmark/compare_lstm_extractors.py
++++ b/benchmark/compare_lstm_extractors.py
+@@ -2,6 +2,7 @@ import argparse
+ import csv
+ import json
+ import random
++import re
+ import sys
+ import time
+ from collections import Counter
+@@ -57,6 +58,8 @@ def parse_args():
+     parser.add_argument("--detector-conf", type=float, default=0.15, help="YOLO Pose detector confidence threshold.")
+     parser.add_argument("--dry-run", action="store_true", help="Generate extractor sequence stats only; skip LSTM training.")
+     parser.add_argument("--no-cpu-fallback", action="store_true", help="Fail LSTM training when CUDA is requested but unavailable.")
++    parser.add_argument("--prefilter-normal-clips", action="store_true", help="Use the first configured detector to keep Normal clip candidates only when person/keypoint signal is present.")
++    parser.add_argument("--prefilter-max-frames", type=int, default=120, help="Maximum frames per Normal candidate during prefiltering.")
+     return parser.parse_args()
+ 
+ 
+@@ -84,22 +87,82 @@ def row_label_id(row):
+     return CLASS_TO_ID.get(label_name(row), 0)
+ 
+ 
+-def limit_rows_by_split_and_class(rows, max_rows_per_split):
++def limit_rows_by_split_and_class(rows, max_rows_per_split, seed=42):
+     if max_rows_per_split <= 0:
+         return rows
+-    counts = Counter()
+     limited = []
++    by_split = {}
+     for row in rows:
+         split = row.get("split") or "unspecified"
+-        label = label_name(row)
+-        key = (split, label)
+-        if counts[key] >= max_rows_per_split:
+-            continue
+-        limited.append(row)
+-        counts[key] += 1
++        by_split.setdefault(split, []).append(row)
++    for split in sorted(by_split):
++        split_rows = by_split[split]
++        faint_rows = [row for row in split_rows if label_name(row) == "Faint"]
++        normal_rows = [row for row in split_rows if label_name(row) == "Normal"]
++        selected_faint = deterministic_order(faint_rows, seed, split, "Faint")[:max_rows_per_split]
++        limited.extend(selected_faint)
++        limited.extend(order_normal_candidates(normal_rows, selected_faint, seed, split)[:max_rows_per_split])
+     return limited
+ 
+ 
++def deterministic_order(rows, seed, split, label):
++    rng = random.Random(f"{seed}:{split}:{label}")
++    decorated = [(rng.random(), index, row) for index, row in enumerate(rows)]
++    return [row for _, _, row in sorted(decorated)]
++
++
++def order_normal_candidates(rows, selected_faint_rows, seed, split):
++    rng = random.Random(f"{seed}:{split}:Normal")
++    faint_contexts = [row_context(row) for row in selected_faint_rows]
++    faint_sources = {item["source_key"] for item in faint_contexts if item["source_key"]}
++    decorated = []
++    for index, row in enumerate(rows):
++        context = row_context(row)
++        source_rank = 0 if context["source_key"] and context["source_key"] in faint_sources else 1
++        distance = nearest_non_overlapping_distance(context["frame_start"], context["frame_end"], faint_contexts)
++        decorated.append((source_rank, distance, rng.random(), index, row))
++    return [row for _, _, _, _, row in sorted(decorated)]
++
++
++def row_context(row):
++    video_path = row.get("_resolved_video_path") or row.get("video_path") or row.get("clip_path") or ""
++    start, end = parse_frame_range(video_path)
++    return {"source_key": source_key(video_path), "frame_start": start, "frame_end": end}
++
++
++def source_key(video_path):
++    stem = Path(str(video_path)).stem
++    return re.sub(r"__\d{6,}_\d{6,}$", "", stem)
++
++
++def parse_frame_range(video_path):
++    match = re.search(r"__(\d{6,})_(\d{6,})(?:$|\D)", Path(str(video_path)).stem)
++    if not match:
++        return None, None
++    return int(match.group(1)), int(match.group(2))
++
++
++def nearest_non_overlapping_distance(start, end, faint_contexts):
++    if start is None or end is None:
++        return 10**12
++    best = 10**12
++    for context in faint_contexts:
++        faint_start = context["frame_start"]
++        faint_end = context["frame_end"]
++        if faint_start is None or faint_end is None:
++            continue
++        if ranges_overlap(start, end, faint_start, faint_end):
++            continue
++        center = (start + end) / 2.0
++        faint_center = (faint_start + faint_end) / 2.0
++        best = min(best, abs(center - faint_center))
++    return best
++
++
++def ranges_overlap(first_start, first_end, second_start, second_end):
++    return max(first_start, second_start) <= min(first_end, second_end)
++
++
+ def dataset_class_counts(rows):
+     counts = {}
+     for row in rows:
+@@ -160,16 +223,20 @@ def collect_split_sequences(rows, split_name, detector, args):
+     for row in selected:
+         video_path = row.get("_resolved_video_path") or ""
+         clip_id = row.get("clip_id") or Path(row.get("video_path") or row.get("clip_path") or video_path).stem
++        frame_start, frame_end = parse_frame_range(video_path or row.get("video_path") or row.get("clip_path") or "")
+         clip = {
+             "clip_id": clip_id,
+             "split": split_name,
+             "label": label_name(row),
+             "video_path": video_path,
++            "frame_start": frame_start,
++            "frame_end": frame_end,
+             "frames_processed": 0,
+             "person_detections": 0,
+             "keypoints_extracted": 0,
+             "generated_sequences": 0,
+             "zero_sequence": True,
++            "reason_if_zero_sequence": "",
+             "fallback_usage": 0,
+             "missing_keypoints": 0,
+             "total_keypoints": 0,
+@@ -177,6 +244,7 @@ def collect_split_sequences(rows, split_name, detector, args):
+         }
+         if not video_path:
+             clip["error"] = "video_not_found"
++            clip["reason_if_zero_sequence"] = "video_not_found"
+             clip_summaries.append(clip)
+             continue
+         buffer = KeypointSequenceBuffer(args.sequence_length, args.sequence_stride)
+@@ -228,6 +296,8 @@ def collect_split_sequences(rows, split_name, detector, args):
+         if clip["frames_processed"] == 0 and not clip["error"]:
+             clip["error"] = "zero_frames_decoded (가능성: 코덱 불일치 또는 비디오 인코딩 오류)"
+         clip["zero_sequence"] = clip["generated_sequences"] == 0
++        if clip["zero_sequence"] and not clip["reason_if_zero_sequence"]:
++            clip["reason_if_zero_sequence"] = zero_sequence_reason(clip)
+         clip_summaries.append(clip)
+ 
+     for clip in clip_summaries:
+@@ -243,6 +313,106 @@ def collect_split_sequences(rows, split_name, detector, args):
+     return x_rows, y_rows, clip_summaries, sequence_rows, dict(totals)
+ 
+ 
++def zero_sequence_reason(clip):
++    if clip.get("error"):
++        return str(clip["error"])
++    if int(clip.get("person_detections", 0)) <= 0:
++        return "no_person_detections"
++    if int(clip.get("keypoints_extracted", 0)) <= 0:
++        return "no_keypoints_extracted"
++    return "no_complete_sequence_window"
++
++
++def write_clip_diagnostics_csv(path, clip_summaries):
++    rows = []
++    for clip in clip_summaries:
++        rows.append(
++            {
++                "label": clip.get("label"),
++                "video_path": clip.get("video_path"),
++                "frame_start": clip.get("frame_start"),
++                "frame_end": clip.get("frame_end"),
++                "person_detections": clip.get("person_detections"),
++                "keypoints_extracted": clip.get("keypoints_extracted"),
++                "generated_sequences": clip.get("generated_sequences"),
++                "reason_if_zero_sequence": clip.get("reason_if_zero_sequence", ""),
++            }
++        )
++    write_csv(path, rows)
++
++
++def prefilter_normal_rows(rows, args, specs, output_dir):
++    if not args.prefilter_normal_clips or args.max_rows_per_split <= 0:
++        return rows
++    detector = create_pose_detector(args.detector_mode, specs[0]["model"], args.device, args.imgsz, conf=args.detector_conf)
++    selected = []
++    diagnostics = []
++    by_split = {}
++    for row in rows:
++        split = row.get("split") or "unspecified"
++        by_split.setdefault(split, []).append(row)
++    for split in sorted(by_split):
++        split_rows = by_split[split]
++        faint_rows = [row for row in split_rows if label_name(row) == "Faint"]
++        selected_faint = deterministic_order(faint_rows, args.seed, split, "Faint")[: args.max_rows_per_split]
++        selected.extend(selected_faint)
++        normal_rows = [row for row in split_rows if label_name(row) == "Normal"]
++        accepted_normal = []
++        for row in order_normal_candidates(normal_rows, selected_faint, args.seed, split):
++            if len(accepted_normal) >= args.max_rows_per_split:
++                break
++            diagnostic = inspect_clip_signal(row, detector, args)
++            diagnostics.append(diagnostic)
++            if diagnostic["person_detections"] > 0 and diagnostic["keypoints_extracted"] > 0:
++                accepted_normal.append(row)
++        selected.extend(accepted_normal)
++    output_dir.mkdir(parents=True, exist_ok=True)
++    write_csv(output_dir / "normal_prefilter_diagnostics.csv", diagnostics)
++    return selected
++
++
++def inspect_clip_signal(row, detector, args):
++    video_path = row.get("_resolved_video_path") or ""
++    frame_start, frame_end = parse_frame_range(video_path or row.get("video_path") or row.get("clip_path") or "")
++    diagnostic = {
++        "label": label_name(row),
++        "video_path": video_path,
++        "frame_start": frame_start,
++        "frame_end": frame_end,
++        "person_detections": 0,
++        "keypoints_extracted": 0,
++        "generated_sequences": 0,
++        "reason_if_zero_sequence": "",
++    }
++    if not video_path:
++        diagnostic["reason_if_zero_sequence"] = "video_not_found"
++        return diagnostic
++    buffer = KeypointSequenceBuffer(args.sequence_length, args.sequence_stride)
++    frames_processed = 0
++    try:
++        with VideoReader(video_path) as reader:
++            while True:
++                packet = reader.read()
++                if packet is None:
++                    break
++                if args.prefilter_max_frames > 0 and frames_processed >= args.prefilter_max_frames:
++                    break
++                detections = detector.detect(packet.frame)
++                if args.detector_mode == "mock":
++                    detections = ensure_mock_keypoints(detections)
++                frames_processed += 1
++                diagnostic["person_detections"] += len(detections)
++                diagnostic["keypoints_extracted"] += sum(1 for item in detections if item.get("keypoints"))
++                if buffer.add(packet.frame_idx, detections):
++                    diagnostic["generated_sequences"] += 1
++    except Exception as exc:
++        diagnostic["reason_if_zero_sequence"] = str(exc)
++        return diagnostic
++    if diagnostic["generated_sequences"] <= 0:
++        diagnostic["reason_if_zero_sequence"] = zero_sequence_reason(diagnostic)
++    return diagnostic
++
++
+ def summarize_split(rows, y_rows, totals, requested_class_counts=None):
+     counts = Counter(ID_TO_CLASS[int(label)] for label in y_rows)
+     total_keypoints = totals.get("total_keypoints", 0)
+@@ -464,6 +634,8 @@ def compare_model(spec, rows, args, output_dir, selected_class_counts):
+     eval_x, eval_y, eval_clips, eval_sequences, eval_totals = collect_split_sequences(rows, args.eval_split, detector, args)
+     write_csv(model_dir / "train_sequences.csv", train_sequences)
+     write_csv(model_dir / "eval_sequences.csv", eval_sequences)
++    write_clip_diagnostics_csv(model_dir / "train_clip_diagnostics.csv", train_clips)
++    write_clip_diagnostics_csv(model_dir / "eval_clip_diagnostics.csv", eval_clips)
+     (model_dir / "train_clips.json").write_text(json.dumps(train_clips, indent=2, ensure_ascii=False), encoding="utf-8")
+     (model_dir / "eval_clips.json").write_text(json.dumps(eval_clips, indent=2, ensure_ascii=False), encoding="utf-8")
+     train_summary = summarize_split(rows, train_y, train_totals, selected_class_counts.get(args.train_split))
+@@ -660,7 +832,7 @@ def write_markdown_report(path, final, rows):
+             "",
+             "Evaluation priority: Faint recall, F1-score, false alarm tendency from confusion matrix, sequence stability, then runtime feasibility.",
+             "",
+-            "Per-model details are saved under each model directory as `summary.json`, `train_clips.json`, `eval_clips.json`, sequence CSV files, `history.json` when training runs, and `confusion_matrix.csv`.",
++            "Per-model details are saved under each model directory as `summary.json`, `train_clips.json`, `eval_clips.json`, `train_clip_diagnostics.csv`, `eval_clip_diagnostics.csv`, sequence CSV files, `history.json` when training runs, and `confusion_matrix.csv`.",
+         ]
+     )
+     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+@@ -669,9 +841,11 @@ def write_markdown_report(path, final, rows):
+ def main():
+     args = parse_args()
+     output_dir = Path(args.output_dir)
+-    rows = limit_rows_by_split_and_class(read_dataset_rows(args.metadata_csv), args.max_rows_per_split)
+-    selected_class_counts = dataset_class_counts(rows)
+     specs = parse_model_specs(args.models)
++    rows = read_dataset_rows(args.metadata_csv)
++    rows = prefilter_normal_rows(rows, args, specs, output_dir)
++    rows = limit_rows_by_split_and_class(rows, args.max_rows_per_split, seed=args.seed)
++    selected_class_counts = dataset_class_counts(rows)
+     summaries = [compare_model(spec, rows, args, output_dir, selected_class_counts) for spec in specs]
+     final = write_final_summary(output_dir, summaries, selected_class_counts)
+     print(json.dumps(final, indent=2, ensure_ascii=False))
+diff --git a/tests/test_lstm_extractor_comparison.py b/tests/test_lstm_extractor_comparison.py
+index aa22a17..6666b2e 100644
+--- a/tests/test_lstm_extractor_comparison.py
++++ b/tests/test_lstm_extractor_comparison.py
+@@ -15,10 +15,12 @@ from benchmark.compare_lstm_extractors import (
+     limit_rows_by_split_and_class,
+     lstm_readiness_status,
+     normalize_torch_device,
++    parse_frame_range,
+     parse_model_specs,
+     sequence_class_counts,
+     summarize_split,
+     write_final_summary,
++    zero_sequence_reason,
+ )
+ 
+ 
+@@ -159,6 +161,20 @@ class LstmExtractorComparisonTest(unittest.TestCase):
+         self.assertEqual(counts["val"], {"Normal": 3, "Faint": 3, "total": 6})
+         self.assertEqual(counts["test"], {"Normal": 3, "Faint": 3, "total": 6})
+ 
++    def test_limit_rows_by_split_and_class_prefers_normals_near_faint_context(self):
++        rows = [
++            {"split": "train", "label": "0", "_resolved_video_path": "cam01__000000_000031.mp4"},
++            {"split": "train", "label": "0", "_resolved_video_path": "cam01__000008_000039.mp4"},
++            {"split": "train", "label": "0", "_resolved_video_path": "cam01__004780_004811.mp4"},
++            {"split": "train", "label": "0", "_resolved_video_path": "cam01__004856_004887.mp4"},
++            {"split": "train", "label": "1", "_resolved_video_path": "cam01__004816_004847.mp4"},
++        ]
++
++        limited = limit_rows_by_split_and_class(rows, 2, seed=42)
++        normal_paths = [row["_resolved_video_path"] for row in limited if row["label"] == "0"]
++
++        self.assertEqual(normal_paths, ["cam01__004780_004811.mp4", "cam01__004856_004887.mp4"])
++
+     def test_limit_rows_by_split_and_class_keeps_available_minority_rows(self):
+         rows = [
+             {"split": "train", "label": "0", "clip_id": "n0"},
+@@ -171,6 +187,15 @@ class LstmExtractorComparisonTest(unittest.TestCase):
+ 
+         self.assertEqual(dataset_class_counts(limited)["train"], {"Normal": 2, "Faint": 1, "total": 3})
+ 
++    def test_parse_frame_range_reads_processed_clip_suffix(self):
++        self.assertEqual(parse_frame_range("100-1_cam01__004816_004847.mp4"), (4816, 4847))
++        self.assertEqual(parse_frame_range("no_range.mp4"), (None, None))
++
++    def test_zero_sequence_reason_distinguishes_no_person_and_no_keypoints(self):
++        self.assertEqual(zero_sequence_reason({"person_detections": 0, "keypoints_extracted": 0}), "no_person_detections")
++        self.assertEqual(zero_sequence_reason({"person_detections": 2, "keypoints_extracted": 0}), "no_keypoints_extracted")
++        self.assertEqual(zero_sequence_reason({"person_detections": 2, "keypoints_extracted": 2}), "no_complete_sequence_window")
++
+     def test_parse_model_specs_accepts_label_model_pairs(self):
+         specs = parse_model_specs("A:a.pt,B:b.pt")
+ 
+-- 
+2.54.0.windows.1
+
+
+From 8b079cdc0f162df9911ba0909531a5a18863a6ec Mon Sep 17 00:00:00 2001
+From: "DESKTOP-58UIFAP\\user" <anjin0910@gmail.com>
+Date: Tue, 2 Jun 2026 14:29:26 +0900
+Subject: [PATCH 6/7] Add LSTM prediction audit outputs
+
+---
+ PROJECT_SUMMARY.md                      |  10 +-
+ benchmark/compare_lstm_extractors.py    | 225 ++++++++++++++++++++++--
+ tests/test_lstm_extractor_comparison.py |  56 ++++++
+ 3 files changed, 274 insertions(+), 17 deletions(-)
+
+diff --git a/PROJECT_SUMMARY.md b/PROJECT_SUMMARY.md
+index 3dbebc4..68b64e1 100644
+--- a/PROJECT_SUMMARY.md
++++ b/PROJECT_SUMMARY.md
+@@ -165,9 +165,12 @@ python benchmark/compare_lstm_extractors.py \
+   --output-dir benchmark/results/lstm_final_11n_vs_26n \
+   --max-rows-per-split 30 \
+   --max-frames 0 \
+-  --epochs 10
++  --epochs 10 \
++  --no-cpu-fallback
+ ```
+ 
++For prediction-distribution auditing after a suspicious confusion matrix, add `--repeat-seeds 3`. This reruns only the LSTM train/eval phase for three deterministic seeds after sequence extraction, then reports mean/std for Faint recall and F1-score. The default Faint probability threshold audit reports thresholds `0.3,0.4,0.5,0.6,0.7`; override it with `--audit-thresholds` if needed.
++
+ Required outputs are written under:
+ 
+ ```text
+@@ -177,12 +180,17 @@ benchmark/results/lstm_final_11n_vs_26n/summary.json
+ benchmark/results/lstm_final_11n_vs_26n/report.md
+ benchmark/results/lstm_final_11n_vs_26n/<model>/summary.json
+ benchmark/results/lstm_final_11n_vs_26n/<model>/confusion_matrix.csv
++benchmark/results/lstm_final_11n_vs_26n/<model>/eval_predictions.csv
++benchmark/results/lstm_final_11n_vs_26n/<model>/threshold_audit.csv
++benchmark/results/lstm_final_11n_vs_26n/<model>/repeated_seed_audit.json
+ benchmark/results/lstm_final_11n_vs_26n/<model>/history.json
+ benchmark/results/lstm_final_11n_vs_26n/<model>/best.pt
+ ```
+ 
+ Interpret the final result in this order: Faint recall, F1-score, false alarm tendency from the confusion matrix, sequence stability, then runtime feasibility. The report separates pose-only context, sequence generation metrics, and LSTM classification metrics. The current local Codex environment verified the CLI/report workflow and unit tests, but the real smoke/full benchmark must run on the GPU PC because the local workspace does not contain `../ai_fall_experiments/data/metadata/metadata.csv` or the real YOLO/Torch runtime.
+ 
++The audit outputs do not change final model selection. `eval_predictions.csv` stores per-sequence `true_label`, `pred_label`, `normal_prob`, and `faint_prob`; `threshold_audit.csv` reports Faint recall/F1 at each configured probability threshold; `report.md` and `summary.json` include prediction counts and repeated-seed recall/F1 statistics when enabled.
++
+ The dataset is highly imbalanced, so the final benchmark applies `--max-rows-per-split` per class within each split. For example, `--max-rows-per-split 30` selects up to 30 Normal and 30 Faint rows for each of train, val, and test when available. The generated `summary.json` and `report.md` include selected class counts for train/val/test before reporting sequence generation and LSTM classification metrics.
+ 
+ Normal clip sampling is deterministic but no longer raw row-order based. The sampler shuffles within split/class using `--seed`, prefers Normal clips from the same source context as selected Faint clips when frame ranges such as `__004816_004847` are available, and avoids overlapping Faint ranges. For midtests where early Normal clips produce no pose sequence, add `--prefilter-normal-clips`; this scans deterministic Normal candidates with the first configured pose detector and keeps candidates with both person detections and keypoints. The prefilter writes `normal_prefilter_diagnostics.csv`, and each model writes `train_clip_diagnostics.csv` / `eval_clip_diagnostics.csv` with label, path, parsed frame range, person detections, keypoints extracted, generated sequences, and zero-sequence reason.
+diff --git a/benchmark/compare_lstm_extractors.py b/benchmark/compare_lstm_extractors.py
+index 9cffdf5..4932fb2 100644
+--- a/benchmark/compare_lstm_extractors.py
++++ b/benchmark/compare_lstm_extractors.py
+@@ -60,6 +60,8 @@ def parse_args():
+     parser.add_argument("--no-cpu-fallback", action="store_true", help="Fail LSTM training when CUDA is requested but unavailable.")
+     parser.add_argument("--prefilter-normal-clips", action="store_true", help="Use the first configured detector to keep Normal clip candidates only when person/keypoint signal is present.")
+     parser.add_argument("--prefilter-max-frames", type=int, default=120, help="Maximum frames per Normal candidate during prefiltering.")
++    parser.add_argument("--audit-thresholds", default="0.3,0.4,0.5,0.6,0.7", help="Comma-separated Faint probability thresholds for prediction audit.")
++    parser.add_argument("--repeat-seeds", type=int, default=1, help="Train/evaluate LSTM repeatedly for N deterministic seeds and report recall/F1 mean/std.")
+     return parser.parse_args()
+ 
+ 
+@@ -431,19 +433,27 @@ def summarize_split(rows, y_rows, totals, requested_class_counts=None):
+     }
+ 
+ 
+-def train_and_evaluate(train_x, train_y, eval_x, eval_y, args, output_dir):
++def parse_thresholds(raw):
++    thresholds = []
++    for item in str(raw).split(","):
++        item = item.strip()
++        if not item:
++            continue
++        thresholds.append(round(float(item), 6))
++    return thresholds or [0.5]
++
++
++def train_and_evaluate(train_x, train_y, eval_x, eval_y, eval_sequences, args, output_dir):
+     import torch
+-    from torch import nn
+     from torch.utils.data import DataLoader, TensorDataset
+ 
+-    set_seed(args.seed, torch)
+     resolved_device = normalize_torch_device(args.device, torch, no_cpu_fallback=args.no_cpu_fallback)
+     device = torch.device(resolved_device)
+     train_tensor = torch.from_numpy(np.stack(train_x).astype(np.float32))
+     train_labels = torch.from_numpy(np.asarray(train_y, dtype=np.int64))
+     eval_tensor = torch.from_numpy(np.stack(eval_x).astype(np.float32))
+     eval_labels = torch.from_numpy(np.asarray(eval_y, dtype=np.int64))
+-    train_loader = DataLoader(TensorDataset(train_tensor, train_labels), batch_size=args.batch_size, shuffle=True)
++    train_dataset = TensorDataset(train_tensor, train_labels)
+     eval_loader = DataLoader(TensorDataset(eval_tensor, eval_labels), batch_size=args.batch_size)
+     model_config = {
+         "input_size": int(train_tensor.shape[-1]),
+@@ -452,6 +462,40 @@ def train_and_evaluate(train_x, train_y, eval_x, eval_y, args, output_dir):
+         "num_classes": 2,
+         "dropout": 0.0,
+     }
++    thresholds = parse_thresholds(args.audit_thresholds)
++    seed_metrics = []
++    base_metrics = None
++    repeat_count = max(1, int(args.repeat_seeds))
++    for offset in range(repeat_count):
++        seed = int(args.seed) + offset
++        set_seed(seed, torch)
++        generator = torch.Generator()
++        generator.manual_seed(seed)
++        train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, generator=generator)
++        current_metrics = train_single_lstm(
++            train_loader=train_loader,
++            eval_loader=eval_loader,
++            model_config=model_config,
++            device=device,
++            args=args,
++            output_dir=output_dir if offset == 0 else None,
++            thresholds=thresholds,
++            eval_sequences=eval_sequences,
++        )
++        seed_metrics.append({"seed": seed, "faint_recall": current_metrics.get("recall"), "f1_score": current_metrics.get("f1_score")})
++        if offset == 0:
++            base_metrics = current_metrics
++    metrics = base_metrics or empty_metrics()
++    metrics["torch_device"] = str(device)
++    metrics["warnings"] = torch_device_warnings(args.device, torch, resolved_device)
++    metrics["repeated_seed_audit"] = repeated_seed_audit(seed_metrics)
++    return metrics
++
++
++def train_single_lstm(train_loader, eval_loader, model_config, device, args, output_dir, thresholds, eval_sequences):
++    import torch
++    from torch import nn
++
+     model = LSTMActionModel(**model_config).model.to(device)
+     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
+     criterion = nn.CrossEntropyLoss()
+@@ -472,12 +516,23 @@ def train_and_evaluate(train_x, train_y, eval_x, eval_y, args, output_dir):
+         metrics = evaluate_lstm(model, eval_loader, device)
+         record = {"epoch": epoch, "train_loss": total_loss / max(1, total), **metrics}
+         history.append(record)
+-    output_dir.mkdir(parents=True, exist_ok=True)
+-    torch.save({"model_state": model.state_dict(), "model_config": model_config, "classes": ["Normal", "Faint"]}, output_dir / "best.pt")
+-    (output_dir / "history.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
+-    metrics = history[-1] if history else empty_metrics()
+-    metrics["torch_device"] = str(device)
+-    metrics["warnings"] = torch_device_warnings(args.device, torch, resolved_device)
++    if output_dir is not None:
++        output_dir.mkdir(parents=True, exist_ok=True)
++        torch.save({"model_state": model.state_dict(), "model_config": model_config, "classes": ["Normal", "Faint"]}, output_dir / "best.pt")
++        (output_dir / "history.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
++    metrics = evaluate_lstm(model, eval_loader, device, include_probabilities=True)
++    predictions = metrics.pop("predictions", [])
++    metrics["threshold_audit"] = threshold_audit_metrics(
++        [row["true_id"] for row in predictions],
++        [row["faint_prob"] for row in predictions],
++        thresholds,
++    )
++    metrics["prediction_counts"] = prediction_counts([row["pred_id"] for row in predictions])
++    metrics["prediction_rows"] = prediction_audit_rows(
++        [row["true_id"] for row in predictions],
++        [[row["normal_prob"], row["faint_prob"]] for row in predictions],
++        eval_sequences,
++    )
+     return metrics
+ 
+ 
+@@ -510,19 +565,99 @@ def torch_device_warnings(device_arg, torch_module, resolved_device):
+     return []
+ 
+ 
+-def evaluate_lstm(model, loader, device):
++def evaluate_lstm(model, loader, device, include_probabilities=False):
+     import torch
+ 
+     model.eval()
+     y_true = []
+     y_pred = []
++    predictions = []
+     with torch.no_grad():
+         for x_batch, y_batch in loader:
+             logits = model(x_batch.to(device))
+-            pred = logits.argmax(dim=1).cpu().tolist()
++            probs = torch.softmax(logits, dim=1).cpu()
++            pred = probs.argmax(dim=1).tolist()
+             y_pred.extend(pred)
+-            y_true.extend(y_batch.cpu().tolist())
+-    return classification_metrics(y_true, y_pred)
++            true_batch = y_batch.cpu().tolist()
++            y_true.extend(true_batch)
++            if include_probabilities:
++                for truth, predicted, prob_row in zip(true_batch, pred, probs.tolist()):
++                    predictions.append(
++                        {
++                            "true_id": int(truth),
++                            "pred_id": int(predicted),
++                            "normal_prob": round(float(prob_row[0]), 6),
++                            "faint_prob": round(float(prob_row[1]), 6),
++                        }
++                    )
++    metrics = classification_metrics(y_true, y_pred)
++    if include_probabilities:
++        metrics["predictions"] = predictions
++    return metrics
++
++
++def prediction_audit_rows(y_true, probabilities, sequence_rows=None):
++    rows = []
++    sequence_rows = sequence_rows or []
++    for index, (truth, probs) in enumerate(zip(y_true, probabilities)):
++        normal_prob = round(float(probs[0]), 6)
++        faint_prob = round(float(probs[1]), 6)
++        pred_id = 1 if faint_prob > normal_prob else 0
++        sequence = sequence_rows[index] if index < len(sequence_rows) else {}
++        rows.append(
++            {
++                "sequence_index": index,
++                "clip_id": sequence.get("clip_id", ""),
++                "frame_start": sequence.get("frame_start", ""),
++                "frame_end": sequence.get("frame_end", ""),
++                "true_label": ID_TO_CLASS[int(truth)],
++                "pred_label": ID_TO_CLASS[pred_id],
++                "normal_prob": normal_prob,
++                "faint_prob": faint_prob,
++            }
++        )
++    return rows
++
++
++def prediction_counts(y_pred):
++    counts = Counter(ID_TO_CLASS[int(label)] for label in y_pred)
++    return {"Normal": counts.get("Normal", 0), "Faint": counts.get("Faint", 0)}
++
++
++def threshold_audit_metrics(y_true, faint_probs, thresholds):
++    rows = []
++    for threshold in thresholds:
++        y_pred = [1 if float(prob) >= float(threshold) else 0 for prob in faint_probs]
++        metrics = classification_metrics(y_true, y_pred)
++        rows.append(
++            {
++                "threshold": round(float(threshold), 6),
++                "faint_recall": metrics["recall"],
++                "f1_score": metrics["f1_score"],
++                "precision": metrics["precision"],
++                "predicted_normal": prediction_counts(y_pred)["Normal"],
++                "predicted_faint": prediction_counts(y_pred)["Faint"],
++            }
++        )
++    return rows
++
++
++def repeated_seed_audit(seed_metrics):
++    valid = [item for item in seed_metrics if item.get("faint_recall") is not None and item.get("f1_score") is not None]
++    enabled = len(seed_metrics) > 1
++    if not valid:
++        return {"enabled": enabled, "seeds": [item["seed"] for item in seed_metrics]}
++    recalls = np.asarray([float(item["faint_recall"]) for item in valid], dtype=np.float64)
++    f1_scores = np.asarray([float(item["f1_score"]) for item in valid], dtype=np.float64)
++    return {
++        "enabled": enabled,
++        "seeds": [item["seed"] for item in seed_metrics],
++        "faint_recall_mean": round(float(recalls.mean()), 6),
++        "faint_recall_std": round(float(recalls.std(ddof=0)), 6),
++        "f1_score_mean": round(float(f1_scores.mean()), 6),
++        "f1_score_std": round(float(f1_scores.std(ddof=0)), 6),
++        "runs": seed_metrics,
++    }
+ 
+ 
+ def classification_metrics(y_true, y_pred):
+@@ -580,6 +715,9 @@ def empty_metrics(reason="not_run"):
+         "per_class_metrics": {},
+         "train_sequence_class_counts": {"Normal": 0, "Faint": 0},
+         "eval_sequence_class_counts": {"Normal": 0, "Faint": 0},
++        "prediction_counts": {"Normal": 0, "Faint": 0},
++        "threshold_audit": [],
++        "repeated_seed_audit": {"enabled": False, "seeds": []},
+         "torch_device": None,
+         "warnings": [],
+     }
+@@ -650,7 +788,7 @@ def compare_model(spec, rows, args, output_dir, selected_class_counts):
+             metrics = empty_metrics(readiness_status)
+         else:
+             try:
+-                metrics = train_and_evaluate(train_x, train_y, eval_x, eval_y, args, model_dir)
++                metrics = train_and_evaluate(train_x, train_y, eval_x, eval_y, eval_sequences, args, model_dir)
+                 metrics["status"] = "OK"
+             except CpuFallbackDisabledError:
+                 raise
+@@ -660,6 +798,10 @@ def compare_model(spec, rows, args, output_dir, selected_class_counts):
+     metrics["eval_sequence_class_counts"] = eval_sequence_counts
+     runtime_seconds = round(time.perf_counter() - started, 4)
+     write_confusion_matrix_csv(model_dir / "confusion_matrix.csv", metrics.get("confusion_matrix", {}))
++    prediction_rows = metrics.pop("prediction_rows", [])
++    write_csv(model_dir / "eval_predictions.csv", prediction_rows)
++    write_csv(model_dir / "threshold_audit.csv", metrics.get("threshold_audit", []))
++    (model_dir / "repeated_seed_audit.json").write_text(json.dumps(metrics.get("repeated_seed_audit", {}), indent=2, ensure_ascii=False), encoding="utf-8")
+     summary = {
+         "model_label": spec["label"],
+         "pose_model": spec["model"] if args.detector_mode == "real" else "mock",
+@@ -732,6 +874,8 @@ def write_final_summary(output_dir, summaries, selected_class_counts=None):
+                 "precision": metrics.get("precision"),
+                 "recall": metrics.get("recall"),
+                 "f1_score": metrics.get("f1_score"),
++                "predicted_normal": metrics.get("prediction_counts", {}).get("Normal", 0),
++                "predicted_faint": metrics.get("prediction_counts", {}).get("Faint", 0),
+                 "metrics_status": metrics.get("status"),
+                 "torch_device": metrics.get("torch_device"),
+                 "warnings": "; ".join(metrics.get("warnings", [])),
+@@ -821,6 +965,55 @@ def write_markdown_report(path, final, rows):
+                 **row
+             )
+         )
++    lines.extend(
++        [
++            "",
++            "## Prediction Distribution Audit",
++            "",
++            "| model_label | predicted Normal | predicted Faint |",
++            "| --- | --- | --- |",
++        ]
++    )
++    for row in rows:
++        lines.append("| {model_label} | {predicted_normal} | {predicted_faint} |".format(**row))
++    lines.extend(
++        [
++            "",
++            "## Threshold Audit",
++            "",
++            "| model_label | threshold | Faint recall | F1-score | precision | predicted Normal | predicted Faint |",
++            "| --- | --- | --- | --- | --- | --- | --- |",
++        ]
++    )
++    for item in final.get("models", []):
++        for audit_row in item.get("lstm_metrics", {}).get("threshold_audit", []):
++            lines.append(
++                f"| {item.get('model_label')} | {audit_row.get('threshold')} | {audit_row.get('faint_recall')} | {audit_row.get('f1_score')} | {audit_row.get('precision')} | {audit_row.get('predicted_normal')} | {audit_row.get('predicted_faint')} |"
++            )
++    lines.extend(
++        [
++            "",
++            "## Repeated Seed Audit",
++            "",
++            "| model_label | seeds | Faint recall mean | Faint recall std | F1-score mean | F1-score std |",
++            "| --- | --- | --- | --- | --- | --- |",
++        ]
++    )
++    for item in final.get("models", []):
++        seed_audit = item.get("lstm_metrics", {}).get("repeated_seed_audit", {})
++        if not seed_audit.get("enabled"):
++            continue
++        seeds = ",".join(str(seed) for seed in seed_audit.get("seeds", []))
++        lines.append(
++            "| {model_label} | {seeds} | {recall_mean} | {recall_std} | {f1_mean} | {f1_std} |".format(
++                model_label=item.get("model_label"),
++                seeds=seeds,
++                recall_mean=seed_audit.get("faint_recall_mean"),
++                recall_std=seed_audit.get("faint_recall_std"),
++                f1_mean=seed_audit.get("f1_score_mean"),
++                f1_std=seed_audit.get("f1_score_std"),
++            )
++        )
+     lines.extend(
+         [
+             "",
+@@ -832,7 +1025,7 @@ def write_markdown_report(path, final, rows):
+             "",
+             "Evaluation priority: Faint recall, F1-score, false alarm tendency from confusion matrix, sequence stability, then runtime feasibility.",
+             "",
+-            "Per-model details are saved under each model directory as `summary.json`, `train_clips.json`, `eval_clips.json`, `train_clip_diagnostics.csv`, `eval_clip_diagnostics.csv`, sequence CSV files, `history.json` when training runs, and `confusion_matrix.csv`.",
++            "Per-model details are saved under each model directory as `summary.json`, `train_clips.json`, `eval_clips.json`, `train_clip_diagnostics.csv`, `eval_clip_diagnostics.csv`, sequence CSV files, `eval_predictions.csv`, `threshold_audit.csv`, `repeated_seed_audit.json`, `history.json` when training runs, and `confusion_matrix.csv`.",
+         ]
+     )
+     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+diff --git a/tests/test_lstm_extractor_comparison.py b/tests/test_lstm_extractor_comparison.py
+index 6666b2e..e6526df 100644
+--- a/tests/test_lstm_extractor_comparison.py
++++ b/tests/test_lstm_extractor_comparison.py
+@@ -17,8 +17,11 @@ from benchmark.compare_lstm_extractors import (
+     normalize_torch_device,
+     parse_frame_range,
+     parse_model_specs,
++    prediction_audit_rows,
++    prediction_counts,
+     sequence_class_counts,
+     summarize_split,
++    threshold_audit_metrics,
+     write_final_summary,
+     zero_sequence_reason,
+ )
+@@ -65,6 +68,40 @@ class LstmExtractorComparisonTest(unittest.TestCase):
+         self.assertEqual(metrics["per_class_metrics"]["Normal"]["recall"], 0.5)
+         self.assertEqual(metrics["per_class_metrics"]["Faint"]["recall"], 0.5)
+ 
++    def test_prediction_audit_rows_include_labels_and_probabilities(self):
++        rows = prediction_audit_rows(
++            y_true=[0, 1],
++            probabilities=[[0.8, 0.2], [0.4, 0.6]],
++            sequence_rows=[
++                {"clip_id": "n0", "frame_start": 0, "frame_end": 15},
++                {"clip_id": "f0", "frame_start": 100, "frame_end": 115},
++            ],
++        )
++
++        self.assertEqual(rows[0]["true_label"], "Normal")
++        self.assertEqual(rows[0]["pred_label"], "Normal")
++        self.assertEqual(rows[0]["normal_prob"], 0.8)
++        self.assertEqual(rows[0]["faint_prob"], 0.2)
++        self.assertEqual(rows[1]["clip_id"], "f0")
++        self.assertEqual(rows[1]["pred_label"], "Faint")
++
++    def test_threshold_audit_metrics_reports_faint_recall_and_f1(self):
++        audit = threshold_audit_metrics(
++            y_true=[0, 0, 1, 1],
++            faint_probs=[0.2, 0.45, 0.35, 0.65],
++            thresholds=[0.3, 0.5],
++        )
++
++        self.assertEqual(audit[0]["threshold"], 0.3)
++        self.assertEqual(audit[0]["faint_recall"], 1.0)
++        self.assertEqual(audit[0]["f1_score"], 0.8)
++        self.assertEqual(audit[1]["threshold"], 0.5)
++        self.assertEqual(audit[1]["faint_recall"], 0.5)
++        self.assertEqual(audit[1]["f1_score"], 0.666667)
++
++    def test_prediction_counts_reports_predicted_normal_and_faint(self):
++        self.assertEqual(prediction_counts([0, 1, 1, 0, 1]), {"Normal": 2, "Faint": 3})
++
+     def test_normalize_torch_device_converts_numeric_gpu_id_to_cuda_device(self):
+         self.assertEqual(normalize_torch_device("0", FakeTorch(True)), "cuda:0")
+         self.assertEqual(normalize_torch_device(0, FakeTorch(True)), "cuda:0")
+@@ -221,6 +258,19 @@ class LstmExtractorComparisonTest(unittest.TestCase):
+                     "precision": 0.5,
+                     "recall": 0.5,
+                     "f1_score": 0.5,
++                    "prediction_counts": {"Normal": 3, "Faint": 2},
++                    "threshold_audit": [
++                        {"threshold": 0.3, "faint_recall": 0.75, "f1_score": 0.6},
++                        {"threshold": 0.5, "faint_recall": 0.5, "f1_score": 0.5},
++                    ],
++                    "repeated_seed_audit": {
++                        "enabled": True,
++                        "seeds": [42, 43, 44],
++                        "faint_recall_mean": 0.6,
++                        "faint_recall_std": 0.1,
++                        "f1_score_mean": 0.55,
++                        "f1_score_std": 0.05,
++                    },
+                     "status": "OK",
+                     "train_sequence_class_counts": {"Normal": 2, "Faint": 1},
+                     "eval_sequence_class_counts": {"Normal": 1, "Faint": 1},
+@@ -249,6 +299,12 @@ class LstmExtractorComparisonTest(unittest.TestCase):
+             self.assertIn("## LSTM Classification Benchmark", report)
+             self.assertIn("train Normal", report)
+             self.assertIn("| YOLOv11n-pose | 2 | 1 | 1 | 1 | 0.5 | 0.5 | 0.5 | 0.5 | OK |", report)
++            self.assertIn("## Prediction Distribution Audit", report)
++            self.assertIn("| YOLOv11n-pose | 3 | 2 |", report)
++            self.assertIn("## Threshold Audit", report)
++            self.assertIn("| YOLOv11n-pose | 0.3 | 0.75 | 0.6 |", report)
++            self.assertIn("## Repeated Seed Audit", report)
++            self.assertIn("| YOLOv11n-pose | 42,43,44 | 0.6 | 0.1 | 0.55 | 0.05 |", report)
+             self.assertIn("YOLOv11n-pose", report)
+             self.assertEqual(summary["warnings"], [CUDA_CPU_FALLBACK_WARNING])
+             self.assertTrue((output_dir / "summary.csv").exists())
+-- 
+2.54.0.windows.1
+
+
+From d2ae93fc79929b4cf00344efb2134aa216abff66 Mon Sep 17 00:00:00 2001
+From: "DESKTOP-58UIFAP\\user" <anjin0910@gmail.com>
+Date: Tue, 2 Jun 2026 15:02:59 +0900
+Subject: [PATCH 7/7] Wire YOLO26n LSTM runtime inference
+
+---
+ .env.example                          |  4 +-
+ PROJECT_SUMMARY.md                    | 31 +++++++--
+ ai/action/classifier.py               | 99 +++++++++++++++++++++++++--
+ ai/action/keypoint_sequence_buffer.py |  5 +-
+ config.py                             |  2 +-
+ scripts/run_rtsp_inference.py         | 24 +++++--
+ scripts/serve_ai_overlay.py           | 23 +++++--
+ tests/test_lstm_action_classifier.py  | 41 ++++++++++-
+ tests/test_rtsp_inference.py          |  6 +-
+ 9 files changed, 204 insertions(+), 31 deletions(-)
+
+diff --git a/.env.example b/.env.example
+index 2b8d88c..a8f56c5 100644
+--- a/.env.example
++++ b/.env.example
+@@ -9,7 +9,7 @@ PUBLISH_INTERVAL_SECONDS=3
+ RTSP_URL=rtsp://localhost:8554/cam01
+ CAMERA_ID=cam_01
+ DETECTOR_MODE=mock
+-YOLO_MODEL=yolov8n-pose.pt
++YOLO_MODEL=yolo26n-pose.pt
+ YOLO_DEVICE=auto
+ FRAME_QUEUE_SIZE=2
+ ALLOW_MOCK_FALLBACK=true
+@@ -25,6 +25,8 @@ SEQUENCE_STRIDE=8
+ RESIZE_SIZE=224
+ ACTION_MODEL=
+ ACTION_DEVICE=auto
++ACTION_THRESHOLD=0.5
++CLASSIFIER_INPUT=keypoints
+ SEQUENCE_MAX_TRACK_AGE_SECONDS=5
+ EVENT_CLIP_ENABLED=true
+ EVENT_CLIP_PRE_FRAMES=150
+diff --git a/PROJECT_SUMMARY.md b/PROJECT_SUMMARY.md
+index 68b64e1..745d068 100644
+--- a/PROJECT_SUMMARY.md
++++ b/PROJECT_SUMMARY.md
+@@ -191,6 +191,21 @@ Interpret the final result in this order: Faint recall, F1-score, false alarm te
+ 
+ The audit outputs do not change final model selection. `eval_predictions.csv` stores per-sequence `true_label`, `pred_label`, `normal_prob`, and `faint_prob`; `threshold_audit.csv` reports Faint recall/F1 at each configured probability threshold; `report.md` and `summary.json` include prediction counts and repeated-seed recall/F1 statistics when enabled.
+ 
++YOLO26n-pose is the selected pose extractor for the operational RTSP/LSTM path. The runtime defaults now use `yolo26n-pose.pt`, keypoint-sequence classifier input, and a configurable Faint probability threshold. Point `--action-model` at the selected YOLO26n LSTM checkpoint, for example:
++
++```bash
++python scripts/run_rtsp_inference.py \
++  --rtsp-url rtsp://localhost:8554/cam1 \
++  --detector-mode real \
++  --yolo-model yolo26n-pose.pt \
++  --device 0 \
++  --action-model benchmark/results/lstm_final_11n_vs_26n_audit/YOLO26n-pose/best.pt \
++  --action-device 0 \
++  --action-threshold 0.5 \
++  --classifier-input keypoints \
++  --dry-run
++```
++
+ The dataset is highly imbalanced, so the final benchmark applies `--max-rows-per-split` per class within each split. For example, `--max-rows-per-split 30` selects up to 30 Normal and 30 Faint rows for each of train, val, and test when available. The generated `summary.json` and `report.md` include selected class counts for train/val/test before reporting sequence generation and LSTM classification metrics.
+ 
+ Normal clip sampling is deterministic but no longer raw row-order based. The sampler shuffles within split/class using `--seed`, prefers Normal clips from the same source context as selected Faint clips when frame ranges such as `__004816_004847` are available, and avoids overlapping Faint ranges. For midtests where early Normal clips produce no pose sequence, add `--prefilter-normal-clips`; this scans deterministic Normal candidates with the first configured pose detector and keeps candidates with both person detections and keypoints. The prefilter writes `normal_prefilter_diagnostics.csv`, and each model writes `train_clip_diagnostics.csv` / `eval_clip_diagnostics.csv` with label, path, parsed frame range, person detections, keypoints extracted, generated sequences, and zero-sequence reason.
+@@ -315,7 +330,7 @@ The frame queue is intentionally small and drops old frames so inference latency
+ RTSP_URL=rtsp://localhost:8554/cam01
+ CAMERA_ID=cam_01
+ DETECTOR_MODE=mock
+-YOLO_MODEL=yolov8n-pose.pt
++YOLO_MODEL=yolo26n-pose.pt
+ YOLO_DEVICE=auto
+ FRAME_QUEUE_SIZE=2
+ ALLOW_MOCK_FALLBACK=true
+@@ -352,7 +367,7 @@ python main.py --once
+ Run with RTSP and YOLO pose model:
+ 
+ ```bash
+-DETECTOR_MODE=yolo RTSP_URL=rtsp://localhost:8554/cam01 YOLO_MODEL=yolov8n-pose.pt python main.py
++DETECTOR_MODE=yolo RTSP_URL=rtsp://localhost:8554/cam01 YOLO_MODEL=yolo26n-pose.pt python main.py
+ ```
+ 
+ On Windows PowerShell:
+@@ -360,7 +375,7 @@ On Windows PowerShell:
+ ```powershell
+ $env:DETECTOR_MODE="yolo"
+ $env:RTSP_URL="rtsp://localhost:8554/cam01"
+-$env:YOLO_MODEL="yolov8n-pose.pt"
++$env:YOLO_MODEL="yolo26n-pose.pt"
+ python main.py
+ ```
+ 
+@@ -394,7 +409,7 @@ Expected event shape:
+     "confidence": 0.87,
+     "rule_score": 0.91,
+     "pose_state": "LYING",
+-    "model_name": "yolov8n-pose"
++    "model_name": "yolo26n-pose"
+   }
+ }
+ ```
+@@ -596,7 +611,11 @@ Use the real YOLO pose detector when the pose model and dependencies are availab
+ python scripts/run_rtsp_inference.py \
+   --rtsp-url rtsp://localhost:8554/cam1 \
+   --detector-mode real \
+-  --yolo-model yolov8n-pose.pt \
++  --yolo-model yolo26n-pose.pt \
++  --action-model benchmark/results/lstm_final_11n_vs_26n_audit/YOLO26n-pose/best.pt \
++  --action-device 0 \
++  --action-threshold 0.5 \
++  --classifier-input keypoints \
+   --dry-run \
+   --max-frames 60
+ ```
+@@ -619,7 +638,7 @@ Open:
+ http://localhost:8010/stream
+ ```
+ 
+-The overlay shows person bbox, skeleton/keypoints when present, current Normal/Faint-style action label, confidence, frame count, bbox count, keypoint count, sequence count, prediction count, and event count. Use `--detector-mode real --yolo-model yolov8n-pose.pt` when YOLO Pose dependencies and model files are available.
++The overlay shows person bbox, skeleton/keypoints when present, current Normal/Faint-style action label, confidence, frame count, bbox count, keypoint count, sequence count, prediction count, and event count. Use `--detector-mode real --yolo-model yolo26n-pose.pt --action-model benchmark/results/lstm_final_11n_vs_26n_audit/YOLO26n-pose/best.pt --classifier-input keypoints` when YOLO Pose dependencies, Torch, and the selected LSTM checkpoint are available.
+ 
+ The dry-run prints an RTSP publish plan using local-only URLs. To actually publish the four local videos to MediaMTX on the GPU PC, start the local RTSP server first, then opt in explicitly:
+ 
+diff --git a/ai/action/classifier.py b/ai/action/classifier.py
+index 5aa7be1..a4912be 100644
+--- a/ai/action/classifier.py
++++ b/ai/action/classifier.py
+@@ -33,17 +33,15 @@ class LSTMActionModel:
+ 
+ 
+ class LSTMActionClassifier(ActionClassifier):
+-    def __init__(self, checkpoint_path, device="auto"):
++    def __init__(self, checkpoint_path, device="auto", faint_threshold=0.5):
+         try:
+             import torch
+         except ImportError as exc:
+             raise RuntimeError(f"torch is required for LSTM action inference: {exc}") from exc
+ 
+         self.torch = torch
+-        if device == "auto":
+-            self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+-        else:
+-            self.device = torch.device(device)
++        self.device = torch.device(normalize_torch_device(device, torch))
++        self.faint_threshold = float(faint_threshold)
+         checkpoint = torch.load(checkpoint_path, map_location="cpu")
+         self.classes = checkpoint.get("classes", ["Normal", "Fall"])
+         model_cfg = checkpoint["model_config"]
+@@ -51,18 +49,26 @@ class LSTMActionClassifier(ActionClassifier):
+         wrapper.model.load_state_dict(checkpoint["model_state"])
+         self.model = wrapper.model.to(self.device)
+         self.model.eval()
++        self.input_size = int(model_cfg.get("input_size", checkpoint.get("feature_size", 32)))
+         self.feature_size = int(checkpoint.get("feature_size", 32))
+ 
+     def predict(self, sequence):
+         if not sequence:
+             return None
+-        features = crops_to_features(sequence["crops"], self.feature_size)
++        features = sequence_to_lstm_features(sequence, self.input_size, self.feature_size)
+         x = self.torch.from_numpy(features).unsqueeze(0).to(self.device)
+         with self.torch.no_grad():
+             logits = self.model(x)
+             probs = self.torch.softmax(logits, dim=1)[0]
+             score, idx = self.torch.max(probs, dim=0)
+-        return {"label": self.classes[int(idx.item())], "score": float(score.item())}
++        probabilities = {label: float(probs[class_idx].item()) for class_idx, label in enumerate(self.classes)}
++        threshold_result = threshold_prediction(probabilities, self.faint_threshold)
++        if threshold_result:
++            label, score_value = threshold_result
++        else:
++            label = self.classes[int(idx.item())]
++            score_value = float(score.item())
++        return {"label": label, "score": float(score_value), "probabilities": probabilities}
+ 
+ 
+ class MockActionClassifier(ActionClassifier):
+@@ -91,3 +97,82 @@ def crops_to_features(crops, feature_size=32):
+         small = cv2.resize(gray, (feature_size, feature_size), interpolation=cv2.INTER_AREA)
+         features.append((small.astype(np.float32) / 255.0).reshape(-1))
+     return np.stack(features, axis=0).astype(np.float32)
++
++
++def sequence_to_lstm_features(sequence, input_size=51, crop_feature_size=32):
++    if "detections" in sequence and int(input_size) == 51:
++        return keypoint_sequence_to_features(sequence)
++    if "crops" in sequence:
++        return crops_to_features(sequence["crops"], crop_feature_size)
++    if "detections" in sequence:
++        return keypoint_sequence_to_features(sequence)
++    raise RuntimeError("sequence must contain keypoint detections or crops")
++
++
++def keypoint_sequence_to_features(sequence, keypoint_count=17):
++    try:
++        import numpy as np
++    except ImportError as exc:
++        raise RuntimeError(f"numpy is required for keypoint LSTM features: {exc}") from exc
++
++    detections = sequence.get("detections") or []
++    frame_shapes = sequence.get("frame_shapes") or []
++    rows = []
++    for index, detection in enumerate(detections):
++        shape = frame_shapes[index] if index < len(frame_shapes) else None
++        rows.append(keypoints_to_feature(detection, shape, keypoint_count))
++    return np.stack(rows, axis=0).astype(np.float32)
++
++
++def keypoints_to_feature(detection, frame_shape=None, keypoint_count=17):
++    try:
++        import numpy as np
++    except ImportError as exc:
++        raise RuntimeError(f"numpy is required for keypoint LSTM features: {exc}") from exc
++
++    width, height = infer_frame_size(detection, frame_shape)
++    keypoints = detection.get("keypoints") or []
++    features = []
++    for idx in range(keypoint_count):
++        if idx >= len(keypoints) or keypoints[idx] is None:
++            features.extend([0.0, 0.0, 0.0])
++            continue
++        point = keypoints[idx]
++        features.extend(
++            [
++                float(point.get("x", 0.0)) / max(float(width), 1.0),
++                float(point.get("y", 0.0)) / max(float(height), 1.0),
++                float(point.get("confidence", 0.0)),
++            ]
++        )
++    return np.asarray(features, dtype=np.float32)
++
++
++def infer_frame_size(detection, frame_shape=None):
++    if frame_shape and len(frame_shape) >= 2:
++        return float(frame_shape[1]), float(frame_shape[0])
++    bbox = detection.get("bbox") or [0, 0, 1, 1]
++    if len(bbox) >= 4:
++        return max(float(bbox[2]), 1.0), max(float(bbox[3]), 1.0)
++    return 1.0, 1.0
++
++
++def normalize_torch_device(device, torch_module):
++    raw = str(device).strip().lower()
++    if raw in {"auto", ""}:
++        return "cuda:0" if torch_module.cuda.is_available() else "cpu"
++    if raw.isdigit():
++        return f"cuda:{raw}" if torch_module.cuda.is_available() else "cpu"
++    if raw.startswith("cuda") and not torch_module.cuda.is_available():
++        return "cpu"
++    return raw
++
++
++def threshold_prediction(probabilities, faint_threshold):
++    if "Faint" not in probabilities or "Normal" not in probabilities:
++        return None
++    faint_prob = float(probabilities["Faint"])
++    normal_prob = float(probabilities["Normal"])
++    if faint_prob >= float(faint_threshold):
++        return "Faint", faint_prob
++    return "Normal", normal_prob
+diff --git a/ai/action/keypoint_sequence_buffer.py b/ai/action/keypoint_sequence_buffer.py
+index 738b344..91aa643 100644
+--- a/ai/action/keypoint_sequence_buffer.py
++++ b/ai/action/keypoint_sequence_buffer.py
+@@ -5,11 +5,11 @@ class KeypointSequenceBuffer:
+         self._frames = []
+         self._last_emit_frame = -1
+ 
+-    def add(self, frame_idx, detections):
++    def add(self, frame_idx, detections, frame_shape=None):
+         detection = best_detection_with_keypoints(detections)
+         if detection is None:
+             return None
+-        self._frames.append({"frame_idx": int(frame_idx), "detection": detection})
++        self._frames.append({"frame_idx": int(frame_idx), "detection": detection, "frame_shape": frame_shape})
+         self._frames = self._frames[-self.sequence_length :]
+         if len(self._frames) < self.sequence_length:
+             return None
+@@ -20,6 +20,7 @@ class KeypointSequenceBuffer:
+             "start_frame": self._frames[0]["frame_idx"],
+             "end_frame": self._frames[-1]["frame_idx"],
+             "detections": [item["detection"] for item in self._frames],
++            "frame_shapes": [item["frame_shape"] for item in self._frames],
+             "bbox": self._frames[-1]["detection"].get("bbox"),
+             "keypoints": self._frames[-1]["detection"].get("keypoints"),
+         }
+diff --git a/config.py b/config.py
+index 73f0f33..11abd47 100644
+--- a/config.py
++++ b/config.py
+@@ -64,7 +64,7 @@ def load_settings():
+         rtsp_url=os.getenv("RTSP_URL", "rtsp://localhost:8554/cam01"),
+         camera_id=os.getenv("CAMERA_ID", "cam_01"),
+         detector_mode=os.getenv("DETECTOR_MODE", "mock").strip().lower(),
+-        yolo_model=os.getenv("YOLO_MODEL", "yolov8n-pose.pt"),
++        yolo_model=os.getenv("YOLO_MODEL", "yolo26n-pose.pt"),
+         yolo_device=os.getenv("YOLO_DEVICE", "auto"),
+         frame_queue_size=get_env_int("FRAME_QUEUE_SIZE", 2),
+         reconnect_delay_seconds=get_env_float("RTSP_RECONNECT_DELAY_SECONDS", 3),
+diff --git a/scripts/run_rtsp_inference.py b/scripts/run_rtsp_inference.py
+index 0d57f39..5fb617d 100644
+--- a/scripts/run_rtsp_inference.py
++++ b/scripts/run_rtsp_inference.py
+@@ -21,9 +21,9 @@ def create_detector(mode, model, device, imgsz=640):
+     return YoloPoseDetector(model, device=device, imgsz=imgsz)
+ 
+ 
+-def create_classifier(action_model, device):
++def create_classifier(action_model, device, action_threshold=0.5):
+     if action_model:
+-        return LSTMActionClassifier(action_model, device=device), "lstm_checkpoint"
++        return LSTMActionClassifier(action_model, device=device, faint_threshold=action_threshold), "lstm_checkpoint"
+     return MockActionClassifier(default_label="Faint", score=0.80), "mock_lstm"
+ 
+ 
+@@ -75,11 +75,16 @@ def ensure_mock_keypoints(detections):
+     return detections
+ 
+ 
++def is_alert_prediction(prediction):
++    return bool(prediction) and prediction.get("label") != "Normal"
++
++
+ def run(args):
+     detector = create_detector(args.detector_mode, args.yolo_model, args.device, getattr(args, "imgsz", 640))
+-    classifier, classifier_mode = create_classifier(args.action_model, args.action_device)
++    classifier, classifier_mode = create_classifier(args.action_model, args.action_device, getattr(args, "action_threshold", 0.5))
+     keypoint_buffer = KeypointSequenceBuffer(args.sequence_length, args.sequence_stride)
+-    crop_buffer = CropSequenceBuffer(args.sequence_length, args.sequence_stride, args.resize_size) if args.action_model else None
++    classifier_input = getattr(args, "classifier_input", "keypoints")
++    crop_buffer = CropSequenceBuffer(args.sequence_length, args.sequence_stride, args.resize_size) if args.action_model and classifier_input == "crops" else None
+     publisher = ConsoleEventPublisher()
+     writer = None
+     summary = {
+@@ -89,6 +94,8 @@ def run(args):
+         "detector_mode": args.detector_mode,
+         "yolo_model": args.yolo_model if args.detector_mode == "real" else None,
+         "classifier_mode": classifier_mode,
++        "classifier_input": classifier_input,
++        "action_threshold": getattr(args, "action_threshold", 0.5),
+         "frames_processed": 0,
+         "bbox_detections": 0,
+         "keypoints_extracted": 0,
+@@ -115,14 +122,15 @@ def run(args):
+             summary["bbox_detections"] += len(boxes)
+             summary["keypoints_extracted"] += sum(1 for item in detections if item.get("keypoints"))
+ 
+-            keypoint_sequence = keypoint_buffer.add(packet.frame_idx, detections)
++            keypoint_sequence = keypoint_buffer.add(packet.frame_idx, detections, packet.frame.shape)
+             crop_sequence = crop_buffer.add(packet.frame_idx, packet.frame, boxes) if crop_buffer else None
+-            classifier_sequence = crop_sequence if crop_buffer else keypoint_sequence
++            classifier_sequence = crop_sequence if crop_sequence else keypoint_sequence
+             prediction = classifier.predict(classifier_sequence) if classifier_sequence else None
+             if keypoint_sequence:
+                 summary["generated_sequences"] += 1
+             if prediction:
+                 summary["lstm_predictions"] += 1
++            if is_alert_prediction(prediction):
+                 payload = build_event_payload(
+                     camera_id=args.camera_id,
+                     frame_idx=packet.frame_idx,
+@@ -165,11 +173,13 @@ def main():
+     parser.add_argument("--dry-run", action="store_true")
+     parser.add_argument("--output", default=None)
+     parser.add_argument("--overlay-output", default=None)
+-    parser.add_argument("--yolo-model", default="yolov8n-pose.pt")
++    parser.add_argument("--yolo-model", default="yolo26n-pose.pt")
+     parser.add_argument("--device", default="auto")
+     parser.add_argument("--imgsz", type=int, default=640)
+     parser.add_argument("--action-model", default=None)
+     parser.add_argument("--action-device", default="auto")
++    parser.add_argument("--action-threshold", type=float, default=0.5, help="Faint probability threshold for LSTM checkpoints with Normal/Faint classes.")
++    parser.add_argument("--classifier-input", choices=["keypoints", "crops"], default="keypoints")
+     parser.add_argument("--sequence-length", type=int, default=8)
+     parser.add_argument("--sequence-stride", type=int, default=4)
+     parser.add_argument("--resize-size", type=int, default=224)
+diff --git a/scripts/serve_ai_overlay.py b/scripts/serve_ai_overlay.py
+index 919c0fc..09c2961 100644
+--- a/scripts/serve_ai_overlay.py
++++ b/scripts/serve_ai_overlay.py
+@@ -11,11 +11,12 @@ from urllib.parse import urlparse
+ 
+ sys.path.append(str(Path(__file__).resolve().parents[1]))
+ 
++from ai.action.keypoint_sequence_buffer import KeypointSequenceBuffer
+ from ai.action.sequence_buffer import CropSequenceBuffer
+ from ai.publishers.event_publisher import build_event_payload
+ from ai.streams.video_reader import VideoReader
+ from ai.visualization.draw import draw_overlay
+-from scripts.run_rtsp_inference import create_classifier, create_detector, ensure_mock_keypoints, normalize_detections
++from scripts.run_rtsp_inference import create_classifier, create_detector, ensure_mock_keypoints, is_alert_prediction, normalize_detections
+ from stream.rtsp_reader import redact_url
+ 
+ 
+@@ -73,12 +74,19 @@ def process_frame(packet, detector, classifier, sequence_buffer, summary, args):
+     summary["bbox_detections"] += len(boxes)
+     summary["keypoints_extracted"] += sum(1 for item in detections if item.get("keypoints"))
+ 
+-    sequence = sequence_buffer.add(packet.frame_idx, packet.frame, boxes)
++    classifier_input = getattr(args, "classifier_input", None)
++    if classifier_input is None and hasattr(sequence_buffer, "resize_size"):
++        classifier_input = "crops"
++    if classifier_input == "crops":
++        sequence = sequence_buffer.add(packet.frame_idx, packet.frame, boxes)
++    else:
++        sequence = sequence_buffer.add(packet.frame_idx, detections, packet.frame.shape)
+     prediction = classifier.predict(sequence) if sequence else None
+     if sequence:
+         summary["generated_sequences"] += 1
+     if prediction:
+         summary["lstm_predictions"] += 1
++    if is_alert_prediction(prediction):
+         payload = build_event_payload(
+             camera_id=args.camera_id,
+             frame_idx=packet.frame_idx,
+@@ -149,10 +157,13 @@ class OverlayWorker:
+ 
+     def _run(self):
+         detector = create_detector(self.args.detector_mode, self.args.yolo_model, self.args.device, self.args.imgsz)
+-        classifier, _classifier_mode = create_classifier(self.args.action_model, self.args.action_device)
++        classifier, _classifier_mode = create_classifier(self.args.action_model, self.args.action_device, self.args.action_threshold)
+         summary = initial_summary()
+         while not self.stop_event.is_set():
+-            sequence_buffer = CropSequenceBuffer(self.args.sequence_length, self.args.sequence_stride, self.args.resize_size)
++            if self.args.classifier_input == "crops":
++                sequence_buffer = CropSequenceBuffer(self.args.sequence_length, self.args.sequence_stride, self.args.resize_size)
++            else:
++                sequence_buffer = KeypointSequenceBuffer(self.args.sequence_length, self.args.sequence_stride)
+             try:
+                 with VideoReader(self.args.rtsp_url) as reader:
+                     print(f"[ai-overlay] connected: {redact_url(self.args.rtsp_url)}", flush=True)
+@@ -239,11 +250,13 @@ def main():
+     parser.add_argument("--port", type=int, default=8010)
+     parser.add_argument("--mjpeg-fps", type=float, default=8.0)
+     parser.add_argument("--detector-mode", choices=["real", "mock"], default="mock")
+-    parser.add_argument("--yolo-model", default="yolov8n-pose.pt")
++    parser.add_argument("--yolo-model", default="yolo26n-pose.pt")
+     parser.add_argument("--device", default="auto")
+     parser.add_argument("--imgsz", type=int, default=640)
+     parser.add_argument("--action-model", default=None)
+     parser.add_argument("--action-device", default="auto")
++    parser.add_argument("--action-threshold", type=float, default=0.5)
++    parser.add_argument("--classifier-input", choices=["keypoints", "crops"], default="keypoints")
+     parser.add_argument("--sequence-length", type=int, default=8)
+     parser.add_argument("--sequence-stride", type=int, default=4)
+     parser.add_argument("--resize-size", type=int, default=224)
+diff --git a/tests/test_lstm_action_classifier.py b/tests/test_lstm_action_classifier.py
+index 309da98..f6eade4 100644
+--- a/tests/test_lstm_action_classifier.py
++++ b/tests/test_lstm_action_classifier.py
+@@ -2,7 +2,7 @@ import unittest
+ 
+ import numpy as np
+ 
+-from ai.action.classifier import crops_to_features
++from ai.action.classifier import crops_to_features, keypoint_sequence_to_features, normalize_torch_device, threshold_prediction
+ from ai.action.train_lstm import load_training_rows, summarize_metadata, target_ranges_for_row
+ 
+ 
+@@ -19,6 +19,45 @@ class LSTMActionClassifierTest(unittest.TestCase):
+         self.assertEqual(float(features[0].max()), 0.0)
+         self.assertEqual(float(features[1].min()), 1.0)
+ 
++    def test_keypoint_sequence_to_features_matches_benchmark_shape(self):
++        sequence = {
++            "detections": [
++                {
++                    "keypoints": [
++                        {"x": 50.0, "y": 25.0, "confidence": 0.9},
++                        {"x": 20.0, "y": 10.0, "confidence": 0.1},
++                    ]
++                }
++            ],
++            "frame_shapes": [(100, 200, 3)],
++        }
++
++        features = keypoint_sequence_to_features(sequence)
++
++        self.assertEqual(features.shape, (1, 51))
++        self.assertAlmostEqual(float(features[0][0]), 0.25)
++        self.assertAlmostEqual(float(features[0][1]), 0.25)
++        self.assertAlmostEqual(float(features[0][2]), 0.9)
++
++    def test_numeric_torch_device_is_normalized_for_lstm_classifier(self):
++        class FakeCuda:
++            def __init__(self, available):
++                self.available = available
++
++            def is_available(self):
++                return self.available
++
++        class FakeTorch:
++            def __init__(self, available):
++                self.cuda = FakeCuda(available)
++
++        self.assertEqual(normalize_torch_device("0", FakeTorch(True)), "cuda:0")
++        self.assertEqual(normalize_torch_device("0", FakeTorch(False)), "cpu")
++
++    def test_threshold_prediction_uses_faint_probability(self):
++        self.assertEqual(threshold_prediction({"Normal": 0.7, "Faint": 0.3}, 0.4), ("Normal", 0.7))
++        self.assertEqual(threshold_prediction({"Normal": 0.55, "Faint": 0.45}, 0.4), ("Faint", 0.45))
++
+     def test_loads_ai_fall_metadata_csv(self):
+         import csv
+         import tempfile
+diff --git a/tests/test_rtsp_inference.py b/tests/test_rtsp_inference.py
+index 62db4e8..a89d86f 100644
+--- a/tests/test_rtsp_inference.py
++++ b/tests/test_rtsp_inference.py
+@@ -6,7 +6,7 @@ from pathlib import Path
+ import numpy as np
+ 
+ from ai.action.keypoint_sequence_buffer import KeypointSequenceBuffer
+-from scripts.run_rtsp_inference import run
++from scripts.run_rtsp_inference import is_alert_prediction, run
+ from ai.visualization.draw import draw_overlay
+ 
+ 
+@@ -78,6 +78,10 @@ class RtspInferenceTest(unittest.TestCase):
+ 
+         self.assertEqual(output.shape, frame.shape)
+ 
++    def test_normal_prediction_is_not_alert_event(self):
++        self.assertFalse(is_alert_prediction({"label": "Normal", "score": 0.9}))
++        self.assertTrue(is_alert_prediction({"label": "Faint", "score": 0.6}))
++
+ 
+ if __name__ == "__main__":
+     unittest.main()
+-- 
+2.54.0.windows.1
+
