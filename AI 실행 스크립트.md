@@ -253,13 +253,13 @@ detection_conf
 Windows PowerShell에서 아래 SSH 터널링 통합 명령어를 실행하고 계속 유지합니다.
 
 ```cmd
-ssh -N -L 8010:localhost:8010 -L 8011:localhost:8011 -L 8012:localhost:8012 -L 8013:localhost:8013 welabs@58.127.241.84
+ssh -N -L 8010:localhost:8010 -L 8011:localhost:8011 -L 8012:localhost:8012 -L 8013:localhost:8013 -R 1883:localhost:1883 welabs@58.127.241.84
 ```
 
 > **주의**: `remote port forwarding failed for listen port 1883` 에러가 발생하면 GPU PC에 이미 MQTT(1883)가 켜져 있어 충돌한 것입니다. GPU PC 터미널에서 `sudo fuser -k 1883/tcp` 또는 `sudo systemctl stop mosquitto`로 포트를 비운 뒤 터널링을 다시 연결해 주세요.
 
 - `-L 8010~8013`: GPU PC의 MJPEG 스트림서버 포트를 로컬 브라우저로 포워딩합니다.
-- (AWS MQTT를 사용하므로 이전의 `-R 1883` 포트 포워딩은 제거되었습니다.)
+- `-R 1883:localhost:1883`: GPU PC에서 발생하는 MQTT 이벤트를 로컬 PC에 기동 중인 Mosquitto 브로커(1883)로 전달하여 로컬 백엔드 DB에 알람이 저장되도록 합니다.
 
 터널링 완료 후, 로컬 Windows 브라우저에서 아래 주소로 접속해 실시간 오버레이 화면을 확인합니다.
 
