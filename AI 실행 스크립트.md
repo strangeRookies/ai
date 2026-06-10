@@ -93,12 +93,22 @@ ss -ltnp | grep 8554
 ```bash
 cd ~/yolo_training/strange_ai_lstm
 
-# 시작 (기본값인 video_pool 폴더 사용 시)
+# 1. 스크립트로 4채널 한 번에 송출하기 (기본값인 video_pool 폴더 사용 시)
 bash scripts/start_demo_stream.sh
+
+# (만약 영상 폴더가 다르다면 경로를 입력하세요)
+# bash scripts/start_demo_stream.sh /path/to/my_videos
 
 # 종료할 때
 bash scripts/stop_demo_stream.sh
 ```
+
+> **(참고) 스크립트 대신 직접 개별 송출하고 싶을 때**
+> 아래처럼 파이썬 명령어를 1채널씩 직접 실행할 수도 있습니다.
+> ```bash
+> # cam1에 단일 송출 (여러 터미널 띄워서 실행)
+> python tools/demo_streamer.py --video sample_videos/fall.mp4 --rtsp-url rtsp://localhost:8554/cam1
+> ```
 
 ---
 
@@ -495,8 +505,11 @@ pkill -9 ffmpeg 2>/dev/null || true
 # 4. MediaMTX는 별도 터미널에서 실행
 bash scripts/run_rtsp_server.sh
 
-# 5. 테스트용 RTSP 영상 수동 송출 (별도 터미널 유지 불필요, 백그라운드 실행)
+# 5. 테스트용 RTSP 영상 수동 송출
+# 5-1. (추천) 스크립트로 4채널 자동 반복 송출
 bash scripts/start_demo_stream.sh
+# 5-2. (또는) 원하는 영상만 개별 송출 시
+# python tools/demo_streamer.py --video sample_videos/fall.mp4 --rtsp-url rtsp://localhost:8554/cam1
 
 # 6. RTSP 확인
 for i in 1 2 3 4; do
