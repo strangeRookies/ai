@@ -24,8 +24,9 @@ def main():
         else:
             cmd = [
                 "ffmpeg", "-re", "-stream_loop", "-1", "-i", args.video,
-                "-vf", "scale=-2:720",  # 720p 화질로 자동 리사이징 (CPU 부하 방지)
+                "-vf", "scale=-2:720",
                 "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", 
+                "-g", "30", "-keyint_min", "30",
                 "-b:v", "1500k", "-f", "rtsp", "-rtsp_transport", "tcp", args.rtsp_url
             ]
         print(f"Running: {' '.join(cmd)}")
