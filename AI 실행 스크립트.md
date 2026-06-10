@@ -88,16 +88,16 @@ ss -ltnp | grep 8554
 백엔드의 자동 송출 기능이 제거되었으므로, **테스트용 시뮬레이션 영상이 필요하다면 GPU PC 터미널에서 수동으로 송출**해야 합니다.
 (실제 CCTV와 연결되어 있는 운영 환경이라면 이 단계를 건너뜁니다.)
 
-테스트용 mp4 파일을 MediaMTX로 무한 루프 송출하려면 아래 명령어를 사용합니다. (영상을 쏘는 만큼 여러 터미널을 열어 띄워둡니다.)
+테스트용 mp4 파일들이 모여있는 폴더(예: `video_pool`)를 지정하여 아래 시작 스크립트를 한 번만 실행하면, 폴더 내 영상들이 cam1~cam4에 자동 할당되어 백그라운드로 송출됩니다.
 
 ```bash
 cd ~/yolo_training/strange_ai_lstm
 
-# cam1에 영상 송출 예시
-python tools/demo_streamer.py --video /path/to/test_video1.mp4 --rtsp-url rtsp://localhost:8554/cam1
+# 시작 (기본값인 video_pool 폴더 사용 시)
+bash scripts/start_demo_stream.sh
 
-# cam2에 영상 송출 예시
-python tools/demo_streamer.py --video /path/to/test_video2.mp4 --rtsp-url rtsp://localhost:8554/cam2
+# 종료할 때
+bash scripts/stop_demo_stream.sh
 ```
 
 ---
@@ -411,9 +411,9 @@ echo "모든 프로세스 종료 완료!"
   ```bash
   pkill -f "scripts/serve_ai_overlay.py"
   ```
-- **영상 송출만 끄고 싶을 때**: (테스트용으로 켜둔 `demo_streamer.py`의 영상 송출 프로세스만 죽이고 싶을 때)
+- **영상 송출만 끄고 싶을 때**: (테스트용으로 켜둔 송출 프로세스만 죽이고 싶을 때)
   ```bash
-  pkill -9 ffmpeg
+  bash scripts/stop_demo_stream.sh
   ```
 - **RTSP(MediaMTX) 서버 자체를 끄고 싶을 때**:
   ```bash
@@ -495,8 +495,8 @@ pkill -9 ffmpeg 2>/dev/null || true
 # 4. MediaMTX는 별도 터미널에서 실행
 bash scripts/run_rtsp_server.sh
 
-# 5. 테스트용 RTSP 영상 수동 송출 (별도 터미널에서 백그라운드로 띄워두거나 각각 실행)
-# python tools/demo_streamer.py --video <영상경로> --rtsp-url rtsp://localhost:8554/cam1
+# 5. 테스트용 RTSP 영상 수동 송출 (별도 터미널 유지 불필요, 백그라운드 실행)
+bash scripts/start_demo_stream.sh
 
 # 6. RTSP 확인
 for i in 1 2 3 4; do
