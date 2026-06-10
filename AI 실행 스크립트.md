@@ -83,31 +83,17 @@ ss -ltnp | grep 8554
 
 ---
 
-## 4. RTSP 4채널 publisher 실행 (다중 비디오 무한 루프)
+## 4. RTSP 시뮬레이션 카메라 자동 송출 (백엔드 제어)
 
-크로마키(그린스크린) 영상이 제외된 최종 검증 데이터셋(`test_non_chromakey.csv`)을 기반으로 실내 및 야외 영상 여러 개를 플레이리스트로 묶어 4채널(`cam1`~`cam4`)에 걸쳐 무한 루프 송출한다. (CSV가 없으면 디렉토리 필터링으로 자동 전환)
+기존에는 GPU PC에서 `publish_multi_cam_loop.sh` 스크립트를 통해 수동으로 영상을 송출했지만, 이제 **백엔드(Spring Boot)의 Virtual Camera Pool 시뮬레이션 기능**이 이를 대체합니다.
 
-### 4-1. cam1~cam4 송출 시작
+> **작동 원리 (방법 B 기준)**:
+> 1. 백엔드 관리자 API/화면에서 카메라 생성 시 `sourceType: "SIMULATED_RTSP"` 설정.
+> 2. 백엔드의 `VideoPoolService`가 할당되지 않은(가장 적게 사용 중인) mp4 영상을 자동 배정.
+> 3. 백엔드 `RtspSimulationService`가 백엔드 PC에서 직접 `ffmpeg`를 실행하여 GPU PC의 MediaMTX(`rtsp://58.127.241.84:8554/cam-{id}`)로 무한 반복 송출.
 
-```bash
-cd ~/yolo_training/strange_ai_lstm
-
-# 4채널 멀티 비디오 루프 송출 스크립트 실행
-# - test_non_chromakey.csv 자동 파싱으로 크로마키(그린스크린) 원천 차단
-# - 실내 영상 (indoor_background) -> cam1, cam2 랜덤 셔플 무한 루프
-# - 야외 영상 (outdoor) -> cam3, cam4 랜덤 셔플 무한 루프
-# - 기존 WBS 최적화 규격 탑재 (640px 해상도, 15fps, GOP 15, B-frame 0)
-chmod +x scripts/publish_multi_cam_loop.sh
-./scripts/publish_multi_cam_loop.sh
-```
-
-### 4-2. ffmpeg가 딱 4개만 떠 있는지 확인
-
-```bash
-ps aux | grep ffmpeg | grep rtsp
-```
-
-상태가 `TL`이면 멈춘 상태이므로 다시 종료 후 실행한다. 정상은 보통 `S`, `Sl`, `R`이다.
+따라서 **GPU PC에서는 별도의 영상 송출(ffmpeg) 스크립트를 켤 필요가 없습니다.** 
+백엔드 서버가 실행 중이고 카메라가 등록되면, GPU PC의 MediaMTX(`localhost:8554`)에 스트림이 자동으로 들어옵니다.
 
 ---
 
@@ -141,6 +127,10 @@ avg_frame_rate=15/1
 
 ## 6. AI Overlay 4채널 실행
 
+> **변경사항**: `--camera-login-id` 인수가 추가되었다.  
+> 이 값은 **백엔드 DB의 `cameras.camera_login_id` 컬럼과 반드시 일치**해야  
+> 이상행동 이벤트가 DB에 저장되고, 카메라 상태가 올바르게 갱신된다.
+
 ```bash
 cd ~/yolo_training/strange_ai_lstm
 source .venv/bin/activate 2>/dev/null || source ../strange_ai/.venv/bin/activate
@@ -152,6 +142,7 @@ for idx in 1 2 3 4; do
   nohup python -u scripts/serve_ai_overlay.py \
     --rtsp-url "rtsp://localhost:8554/cam${idx}" \
     --camera-id "cam_0${idx}" \
+    --camera-login-id "cam_0${idx}" \
     --detector-mode real \
     --yolo-model yolo26n-pose.pt \
     --device 0 \
@@ -171,9 +162,53 @@ for idx in 1 2 3 4; do
     --publisher mqtt \
     --mqtt-host "54.116.39.252" \
     --mqtt-port 1883 \
+    --mqtt-topic "safety/events" \
     --mqtt-client-id "ai-cam${idx}" \
     --print-events > "runs/overlay_logs/camera-${idx}.log" 2>&1 &
 done
+```
+
+### MQTT 발행 토픽 정리
+
+| 토픽 | 발행 시점 | 설명 |
+|---|---|---|
+| `safety/events` | 이상행동 감지 시 | `--mqtt-topic` 인수로 설정 |
+| `safety/cameras/status` | RTSP 연결 성공/끊김/오류/재연결 시 | **자동 발행** (별도 설정 불필요) |
+
+> `safety/cameras/status`는 `CameraStatusPublisher`가 내부적으로 자동 발행하므로  
+> 별도의 인수 설정 없이 RTSP 연결 상태가 바뀔 때마다 백엔드로 전송된다.
+
+### MQTT 페이로드 필드 정리 (백엔드 연동 기준)
+
+**`safety/events` 페이로드**:
+```json
+{
+  "event_type": "Faint",
+  "type": "Faint",
+  "camera_id": "cam_01",
+  "camera_login_id": "cam_01",
+  "timestamp": "2026-06-10T06:30:00Z",
+  "detected_at": "2026-06-10T06:30:00Z",
+  "severity": "HIGH",
+  "confidence": 0.87,
+  "score": 0.87,
+  "bbox": [120, 80, 360, 420],
+  "track_id": 2,
+  "message_type": "AI_EVENT"
+}
+```
+
+**`safety/cameras/status` 페이로드**:
+```json
+{
+  "message_type": "CAMERA_STATUS",
+  "camera_login_id": "cam_01",
+  "status": "DISCONNECTED",
+  "previous_status": "CONNECTED",
+  "reason": "STREAM_ENDED",
+  "edge_device_id": "edge-ai-01",
+  "detected_at": "2026-06-10T06:30:00Z"
+}
 ```
 
 ---
@@ -259,7 +294,7 @@ ssh -N -L 8010:localhost:8010 -L 8011:localhost:8011 -L 8012:localhost:8012 -L 8
 > **주의**: `remote port forwarding failed for listen port 1883` 에러가 발생하면 GPU PC에 이미 MQTT(1883)가 켜져 있어 충돌한 것입니다. GPU PC 터미널에서 `sudo fuser -k 1883/tcp` 또는 `sudo systemctl stop mosquitto`로 포트를 비운 뒤 터널링을 다시 연결해 주세요.
 
 - `-L 8010~8013`: GPU PC의 MJPEG 스트림서버 포트를 로컬 브라우저로 포워딩합니다.
-- `-R 1883:localhost:1883`: GPU PC에서 발생하는 MQTT 이벤트를 로컬 PC에 기동 중인 Mosquitto 브로커(1883)로 전달하여 로컬 백엔드 DB에 알람이 저장되도록 합니다.
+- `-R 1883:localhost:1883`: GPU PC에서 발생하는 MQTT 이벤트(`safety/events`, `safety/cameras/status`)를 로컬 PC에 기동 중인 Mosquitto 브로커(1883)로 전달하여 로컬 백엔드 DB에 알람이 저장되도록 합니다.
 
 터널링 완료 후, 로컬 Windows 브라우저에서 아래 주소로 접속해 실시간 오버레이 화면을 확인합니다.
 
@@ -297,6 +332,16 @@ tail -80 runs/overlay_logs/camera-1.log
 tail -80 runs/overlay_logs/camera-2.log
 tail -80 runs/overlay_logs/camera-3.log
 tail -80 runs/overlay_logs/camera-4.log
+```
+
+MQTT 이벤트 발행 확인 (로그에서 검색):
+
+```bash
+# 이상행동 이벤트 발행 확인
+grep "\[ai-overlay-event\]" runs/overlay_logs/camera-1.log | tail -10
+
+# 카메라 상태 이벤트 발행 확인
+grep "\[camera-status\]" runs/overlay_logs/camera-1.log | tail -10
 ```
 
 RTSP publisher 로그:
@@ -349,7 +394,7 @@ fuser -k 8011/tcp 2>/dev/null || true
 fuser -k 8012/tcp 2>/dev/null || true
 fuser -k 8013/tcp 2>/dev/null || true
 
-# 3. 비디오 송출(RTSP Publisher) 강제 종료
+# 3. 비디오 송출(RTSP Publisher) 강제 종료 (수동 송출의 경우에만)
 pkill -9 ffmpeg 2>/dev/null || true
 
 echo "모든 프로세스 종료 완료!"
@@ -361,7 +406,7 @@ echo "모든 프로세스 종료 완료!"
   ```bash
   pkill -f "scripts/serve_ai_overlay.py"
   ```
-- **영상 송출만 끄고 싶을 때**: (AI는 그대로 두고 영상을 다른 것으로 바꿀 때)
+- **영상 송출만 끄고 싶을 때**: (백엔드 시뮬레이션 카메라를 비활성화 하거나 삭제하면 백엔드에서 자동으로 꺼집니다. GPU PC 수동 송출을 켤 때만 아래 명령어 사용)
   ```bash
   pkill -9 ffmpeg
   ```
@@ -402,6 +447,23 @@ GPU보다 CPU/MJPEG/브라우저 렌더링 병목 가능성이 높다.
 RTSP를 640x360, 15fps로 낮추고, 추후 --stream-fps, --output-width, --jpeg-quality 옵션을 추가한다.
 ```
 
+### 카메라 상태 배지가 프론트에 안 보임
+
+```text
+1. --camera-login-id 값이 DB cameras.camera_login_id 와 일치하는지 확인한다.
+2. 백엔드 로그에서 "[CameraStatus]" 로그가 찍히는지 확인한다.
+3. SSH 터널링의 -R 1883 역방향 터널이 유지되고 있는지 확인한다.
+```
+
+### MQTT 이벤트가 백엔드에 안 들어옴
+
+```text
+1. GPU PC에서 mosquitto가 기동 중인지 확인: systemctl status mosquitto
+2. SSH -R 1883 터널이 연결된 상태인지 확인한다.
+3. 로그에서 "[mqtt] publish failed" 메시지가 있으면 MQTT 연결 자체 문제이다.
+4. camera_login_id 가 DB에 등록된 값과 다르면 CAMERA_NOT_FOUND 오류가 발생한다.
+```
+
 ---
 
 ## 15. 추천 실행 순서 요약
@@ -428,10 +490,8 @@ pkill -9 ffmpeg 2>/dev/null || true
 # 4. MediaMTX는 별도 터미널에서 실행
 bash scripts/run_rtsp_server.sh
 
-# 5. 다른 터미널에서 RTSP publisher 4개 실행 (멀티 비디오 무한 루프)
-# (test_non_chromakey.csv 로드 및 셔플링 활성화)
-chmod +x scripts/publish_multi_cam_loop.sh
-./scripts/publish_multi_cam_loop.sh
+# 5. 백엔드에서 시뮬레이션 카메라를 생성 (자동 송출)
+# (백엔드 서버를 켜고, API나 프론트에서 SIMULATED_RTSP 타입으로 카메라를 생성하면 자동으로 GPU PC MediaMTX로 영상을 쏩니다.)
 
 # 6. RTSP 확인
 for i in 1 2 3 4; do
@@ -442,13 +502,14 @@ for i in 1 2 3 4; do
     -of default=noprint_wrappers=1
 done
 
-# 7. Overlay 4개 실행
+# 7. Overlay 4개 실행 (--camera-login-id 추가됨)
 mkdir -p runs/overlay_logs
 for idx in 1 2 3 4; do
   port=$((8009 + idx))
   nohup python -u scripts/serve_ai_overlay.py \
     --rtsp-url "rtsp://localhost:8554/cam${idx}" \
     --camera-id "cam_0${idx}" \
+    --camera-login-id "cam_0${idx}" \
     --detector-mode real \
     --yolo-model yolo26n-pose.pt \
     --device 0 \
@@ -468,6 +529,7 @@ for idx in 1 2 3 4; do
     --publisher mqtt \
     --mqtt-host "54.116.39.252" \
     --mqtt-port 1883 \
+    --mqtt-topic "safety/events" \
     --mqtt-client-id "ai-cam${idx}" \
     --print-events > "runs/overlay_logs/camera-${idx}.log" 2>&1 &
 done
@@ -479,4 +541,8 @@ for port in 8010 8011 8012 8013; do
     -w "%{http_code} %{size_download} bytes\n" \
     http://127.0.0.1:${port}/stream
 done
+
+# 9. MQTT 이벤트 발행 확인
+grep "\[ai-overlay-event\]" runs/overlay_logs/camera-1.log | tail -5
+grep "\[camera-status\]" runs/overlay_logs/camera-1.log | tail -5
 ```
