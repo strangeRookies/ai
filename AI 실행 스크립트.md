@@ -83,17 +83,22 @@ ss -ltnp | grep 8554
 
 ---
 
-## 4. RTSP 시뮬레이션 카메라 자동 송출 (백엔드 제어)
+## 4. RTSP 테스트 영상 수동 송출 (demo_streamer.py)
 
-기존에는 GPU PC에서 `publish_multi_cam_loop.sh` 스크립트를 통해 수동으로 영상을 송출했지만, 이제 **백엔드(Spring Boot)의 Virtual Camera Pool 시뮬레이션 기능**이 이를 대체합니다.
+백엔드의 자동 송출 기능이 제거되었으므로, **테스트용 시뮬레이션 영상이 필요하다면 GPU PC 터미널에서 수동으로 송출**해야 합니다.
+(실제 CCTV와 연결되어 있는 운영 환경이라면 이 단계를 건너뜁니다.)
 
-> **작동 원리 (방법 B 기준)**:
-> 1. 백엔드 관리자 API/화면에서 카메라 생성 시 `sourceType: "SIMULATED_RTSP"` 설정.
-> 2. 백엔드의 `VideoPoolService`가 할당되지 않은(가장 적게 사용 중인) mp4 영상을 자동 배정.
-> 3. 백엔드 `RtspSimulationService`가 백엔드 PC에서 직접 `ffmpeg`를 실행하여 GPU PC의 MediaMTX(`rtsp://58.127.241.84:8554/cam-{id}`)로 무한 반복 송출.
+테스트용 mp4 파일을 MediaMTX로 무한 루프 송출하려면 아래 명령어를 사용합니다. (영상을 쏘는 만큼 여러 터미널을 열어 띄워둡니다.)
 
-따라서 **GPU PC에서는 별도의 영상 송출(ffmpeg) 스크립트를 켤 필요가 없습니다.** 
-백엔드 서버가 실행 중이고 카메라가 등록되면, GPU PC의 MediaMTX(`localhost:8554`)에 스트림이 자동으로 들어옵니다.
+```bash
+cd ~/yolo_training/strange_ai_lstm
+
+# cam1에 영상 송출 예시
+python tools/demo_streamer.py --video /path/to/test_video1.mp4 --rtsp-url rtsp://localhost:8554/cam1
+
+# cam2에 영상 송출 예시
+python tools/demo_streamer.py --video /path/to/test_video2.mp4 --rtsp-url rtsp://localhost:8554/cam2
+```
 
 ---
 
@@ -406,7 +411,7 @@ echo "모든 프로세스 종료 완료!"
   ```bash
   pkill -f "scripts/serve_ai_overlay.py"
   ```
-- **영상 송출만 끄고 싶을 때**: (백엔드 시뮬레이션 카메라를 비활성화 하거나 삭제하면 백엔드에서 자동으로 꺼집니다. GPU PC 수동 송출을 켤 때만 아래 명령어 사용)
+- **영상 송출만 끄고 싶을 때**: (테스트용으로 켜둔 `demo_streamer.py`의 영상 송출 프로세스만 죽이고 싶을 때)
   ```bash
   pkill -9 ffmpeg
   ```
@@ -490,8 +495,8 @@ pkill -9 ffmpeg 2>/dev/null || true
 # 4. MediaMTX는 별도 터미널에서 실행
 bash scripts/run_rtsp_server.sh
 
-# 5. 백엔드에서 시뮬레이션 카메라를 생성 (자동 송출)
-# (백엔드 서버를 켜고, API나 프론트에서 SIMULATED_RTSP 타입으로 카메라를 생성하면 자동으로 GPU PC MediaMTX로 영상을 쏩니다.)
+# 5. 테스트용 RTSP 영상 수동 송출 (별도 터미널에서 백그라운드로 띄워두거나 각각 실행)
+# python tools/demo_streamer.py --video <영상경로> --rtsp-url rtsp://localhost:8554/cam1
 
 # 6. RTSP 확인
 for i in 1 2 3 4; do
