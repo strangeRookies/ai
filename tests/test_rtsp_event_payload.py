@@ -27,13 +27,22 @@ class RtspEventPayloadTest(unittest.TestCase):
 
         payload = build_inference_event_payload(args, packet, prediction, boxes=[], sequence=sequence)
 
-        self.assertEqual(set(payload), {"camera_id", "timestamp", "event_type", "severity", "confidence", "bbox", "track_id"})
+        self.assertEqual(set(payload), {
+            "camera_id", "camera_login_id", "timestamp", "detected_at",
+            "event_type", "type", "severity", "confidence", "score", "bbox",
+            "message_type", "track_id"
+        })
         self.assertEqual(payload["camera_id"], "cam_01")
+        self.assertEqual(payload["camera_login_id"], "cam_01")
         self.assertEqual(payload["event_type"], "Faint")
+        self.assertEqual(payload["type"], "Faint")
+        self.assertEqual(payload["severity"], "HIGH")
         self.assertEqual(payload["confidence"], 0.81)
+        self.assertEqual(payload["score"], 0.81)
         self.assertEqual(payload["track_id"], 9)
-        self.assertEqual(payload["timestamp"], 123.5)
+        self.assertTrue(isinstance(payload["timestamp"], str) and payload["timestamp"].endswith("Z"))
         self.assertEqual(payload["bbox"], [1, 2, 3, 4])
+        self.assertEqual(payload["message_type"], "AI_EVENT")
         self.assertNotIn("probabilities", payload)
         self.assertNotIn("threshold", payload)
         self.assertNotIn("post_processing", payload)
@@ -48,22 +57,6 @@ class RtspEventPayloadTest(unittest.TestCase):
 
         self.assertNotIn("track_id", payload)
         self.assertEqual(payload["bbox"], [1, 2, 3, 4])
-
-    def test_inference_event_payload_includes_snapshot_path_when_available(self):
-        args = Namespace(camera_id="cam_01", event_severity="HIGH")
-        packet = Namespace(frame_idx=12, timestamp=123.5)
-        prediction = {"label": "Faint", "score": 0.81}
-
-        payload = build_inference_event_payload(
-            args,
-            packet,
-            prediction,
-            boxes=[],
-            sequence=None,
-            snapshot_path="runs/snapshots/cam_01_faint.jpg",
-        )
-
-        self.assertEqual(payload["snapshot_path"], "runs/snapshots/cam_01_faint.jpg")
 
     def test_inference_event_payload_includes_clip_reference_when_available(self):
         args = Namespace(camera_id="cam_01", event_severity="HIGH")

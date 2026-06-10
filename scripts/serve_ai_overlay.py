@@ -42,6 +42,7 @@ from stream.rtsp_reader import redact_url
 from tracking.display_id_mapper import DisplayIdMapper
 from tracking.simple_tracker import SimpleTrackAssigner
 from ai.publishers.event_publisher import create_event_publisher
+from ai.publishers.camera_status_publisher import CameraStatusPublisher
 
 
 def initial_summary():
@@ -159,6 +160,14 @@ class OverlayWorker:
         classifier, _classifier_mode = create_classifier(self.args.action_model, self.args.action_device, self.args.action_threshold)
         publisher, publisher_mode = create_event_publisher(self.args)
         print(f"[ai-overlay] initialized event publisher: {publisher_mode}", flush=True)
+
+        # 카메라 연결 상태 퍼블리셔 (safety/cameras/status 토픽)
+        camera_login_id = getattr(self.args, "camera_login_id", self.args.camera_id)
+        status_publisher = CameraStatusPublisher(
+            mqtt_publisher=publisher,
+            camera_login_id=camera_login_id,
+            rtsp_url=self.args.rtsp_url,
+        )
         summary = initial_summary()
         post_processor = FaintEventPostProcessor(
             min_consecutive_faint=self.args.min_consecutive_faint,
@@ -193,9 +202,13 @@ class OverlayWorker:
             try:
                 with VideoReader(self.args.rtsp_url) as reader:
                     print(f"[ai-overlay] connected: {redact_url(self.args.rtsp_url)}", flush=True)
+                    # RTSP 연결 성공 → MQTT 상태 이벤트 발행
+                    status_publisher.notify_connected()
                     while not self.stop_event.is_set():
                         packet = reader.read()
                         if packet is None:
+                            # 스트림 종료 (프레임 없음) → 연결 끊김으로 판단
+                            status_publisher.notify_disconnected(reason="STREAM_ENDED")
                             break
                         overlay = process_frame(
                             packet, detector, classifier, sequence_buffer, summary, self.args,
@@ -210,6 +223,11 @@ class OverlayWorker:
                 message = f"{type(exc).__name__}: {exc}"
                 print(f"[ai-overlay] {message}", file=sys.stderr, flush=True)
                 self.state.update_error(message)
+                # 연결 오류 → MQTT 상태 이벤트 발행
+                status_publisher.notify_error(reason=type(exc).__name__)
+            # 재연결 대기 → MQTT 상태 이벤트 발행
+            if not self.stop_event.is_set():
+                status_publisher.notify_reconnecting()
             time.sleep(self.args.reconnect_delay)
 
 
@@ -217,6 +235,8 @@ def main():
     parser = argparse.ArgumentParser(description="Serve a local MJPEG stream with AI bbox/keypoint/action overlays.")
     parser.add_argument("--rtsp-url", default="rtsp://localhost:8554/cam1")
     parser.add_argument("--camera-id", default="cam_01")
+    parser.add_argument("--camera-login-id", default=None,
+                        help="DB cameras.camera_login_id 와 일치하는 식별자. 미지정 시 --camera-id 값 사용")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8010)
     parser.add_argument("--mjpeg-fps", type=float, default=8.0)

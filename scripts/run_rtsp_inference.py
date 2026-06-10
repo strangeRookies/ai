@@ -25,13 +25,13 @@ from ai.inference.rtsp_runtime import (
     create_detector,
     ensure_mock_keypoints,
     maybe_log_debug,
-    maybe_save_event_snapshot,
     normalize_detections,
     save_inference_event_log,
     update_detections_with_postprocessor,
     update_prediction_counts,
     update_tracking_summary,
 )
+from ai.evaluation.prediction_log import append_prediction_jsonl, build_prediction_log_row
 from ai.publishers.event_publisher import create_event_publisher
 from ai.runtime_metrics import RuntimeMetrics
 from ai.streams.video_reader import VideoReader
@@ -67,6 +67,8 @@ def run(args):
     writer = None
     summary = {
         "rtsp_url": args.rtsp_url,
+        "source_id": getattr(args, "source_id", None),
+        "video_id": getattr(args, "video_id", None),
         "camera_id": args.camera_id,
         "dry_run": args.dry_run,
         "detector_mode": args.detector_mode,
@@ -157,18 +159,33 @@ def run(args):
                 if crop_buffers:
                     summary["per_track_sequences_generated"].update(
                         {str(track_id): count for track_id, count in crop_buffers.sequences_generated_by_track.items()}
-                    )
+                )
                 for track_id, track_prediction in predictions_by_track.items():
-                    if post_processor.should_trigger(args.camera_id, track_prediction, packet.timestamp, track_id=track_id):
+                    cooldown_was_active = post_processor.cooldown_active(args.camera_id, packet.timestamp, track_id=track_id)
+                    event_emitted = post_processor.should_trigger(args.camera_id, track_prediction, packet.timestamp, track_id=track_id)
+                    sequence = sequences_by_track.get(track_id)
+                    if getattr(args, "evaluation_log", None):
+                        append_prediction_jsonl(
+                            args.evaluation_log,
+                            build_prediction_log_row(
+                                args,
+                                packet,
+                                sequence,
+                                track_prediction,
+                                post_processor.consecutive_count(args.camera_id, track_id=track_id),
+                                cooldown_was_active,
+                                event_emitted,
+                                ground_truth=getattr(args, "ground_truth", None),
+                            ),
+                        )
+                    if event_emitted:
                         sequence = sequences_by_track.get(track_id)
-                        snapshot_path = maybe_save_event_snapshot(args, packet, boxes, track_prediction)
                         payload = build_inference_event_payload(
                             args,
                             packet,
                             track_prediction,
                             boxes,
                             sequence,
-                            snapshot_path=snapshot_path,
                         )
                         event_log = build_inference_event_log(args, packet, track_prediction, boxes, sequence)
                         if getattr(args, "event_log_dir", None):
@@ -224,6 +241,10 @@ def main():
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--output", default=None, help="Write one run summary JSON containing counters and sample_event.")
     parser.add_argument("--event-log-dir", default=None, help="Write one debug event JSON file per emitted event.")
+    parser.add_argument("--evaluation-log", default=None, help="Append one JSONL row per LSTM event candidate for offline evaluation.")
+    parser.add_argument("--ground-truth", choices=["Normal", "Faint", "hard_negative", "normal_basic"], default=None)
+    parser.add_argument("--source-id", default=None, help="Stable source ID used in evaluation logs. Defaults to rtsp_url.")
+    parser.add_argument("--video-id", default=None, help="Stable video ID used in evaluation logs. Defaults to source_id or rtsp_url.")
     parser.add_argument("--publisher", choices=["console", "mqtt"], default=os.getenv("EVENT_PUBLISHER"), help="Event publisher. Default: console in --dry-run, mqtt otherwise.")
     parser.add_argument("--mqtt-host", default=os.getenv("MQTT_HOST"), help="MQTT broker host. Defaults to MQTT_HOST or localhost.")
     parser.add_argument("--mqtt-port", type=int, default=None, help="MQTT broker port. Defaults to MQTT_PORT or 1883.")

@@ -29,6 +29,13 @@ class FaintEventPostProcessor:
     def consecutive_count(self, camera_id, track_id=None):
         return int(self._consecutive_by_camera.get(event_state_key(camera_id, track_id), 0))
 
+    def cooldown_active(self, camera_id, timestamp, track_id=None):
+        key = event_state_key(camera_id, track_id)
+        last_event_time = self._last_event_time_by_camera.get(key)
+        if last_event_time is None:
+            return False
+        return float(timestamp) - float(last_event_time) < self.cooldown_seconds
+
 
 def event_state_key(camera_id, track_id=None):
     return f"{camera_id}:track:{track_id}" if track_id is not None else str(camera_id)

@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import time as _time
 from pathlib import Path
 
 from ai.action.classifier import LSTMActionClassifier, MockActionClassifier
@@ -131,56 +132,57 @@ def maybe_log_debug(packet, boxes, summary, prediction, args, prefix="[rtsp-infe
     )
 
 
-def build_inference_event_payload(args, packet, prediction, boxes, sequence, snapshot_path=None):
+def build_inference_event_payload(args, packet, prediction, boxes, sequence):
+    """
+    MQTT safety/events 토픽 페이로드 빌더.
+    백엔드 SafetyEventDto 스펙과 정확히 일치하도록 필드명을 맞춘다.
+
+    백엔드 SafetyEventDto 매핑:
+        type / event_type  ← prediction["label"]
+        camera_id          ← args.camera_id
+        timestamp          ← ISO-8601 UTC 문자열 (백엔드 Instant 파싱 호환)
+        severity           ← args.event_severity
+        confidence / score ← prediction["score"]
+        bbox               ← sequence bbox (List<Number>)
+        track_id           ← sequence track_id (optional)
+    """
     bbox = sequence.get("bbox") if sequence else None
     track_id = sequence.get("track_id") if sequence else None
+
+    # ISO-8601 UTC 문자열 (백엔드 SafetyEventDto.rawTimestamp → resolvedTimestamp() 호환)
+    detected_at = _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime())
+
     payload = {
-        "camera_id": args.camera_id,
-        "timestamp": float(packet.timestamp),
+        # 백엔드 @JsonAlias({"type", "event_type"}) 에 맞게 두 키 모두 포함
         "event_type": prediction["label"],
+        "type": prediction["label"],
+        # 백엔드 @JsonProperty("camera_id")
+        "camera_id": args.camera_id,
+        # camera_login_id: DB cameras.camera_login_id 와 일치해야 백엔드가 Camera를 조회할 수 있음
+        # --camera-login-id 인수가 없으면 camera_id를 그대로 사용
+        "camera_login_id": getattr(args, "camera_login_id", args.camera_id),
+        # ISO-8601 UTC 문자열 (백엔드 rawTimestamp)
+        "timestamp": detected_at,
+        "detected_at": detected_at,
+        # 백엔드 severity
         "severity": getattr(args, "event_severity", "HIGH"),
+        # 백엔드 confidence (@JsonAlias({"confidence", "score"}))
         "confidence": float(prediction["score"]),
+        "score": float(prediction["score"]),
+        # 백엔드 bbox: List<Number>
         "bbox": bbox,
+        # 메시지 유형 식별자
+        "message_type": "AI_EVENT",
     }
     if track_id is not None:
         payload["track_id"] = track_id
-    if snapshot_path:
-        payload["snapshot_path"] = str(snapshot_path)
     clip_path = sequence.get("clip_path") if sequence else None
     clip_url = sequence.get("clip_url") if sequence else None
-    # TODO: Event clip writing is asynchronous, so run_rtsp_inference cannot
-    # attach the final saved MP4 path at trigger time without a larger callback
-    # flow. Include clip_path/clip_url only when an upstream sequence already
-    # provides one.
     if clip_path:
         payload["clip_path"] = clip_path
     if clip_url:
         payload["clip_url"] = clip_url
     return payload
-
-
-def maybe_save_event_snapshot(args, packet, boxes, prediction):
-    snapshot_dir = os.getenv("FAINT_SNAPSHOT_DIR") or getattr(args, "snapshot_dir", None)
-    if not snapshot_dir or prediction.get("label") != "Faint":
-        return None
-    try:
-        import cv2
-    except ImportError as exc:
-        raise RuntimeError("opencv-python is required to save event snapshots") from exc
-
-    from ai.visualization.draw import draw_overlay
-
-    output_dir = Path(snapshot_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    filename = (
-        f"{_safe_filename_part(args.camera_id)}_"
-        f"frame-{_safe_filename_part(str(packet.frame_idx))}_"
-        f"{_safe_filename_part(str(packet.timestamp))}.jpg"
-    )
-    output_path = output_dir / filename
-    annotated_frame = draw_overlay(packet.frame, boxes, prediction, packet.frame_idx)
-    cv2.imwrite(str(output_path), annotated_frame)
-    return str(output_path)
 
 
 def build_inference_event_log(args, packet, prediction, boxes, sequence):
