@@ -1,6 +1,4 @@
-import argparse
 import json
-import os
 import sys
 import time
 from pathlib import Path
@@ -36,6 +34,7 @@ from ai.publishers.event_publisher import create_event_publisher
 from ai.runtime_metrics import RuntimeMetrics
 from ai.streams.video_reader import VideoReader
 from ai.visualization.draw import draw_overlay
+from scripts.rtsp_inference_args import parse_args
 
 
 def run(args):
@@ -62,7 +61,8 @@ def run(args):
         min_consecutive_faint=getattr(args, "min_consecutive_faint", DEFAULT_MIN_CONSECUTIVE_FAINT),
         cooldown_seconds=getattr(args, "camera_cooldown_seconds", DEFAULT_CAMERA_COOLDOWN_SECONDS),
     )
-    publisher, publisher_mode = create_event_publisher(args)
+    publisher = None
+    publisher_mode = "preflight" if getattr(args, "preflight_only", False) else None
     metrics = RuntimeMetrics()
     writer = None
     summary = {
@@ -72,13 +72,18 @@ def run(args):
         "camera_id": args.camera_id,
         "dry_run": args.dry_run,
         "detector_mode": args.detector_mode,
-        "yolo_model": args.yolo_model if args.detector_mode == "real" else None,
+        "yolo_model": args.yolo_model,
+        "yolo_model_exists": Path(args.yolo_model).exists(),
+        "action_model": args.action_model,
+        "action_model_exists": Path(args.action_model).exists() if args.action_model else False,
         "classifier_mode": classifier_mode,
         "classifier_input": classifier_input,
         "postprocessing_mode": postprocessing_mode,
         "action_threshold": getattr(args, "action_threshold", DEFAULT_FAINT_THRESHOLD),
         "min_consecutive_faint": getattr(args, "min_consecutive_faint", DEFAULT_MIN_CONSECUTIVE_FAINT),
         "camera_cooldown_seconds": getattr(args, "camera_cooldown_seconds", DEFAULT_CAMERA_COOLDOWN_SECONDS),
+        "sequence_length": args.sequence_length,
+        "sequence_stride": args.sequence_stride,
         "latest_faint_probability": None,
         "latest_prediction_label": None,
         "latest_frame_keypoints": 0,
@@ -101,6 +106,12 @@ def run(args):
         "sample_event": None,
         "alert_delivery_result": publisher_mode,
     }
+
+    if getattr(args, "preflight_only", False):
+        return summary
+
+    publisher, publisher_mode = create_event_publisher(args)
+    summary["alert_delivery_result"] = publisher_mode
 
     try:
         with VideoReader(args.rtsp_url) as reader:
@@ -208,7 +219,7 @@ def run(args):
                     writer.write(overlay)
                 metrics.add_total_frame_ms((time.perf_counter() - frame_started_at) * 1000.0)
     finally:
-        close = getattr(publisher, "close", None)
+        close = getattr(publisher, "close", None) if publisher is not None else None
         if close:
             close()
 
@@ -233,49 +244,7 @@ def write_run_summary(output_path, summary):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Run safe local RTSP YOLO Pose + LSTM inference dry-run.")
-    parser.add_argument("--rtsp-url", default="rtsp://localhost:8554/cam1")
-    parser.add_argument("--camera-id", default="cam_01")
-    parser.add_argument("--max-frames", type=int, default=60)
-    parser.add_argument("--detector-mode", choices=["real", "mock"], default="mock")
-    parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--output", default=None, help="Write one run summary JSON containing counters and sample_event.")
-    parser.add_argument("--event-log-dir", default=None, help="Write one debug event JSON file per emitted event.")
-    parser.add_argument("--evaluation-log", default=None, help="Append one JSONL row per LSTM event candidate for offline evaluation.")
-    parser.add_argument("--ground-truth", choices=["Normal", "Faint", "hard_negative", "normal_basic"], default=None)
-    parser.add_argument("--source-id", default=None, help="Stable source ID used in evaluation logs. Defaults to rtsp_url.")
-    parser.add_argument("--video-id", default=None, help="Stable video ID used in evaluation logs. Defaults to source_id or rtsp_url.")
-    parser.add_argument("--publisher", choices=["console", "mqtt"], default=os.getenv("EVENT_PUBLISHER"), help="Event publisher. Default: console in --dry-run, mqtt otherwise.")
-    parser.add_argument("--mqtt-host", default=os.getenv("MQTT_HOST"), help="MQTT broker host. Defaults to MQTT_HOST or localhost.")
-    parser.add_argument("--mqtt-port", type=int, default=None, help="MQTT broker port. Defaults to MQTT_PORT or 1883.")
-    parser.add_argument("--mqtt-topic", default=os.getenv("MQTT_TOPIC"), help="MQTT topic. Defaults to MQTT_TOPIC or safety/events.")
-    parser.add_argument("--mqtt-client-id", default=os.getenv("MQTT_CLIENT_ID"), help="MQTT client ID. Defaults to MQTT_CLIENT_ID or strange-ai-local.")
-    parser.add_argument("--mqtt-username", default=os.getenv("MQTT_USERNAME"), help="MQTT username. Defaults to MQTT_USERNAME.")
-    parser.add_argument("--mqtt-password", default=os.getenv("MQTT_PASSWORD"), help="MQTT password. Defaults to MQTT_PASSWORD and is never printed.")
-    parser.add_argument("--overlay-output", default=None)
-    parser.add_argument("--yolo-model", default="yolo26n-pose.pt")
-    parser.add_argument("--device", default="auto")
-    parser.add_argument("--imgsz", type=int, default=640)
-    parser.add_argument("--detector-conf", type=float, default=0.10)
-    parser.add_argument("--action-model", default=DEFAULT_ACTION_MODEL)
-    parser.add_argument("--action-device", default="auto")
-    parser.add_argument("--action-threshold", type=float, default=DEFAULT_FAINT_THRESHOLD, help="Faint probability threshold for LSTM checkpoints with Normal/Faint classes.")
-    parser.add_argument("--min-consecutive-faint", type=int, default=DEFAULT_MIN_CONSECUTIVE_FAINT, help="Consecutive Faint sequences required before emitting an event.")
-    parser.add_argument("--camera-cooldown-seconds", type=float, default=DEFAULT_CAMERA_COOLDOWN_SECONDS, help="Per-camera event cooldown after a Faint event.")
-    parser.add_argument("--event-severity", default="HIGH")
-    parser.add_argument("--debug-every-n", type=int, default=30)
-    parser.add_argument("--classifier-input", choices=["keypoints", "crops"], default="keypoints")
-    parser.add_argument("--sequence-length", type=int, default=8)
-    parser.add_argument("--sequence-stride", type=int, default=4)
-    parser.add_argument("--resize-size", type=int, default=224)
-    parser.add_argument("--track-thresh", type=float, default=0.10)
-    parser.add_argument("--match-thresh", "--tracker-iou-threshold", dest="match_thresh", type=float, default=0.20)
-    parser.add_argument("--track-buffer", type=int, default=90)
-    parser.add_argument("--min-box-area", type=float, default=100.0)
-    parser.add_argument("--bbox-smoothing-alpha", type=float, default=0.60)
-    parser.add_argument("--track-max-missing-seconds", type=float, default=4.0)
-    parser.add_argument("--center-match-ratio", type=float, default=0.70)
-    args = parser.parse_args()
+    args = parse_args()
 
     summary = run(args)
     if args.output:

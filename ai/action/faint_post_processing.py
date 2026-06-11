@@ -1,7 +1,10 @@
 DEFAULT_FAINT_THRESHOLD = 0.3
-DEFAULT_MIN_CONSECUTIVE_FAINT = 2
+DEFAULT_MIN_CONSECUTIVE_FAINT = 3
 DEFAULT_CAMERA_COOLDOWN_SECONDS = 10.0
-DEFAULT_ACTION_MODEL = "benchmark/results/lstm_yolo26n_train1000/YOLO26n-pose/best.pt"
+DEFAULT_ACTION_MODEL = (
+    "benchmark/results/lstm_yolo26n_error_augmented_compare_smoke/"
+    "YOLO26n-pose=./yolo26n-pose.pt/best.pt"
+)
 
 
 class FaintEventPostProcessor:

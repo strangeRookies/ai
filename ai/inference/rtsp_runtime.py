@@ -148,6 +148,7 @@ def build_inference_event_payload(args, packet, prediction, boxes, sequence):
     """
     bbox = sequence.get("bbox") if sequence else None
     track_id = sequence.get("track_id") if sequence else None
+    faint_prob = faint_probability(prediction)
 
     # ISO-8601 UTC 문자열 (백엔드 SafetyEventDto.rawTimestamp → resolvedTimestamp() 호환)
     detected_at = _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime())
@@ -168,6 +169,7 @@ def build_inference_event_payload(args, packet, prediction, boxes, sequence):
         "severity": getattr(args, "event_severity", "HIGH"),
         # 백엔드 confidence (@JsonAlias({"confidence", "score"}))
         "confidence": float(prediction["score"]),
+        "faint_prob": faint_prob,
         "score": float(prediction["score"]),
         # 백엔드 bbox: List<Number>
         "bbox": bbox,
@@ -188,12 +190,14 @@ def build_inference_event_payload(args, packet, prediction, boxes, sequence):
 def build_inference_event_log(args, packet, prediction, boxes, sequence):
     bbox = sequence.get("bbox") if sequence else None
     track_id = sequence.get("track_id") if sequence else None
+    faint_prob = faint_probability(prediction)
     return {
         "camera_id": args.camera_id,
         "frame_idx": int(packet.frame_idx),
         "timestamp": float(packet.timestamp),
         "event_type": prediction["label"],
         "confidence": float(prediction["score"]),
+        "faint_prob": faint_prob,
         "bbox": bbox,
         "track_id": track_id,
         "sequence_window": {"start": sequence["start_frame"], "end": sequence["end_frame"]} if sequence else None,
