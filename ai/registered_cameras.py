@@ -27,6 +27,12 @@ class RawCamera(TypedDict, total=False):
     status: str
 
 
+class ApiEnvelope(TypedDict, total=False):
+    success: bool
+    message: str
+    data: list[RawCamera]
+
+
 @dataclass(frozen=True, slots=True)
 class RegisteredCamera:
     camera_id: str
@@ -40,6 +46,7 @@ class RegisteredCamera:
 class RunnerConfig:
     backend_base_url: str
     backend_token: str | None
+    backend_timeout_seconds: float
     rtsp_base_url: str
     video_pool: Path
     overlay_host: str
@@ -101,19 +108,30 @@ def parse_camera(raw: RawCamera) -> RegisteredCamera | None:
     )
 
 
-def load_active_cameras(backend_base_url: str, backend_token: str | None) -> list[RegisteredCamera]:
+def load_active_cameras(
+    backend_base_url: str,
+    backend_token: str | None,
+    timeout_seconds: float = 10.0,
+) -> list[RegisteredCamera]:
     url = f"{backend_base_url.rstrip('/')}/api/cameras/active"
     request = urllib.request.Request(url, headers={"Accept": "application/json"})
     if backend_token:
         request.add_header("Authorization", f"Bearer {backend_token}")
 
     try:
-        with urllib.request.urlopen(request, timeout=10) as response:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
             body = response.read().decode("utf-8")
+    except TimeoutError as exc:
+        raise RuntimeError(
+            f"timed out after {timeout_seconds:g}s while waiting for active cameras from {url}; "
+            "check backend logs and database connectivity"
+        ) from exc
     except urllib.error.URLError as exc:
         raise RuntimeError(f"failed to fetch active cameras from {url}: {exc}") from exc
 
     payload = json.loads(body)
+    if isinstance(payload, dict) and isinstance(payload.get("data"), list):
+        payload = payload["data"]
     if not isinstance(payload, list):
         raise RuntimeError(f"expected active camera list from {url}, got {type(payload).__name__}")
 

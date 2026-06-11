@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from ai.registered_cameras import (
     RegisteredCamera,
@@ -8,6 +9,7 @@ from ai.registered_cameras import (
     build_overlay_command,
     camera_rtsp_url,
     input_rtsp_for_camera,
+    load_active_cameras,
     parse_camera,
 )
 
@@ -84,11 +86,38 @@ class RegisteredCameraRunnerTest(unittest.TestCase):
         self.assertEqual(command[command.index("--camera-login-id") + 1], "icu_01")
         self.assertEqual(command[command.index("--rtsp-url") + 1], "rtsp://cctv/icu")
 
+    def test_load_active_cameras_reads_backend_success_data_envelope(self):
+        response = FakeHttpResponse(
+            b'{"success":true,"data":[{"cameraId":4,"cameraLoginId":"cam_02","rtspUrl":"rtsp://cctv/cam_02","sourceType":"REAL_RTSP","aiEnabled":true,"status":"ACTIVE"}]}'
+        )
+
+        with patch("urllib.request.urlopen", return_value=response):
+            cameras = load_active_cameras("http://backend:8080", None)
+
+        self.assertEqual(len(cameras), 1)
+        self.assertEqual(cameras[0].camera_login_id, "cam_02")
+        self.assertEqual(cameras[0].rtsp_url, "rtsp://cctv/cam_02")
+
+
+class FakeHttpResponse:
+    def __init__(self, body: bytes):
+        self._body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, unused_exc_type, unused_exc, unused_traceback):
+        return False
+
+    def read(self):
+        return self._body
+
 
 def fake_config(video_pool: Path) -> RunnerConfig:
     return RunnerConfig(
         backend_base_url="http://backend:8080",
         backend_token=None,
+        backend_timeout_seconds=10.0,
         rtsp_base_url="rtsp://gpu-pc:8554",
         video_pool=video_pool,
         overlay_host="0.0.0.0",

@@ -96,6 +96,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run AI overlay workers for backend-registered cameras.")
     parser.add_argument("--backend-base-url", default=DEFAULT_BACKEND_BASE_URL)
     parser.add_argument("--backend-token", default=None)
+    parser.add_argument("--backend-timeout-seconds", type=float, default=10.0)
     parser.add_argument("--rtsp-base-url", default=DEFAULT_RTSP_BASE_URL)
     parser.add_argument("--video-pool", default=DEFAULT_VIDEO_POOL)
     parser.add_argument("--overlay-host", default="0.0.0.0")
@@ -127,6 +128,7 @@ def config_from_args(args: argparse.Namespace) -> RunnerConfig:
     return RunnerConfig(
         backend_base_url=args.backend_base_url,
         backend_token=args.backend_token,
+        backend_timeout_seconds=args.backend_timeout_seconds,
         rtsp_base_url=args.rtsp_base_url,
         video_pool=Path(args.video_pool),
         overlay_host=args.overlay_host,
@@ -157,7 +159,11 @@ def config_from_args(args: argparse.Namespace) -> RunnerConfig:
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     config = config_from_args(args)
-    cameras = load_active_cameras(config.backend_base_url, config.backend_token)
+    cameras = load_active_cameras(
+        config.backend_base_url,
+        config.backend_token,
+        timeout_seconds=config.backend_timeout_seconds,
+    )
     if not cameras:
         print("[registered-cameras][warning] no active AI cameras returned by backend", flush=True)
         return
