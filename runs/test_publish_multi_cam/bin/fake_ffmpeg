@@ -1,0 +1,2 @@
+#!/usr/bin/env sh
+echo "fake ffmpeg $@" >> runs/test_publish_multi_cam/ffmpeg_calls.log

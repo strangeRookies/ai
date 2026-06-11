@@ -29,7 +29,7 @@ class RtspEventPayloadTest(unittest.TestCase):
 
         self.assertEqual(set(payload), {
             "camera_id", "camera_login_id", "timestamp", "detected_at",
-            "event_type", "type", "severity", "confidence", "score", "bbox",
+            "event_type", "type", "severity", "confidence", "faint_prob", "score", "bbox",
             "message_type", "track_id"
         })
         self.assertEqual(payload["camera_id"], "cam_01")
@@ -38,6 +38,7 @@ class RtspEventPayloadTest(unittest.TestCase):
         self.assertEqual(payload["type"], "Faint")
         self.assertEqual(payload["severity"], "HIGH")
         self.assertEqual(payload["confidence"], 0.81)
+        self.assertEqual(payload["faint_prob"], 0.81)
         self.assertEqual(payload["score"], 0.81)
         self.assertEqual(payload["track_id"], 9)
         self.assertTrue(isinstance(payload["timestamp"], str) and payload["timestamp"].endswith("Z"))
@@ -77,7 +78,7 @@ class RtspEventPayloadTest(unittest.TestCase):
         self.assertEqual(payload["clip_url"], "https://example.invalid/clips/faint_cam_01.mp4")
 
     def test_inference_event_log_contains_debug_fields(self):
-        args = Namespace(camera_id="cam_01", action_threshold=0.3, min_consecutive_faint=2, camera_cooldown_seconds=10)
+        args = Namespace(camera_id="cam_01", action_threshold=0.3, min_consecutive_faint=3, camera_cooldown_seconds=10)
         packet = Namespace(frame_idx=12, timestamp=123.5)
         prediction = {"label": "Faint", "score": 0.81, "probabilities": {"Normal": 0.19, "Faint": 0.81}}
         sequence = {"bbox": [1, 2, 3, 4], "track_id": 9, "start_frame": 4, "end_frame": 12}
@@ -88,7 +89,8 @@ class RtspEventPayloadTest(unittest.TestCase):
         self.assertEqual(event_log["sequence_window"], {"start": 4, "end": 12})
         self.assertEqual(event_log["probabilities"], {"Normal": 0.19, "Faint": 0.81})
         self.assertEqual(event_log["threshold"], 0.3)
-        self.assertEqual(event_log["post_processing"]["min_consecutive_faint"], 2)
+        self.assertEqual(event_log["faint_prob"], 0.81)
+        self.assertEqual(event_log["post_processing"]["min_consecutive_faint"], 3)
 
     def test_save_inference_event_log_writes_one_json_file(self):
         event_log = {"camera_id": "cam/01", "frame_idx": 12, "timestamp": 123.5, "event_type": "Faint", "track_id": 9}
@@ -170,7 +172,7 @@ def fake_run_args(event_log_dir, dry_run=True):
         action_model=None,
         action_device="auto",
         action_threshold=0.3,
-        min_consecutive_faint=2,
+        min_consecutive_faint=3,
         camera_cooldown_seconds=10,
         event_severity="HIGH",
         classifier_input="keypoints",
@@ -262,5 +264,3 @@ class FakeMqttPublisher:
         return None
 
 
-if __name__ == "__main__":
-    unittest.main()

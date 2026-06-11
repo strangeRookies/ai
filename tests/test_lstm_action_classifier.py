@@ -1,12 +1,27 @@
 import unittest
+from pathlib import Path
 
 import numpy as np
 
-from ai.action.classifier import crops_to_features, keypoint_sequence_to_features, normalize_torch_device, threshold_prediction
+from ai.action.classifier import (
+    LSTMActionClassifier,
+    crops_to_features,
+    keypoint_sequence_to_features,
+    normalize_torch_device,
+    threshold_prediction,
+)
 from ai.action.train_lstm import load_training_rows, summarize_metadata, target_ranges_for_row
+
+try:
+    import cv2  # noqa: F401
+
+    CV2_AVAILABLE = True
+except ImportError:
+    CV2_AVAILABLE = False
 
 
 class LSTMActionClassifierTest(unittest.TestCase):
+    @unittest.skipIf(not CV2_AVAILABLE, "cv2 is required for crop feature tests")
     def test_crops_to_features_shape(self):
         crops = [
             np.zeros((20, 30, 3), dtype=np.uint8),
@@ -57,6 +72,14 @@ class LSTMActionClassifierTest(unittest.TestCase):
     def test_threshold_prediction_uses_faint_probability(self):
         self.assertEqual(threshold_prediction({"Normal": 0.7, "Faint": 0.3}, 0.4), ("Normal", 0.7))
         self.assertEqual(threshold_prediction({"Normal": 0.55, "Faint": 0.45}, 0.4), ("Faint", 0.45))
+
+    def test_lstm_classifier_reports_missing_checkpoint_before_torch_import(self):
+        missing_checkpoint = Path("missing-checkpoint.pt")
+
+        with self.assertRaises(FileNotFoundError) as ctx:
+            LSTMActionClassifier(missing_checkpoint)
+
+        self.assertIn("LSTM action checkpoint not found", str(ctx.exception))
 
     def test_loads_ai_fall_metadata_csv(self):
         import csv
