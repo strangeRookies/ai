@@ -54,6 +54,7 @@ def parse_args(argv=None):
     parser.add_argument("--sequence-length", type=int, default=env_int("SEQUENCE_LENGTH", 8))
     parser.add_argument("--sequence-stride", type=int, default=env_int("SEQUENCE_STRIDE", 4))
     parser.add_argument("--resize-size", type=int, default=env_int("RESIZE_SIZE", 224))
+    parser.add_argument("--tracking-mode", choices=["auto", "simple", "supervision"], default=os.getenv("TRACKING_MODE", "auto"))
     parser.add_argument("--track-thresh", type=float, default=env_float("TRACK_THRESH", 0.10))
     parser.add_argument("--match-thresh", "--tracker-iou-threshold", dest="match_thresh", type=float, default=env_float("TRACK_IOU_THRESHOLD", 0.20))
     parser.add_argument("--track-buffer", type=int, default=env_int("TRACK_BUFFER", 90))

@@ -64,7 +64,10 @@ def env_flag(name, default=False):
 
 
 def create_detection_postprocessor(args):
-    if env_flag("ENABLE_SUPERVISION_POSTPROCESSING", False):
+    tracking_mode = str(getattr(args, "tracking_mode", "auto") or "auto").strip().lower()
+    if tracking_mode == "supervision" or (
+        tracking_mode == "auto" and env_flag("ENABLE_SUPERVISION_POSTPROCESSING", False)
+    ):
         return SupervisionPostProcessor(), "supervision"
     return SimpleTrackAssigner(
         track_thresh=getattr(args, "track_thresh", 0.10),

@@ -22,6 +22,44 @@ pkill -9 ffmpeg 2>/dev/null || true
 docker stop mediamtx 2>/dev/null || true
 ```
 
+## 2. 등록 카메라 기반 실행 (권장)
+```bash
+cd ~/yolo_training/strange_ai_lstm
+source .venv/bin/activate 2>/dev/null || source ../strange_ai/.venv/bin/activate
+
+# MediaMTX 서버 실행
+bash scripts/run_rtsp_server.sh
+
+# 백엔드에 등록된 ACTIVE + aiEnabled 카메라 목록을 읽어서 카메라별 AI overlay worker 실행
+# REAL_RTSP      : 백엔드 rtspUrl을 그대로 분석
+# SIMULATED_RTSP : assignedVideoPath 또는 video_pool mp4를 rtsp://GPU_PC_IP:8554/{cameraLoginId} 로 반복 송출 후 분석
+python scripts/run_registered_cameras.py \
+  --backend-base-url "http://127.0.0.1:8080" \
+  --rtsp-base-url "rtsp://58.127.241.84:8554" \
+  --video-pool video_pool \
+  --overlay-base-port 8010 \
+  --detector-mode real \
+  --yolo-model yolo26n-pose.pt \
+  --device 0 \
+  --tracking-mode supervision \
+  --action-model benchmark/results/lstm_yolo26n_train1000/YOLO26n-pose/best.pt \
+  --action-device 0 \
+  --action-threshold 0.3 \
+  --classifier-input keypoints \
+  --publisher mqtt \
+  --mqtt-host "3.38.142.174" \
+  --mqtt-port 1883 \
+  --mqtt-topic "safety/events" \
+  --mqtt-client-id-prefix "ai-registered" \
+  --print-events
+
+# 실제 실행 전 명령만 확인하고 싶으면 --dry-run 추가
+python scripts/run_registered_cameras.py \
+  --backend-base-url "http://127.0.0.1:8080" \
+  --rtsp-base-url "rtsp://GPU_PC_IP:8554" \
+  --dry-run
+```
+
 ## 2. 영상 송출 (RTSP & 테스트 비디오)
 ```bash
 # 1. MediaMTX 서버 백그라운드 실행
@@ -45,6 +83,7 @@ for idx in 1 2 3 4; do
     --device 0 \
     --imgsz 640 \
     --detector-conf 0.10 \
+    --tracking-mode supervision \
     --track-thresh 0.10 \
     --match-thresh 0.20 \
     --track-buffer 45 \

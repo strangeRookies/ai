@@ -11,11 +11,13 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 from ai.action.per_track_sequence_buffer import PerTrackCropSequenceBuffers, PerTrackKeypointSequenceBuffers
 from ai.inference.rtsp_runtime import (
     build_inference_event_payload,
+    create_detection_postprocessor,
     ensure_mock_keypoints,
     maybe_log_debug,
     normalize_detections,
     update_prediction_counts,
     update_tracking_summary,
+    update_detections_with_postprocessor,
 )
 from ai.overlay_http import OverlayState, create_overlay_server
 from ai.streams.video_reader import VideoReader
@@ -40,7 +42,6 @@ from scripts.run_rtsp_inference import (
 )
 from stream.rtsp_reader import redact_url
 from tracking.display_id_mapper import DisplayIdMapper
-from tracking.simple_tracker import SimpleTrackAssigner
 from ai.publishers.event_publisher import create_event_publisher
 from ai.publishers.camera_status_publisher import CameraStatusPublisher
 
@@ -54,7 +55,7 @@ def process_frame(packet, detector, classifier, sequence_buffer, summary, args, 
     if args.detector_mode == "mock":
         detections = ensure_mock_keypoints(detections)
     if tracker is not None:
-        detections = tracker.update(detections, now=packet.timestamp)
+        detections = update_detections_with_postprocessor(tracker, detections, packet.frame, packet.timestamp)
     boxes = normalize_detections(detections)
     frame_keypoint_count = sum(1 for item in detections if item.get("keypoints"))
     active_tracks = len({int(item["track_id"]) for item in detections if item.get("track_id") is not None})
@@ -173,15 +174,8 @@ class OverlayWorker:
             min_consecutive_faint=self.args.min_consecutive_faint,
             cooldown_seconds=self.args.camera_cooldown_seconds,
         )
-        tracker = SimpleTrackAssigner(
-            track_thresh=self.args.track_thresh,
-            match_thresh=self.args.match_thresh,
-            track_buffer=self.args.track_buffer,
-            min_box_area=self.args.min_box_area,
-            bbox_smoothing_alpha=self.args.bbox_smoothing_alpha,
-            max_missing_seconds=self.args.track_max_missing_seconds,
-            center_match_ratio=self.args.center_match_ratio,
-        )
+        tracker, postprocessing_mode = create_detection_postprocessor(self.args)
+        print(f"[ai-overlay] tracking postprocessor: {postprocessing_mode}", flush=True)
         display_id_mapper = DisplayIdMapper()
         while not self.stop_event.is_set():
             if self.args.classifier_input == "crops":
@@ -254,6 +248,7 @@ def main():
     parser.add_argument("--sequence-length", type=int, default=8)
     parser.add_argument("--sequence-stride", type=int, default=4)
     parser.add_argument("--resize-size", type=int, default=224)
+    parser.add_argument("--tracking-mode", choices=["auto", "simple", "supervision"], default="auto")
     parser.add_argument("--track-thresh", type=float, default=0.10)
     parser.add_argument("--match-thresh", "--tracker-iou-threshold", dest="match_thresh", type=float, default=0.20)
     parser.add_argument("--track-buffer", type=int, default=90)

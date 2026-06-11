@@ -27,12 +27,14 @@ class RtspInferenceConfigTest(unittest.TestCase):
             "ACTION_THRESHOLD": os.environ.get("ACTION_THRESHOLD"),
             "MIN_CONSECUTIVE_FAINT": os.environ.get("MIN_CONSECUTIVE_FAINT"),
             "CAMERA_COOLDOWN_SECONDS": os.environ.get("CAMERA_COOLDOWN_SECONDS"),
+            "TRACKING_MODE": os.environ.get("TRACKING_MODE"),
         }
         try:
             os.environ["ACTION_MODEL"] = "custom/best.pt"
             os.environ["ACTION_THRESHOLD"] = "0.31"
             os.environ["MIN_CONSECUTIVE_FAINT"] = "4"
             os.environ["CAMERA_COOLDOWN_SECONDS"] = "11"
+            os.environ["TRACKING_MODE"] = "supervision"
 
             args = parse_args([])
         finally:
@@ -46,6 +48,12 @@ class RtspInferenceConfigTest(unittest.TestCase):
         self.assertEqual(args.action_threshold, 0.31)
         self.assertEqual(args.min_consecutive_faint, 4)
         self.assertEqual(args.camera_cooldown_seconds, 11.0)
+        self.assertEqual(args.tracking_mode, "supervision")
+
+    def test_parse_args_can_force_supervision_tracking(self):
+        args = parse_args(["--tracking-mode", "supervision"])
+
+        self.assertEqual(args.tracking_mode, "supervision")
 
     def test_preflight_reports_model_paths_and_post_processing_without_rtsp_or_mqtt(self):
         args = fake_run_args()

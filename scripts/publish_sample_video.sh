@@ -2,12 +2,12 @@
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
-  echo "Usage: $0 <video-path> [cam1|cam2|cam3|cam4]" >&2
+  echo "Usage: $0 <video-path> [cameraLoginId]" >&2
   exit 1
 fi
 
 VIDEO_PATH="$1"
-CAMERA_PATH="${2:-cam1}"
+CAMERA_PATH="${2:-cam_01}"
 RTSP_BASE_URL="${RTSP_BASE_URL:-rtsp://localhost:8554}"
 
 exec ffmpeg -re -stream_loop -1 \
