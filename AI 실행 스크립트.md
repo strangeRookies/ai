@@ -31,26 +31,8 @@ bash scripts/run_rtsp_server.sh
 bash scripts/start_demo_stream.sh
 ```
 
-## 3. AI 분석 엔진 (Overlay) 환경 설정 및 사전 점검
+## 3. AI 분석 엔진 (Overlay) 실행
 ```bash
-# 1. 모델 경로 및 임계값 환경변수 설정
-export YOLO_MODEL="./yolo26n-pose.pt"
-export ACTION_MODEL="benchmark/results/lstm_yolo26n_error_augmented_compare_smoke/YOLO26n-pose=./yolo26n-pose.pt/best.pt"
-export ACTION_THRESHOLD="0.3"
-export MIN_CONSECUTIVE_FAINT="3"
-export CAMERA_COOLDOWN_SECONDS="10"
-export MQTT_TOPIC="safety/events"
-
-# 2. 모델 파일 및 GPU 로드 상태 사전 검증
-test -f "$YOLO_MODEL" && echo "YOLO OK" || echo "YOLO 파일 없음"
-test -f "$ACTION_MODEL" && echo "LSTM OK" || echo "LSTM 파일 없음"
-python -c "import torch; print('cuda:', torch.cuda.is_available())"
-```
-*(위 검증 명령어에서 "YOLO OK", "LSTM OK", "cuda: True" 가 모두 출력되어야 정상입니다.)*
-
-## 4. AI 분석 엔진 (Overlay) 실행
-```bash
-# 3. 각 카메라 채널(1~4)에 대해 백그라운드 프로세스(serve_ai_overlay.py) 실행
 mkdir -p runs/overlay_logs
 for idx in 1 2 3 4; do
   port=$((8009 + idx))
@@ -59,7 +41,7 @@ for idx in 1 2 3 4; do
     --camera-id "cam_0${idx}" \
     --camera-login-id "cam_0${idx}" \
     --detector-mode real \
-    --yolo-model "$YOLO_MODEL" \
+    --yolo-model yolo26n-pose.pt \
     --device 0 \
     --imgsz 640 \
     --detector-conf 0.10 \
@@ -69,20 +51,16 @@ for idx in 1 2 3 4; do
     --min-box-area 100 \
     --bbox-smoothing-alpha 0.60 \
     --track-max-missing-seconds 3.0 \
-    --action-model "$ACTION_MODEL" \
+    --action-model benchmark/results/lstm_yolo26n_train1000/YOLO26n-pose/best.pt \
     --action-device 0 \
-    --action-threshold "$ACTION_THRESHOLD" \
-    --min-consecutive-faint "$MIN_CONSECUTIVE_FAINT" \
-    --camera-cooldown-seconds "$CAMERA_COOLDOWN_SECONDS" \
+    --action-threshold 0.3 \
     --classifier-input keypoints \
-    --host 0.0.0.0 \
     --port "$port" \
     --publisher mqtt \
     --mqtt-host "3.38.142.174" \
     --mqtt-port 1883 \
-    --mqtt-topic "$MQTT_TOPIC" \
+    --mqtt-topic "safety/events" \
     --mqtt-client-id "ai-cam${idx}" \
-    --debug-every-n 1 \
     --print-events > "runs/overlay_logs/camera-${idx}.log" 2>&1 &
 done
 ```
