@@ -1,7 +1,10 @@
 DEFAULT_FAINT_THRESHOLD = 0.3
-DEFAULT_MIN_CONSECUTIVE_FAINT = 2
+DEFAULT_MIN_CONSECUTIVE_FAINT = 3
 DEFAULT_CAMERA_COOLDOWN_SECONDS = 10.0
-DEFAULT_ACTION_MODEL = "benchmark/results/lstm_yolo26n_train1000/YOLO26n-pose/best.pt"
+DEFAULT_ACTION_MODEL = (
+    "benchmark/results/lstm_yolo26n_error_augmented_compare_smoke/"
+    "YOLO26n-pose=./yolo26n-pose.pt/best.pt"
+)
 
 
 class FaintEventPostProcessor:
@@ -28,6 +31,13 @@ class FaintEventPostProcessor:
 
     def consecutive_count(self, camera_id, track_id=None):
         return int(self._consecutive_by_camera.get(event_state_key(camera_id, track_id), 0))
+
+    def cooldown_active(self, camera_id, timestamp, track_id=None):
+        key = event_state_key(camera_id, track_id)
+        last_event_time = self._last_event_time_by_camera.get(key)
+        if last_event_time is None:
+            return False
+        return float(timestamp) - float(last_event_time) < self.cooldown_seconds
 
 
 def event_state_key(camera_id, track_id=None):

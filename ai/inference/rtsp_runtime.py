@@ -1,13 +1,21 @@
 import json
+import os
 import re
+import time as _time
 from pathlib import Path
 
+from ai.action.classifier import LSTMActionClassifier, MockActionClassifier
 from ai.action.faint_post_processing import (
+    DEFAULT_ACTION_MODEL,
     DEFAULT_CAMERA_COOLDOWN_SECONDS,
     DEFAULT_FAINT_THRESHOLD,
     DEFAULT_MIN_CONSECUTIVE_FAINT,
     faint_probability,
 )
+from ai.postprocess.supervision_postprocessor import SupervisionPostProcessor
+from detector.mock_detector import MockDetector
+from detector.yolo_pose_detector import YoloPoseDetector
+from tracking.simple_tracker import SimpleTrackAssigner
 
 
 def normalize_detections(detections):
@@ -34,6 +42,48 @@ def normalize_detections(detections):
             }
         )
     return boxes
+
+
+def create_detector(mode, model, device, imgsz=640, conf=0.25):
+    if mode == "mock":
+        return MockDetector(model_name="mock-pose-detector")
+    return YoloPoseDetector(model, device=device, imgsz=imgsz, conf=conf)
+
+
+def create_classifier(action_model=DEFAULT_ACTION_MODEL, device="auto", action_threshold=DEFAULT_FAINT_THRESHOLD):
+    if action_model:
+        return LSTMActionClassifier(action_model, device=device, faint_threshold=action_threshold), "lstm_checkpoint"
+    return MockActionClassifier(default_label="Faint", score=0.80), "mock_lstm"
+
+
+def env_flag(name, default=False):
+    raw = os.getenv(name)
+    if raw is None:
+        return bool(default)
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def create_detection_postprocessor(args):
+    tracking_mode = str(getattr(args, "tracking_mode", "auto") or "auto").strip().lower()
+    if tracking_mode == "supervision" or (
+        tracking_mode == "auto" and env_flag("ENABLE_SUPERVISION_POSTPROCESSING", False)
+    ):
+        return SupervisionPostProcessor(), "supervision"
+    return SimpleTrackAssigner(
+        track_thresh=getattr(args, "track_thresh", 0.10),
+        match_thresh=getattr(args, "match_thresh", 0.20),
+        track_buffer=getattr(args, "track_buffer", 90),
+        min_box_area=getattr(args, "min_box_area", 100.0),
+        bbox_smoothing_alpha=getattr(args, "bbox_smoothing_alpha", 0.60),
+        max_missing_seconds=getattr(args, "track_max_missing_seconds", 4.0),
+        center_match_ratio=getattr(args, "center_match_ratio", 0.70),
+    ), "simple_tracker"
+
+
+def update_detections_with_postprocessor(postprocessor, detections, frame, timestamp):
+    if isinstance(postprocessor, SupervisionPostProcessor):
+        return postprocessor.process(detections, frame)
+    return postprocessor.update(detections, now=timestamp)
 
 
 def mock_keypoints_for_bbox(bbox):
@@ -86,23 +136,53 @@ def maybe_log_debug(packet, boxes, summary, prediction, args, prefix="[rtsp-infe
 
 
 def build_inference_event_payload(args, packet, prediction, boxes, sequence):
+    """
+    MQTT safety/events 토픽 페이로드 빌더.
+    백엔드 SafetyEventDto 스펙과 정확히 일치하도록 필드명을 맞춘다.
+
+    백엔드 SafetyEventDto 매핑:
+        type / event_type  ← prediction["label"]
+        camera_id          ← args.camera_id
+        timestamp          ← ISO-8601 UTC 문자열 (백엔드 Instant 파싱 호환)
+        severity           ← args.event_severity
+        confidence / score ← prediction["score"]
+        bbox               ← sequence bbox (List<Number>)
+        track_id           ← sequence track_id (optional)
+    """
     bbox = sequence.get("bbox") if sequence else None
     track_id = sequence.get("track_id") if sequence else None
+    faint_prob = faint_probability(prediction)
+
+    # ISO-8601 UTC 문자열 (백엔드 SafetyEventDto.rawTimestamp → resolvedTimestamp() 호환)
+    detected_at = _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime())
+
     payload = {
-        "camera_id": args.camera_id,
-        "timestamp": float(packet.timestamp),
+        # 백엔드 @JsonAlias({"type", "event_type"}) 에 맞게 두 키 모두 포함
         "event_type": prediction["label"],
+        "type": prediction["label"],
+        # 백엔드 @JsonProperty("camera_id")
+        "camera_id": args.camera_id,
+        # camera_login_id: DB cameras.camera_login_id 와 일치해야 백엔드가 Camera를 조회할 수 있음
+        # --camera-login-id 인수가 없으면 camera_id를 그대로 사용
+        "camera_login_id": getattr(args, "camera_login_id", args.camera_id),
+        # ISO-8601 UTC 문자열 (백엔드 rawTimestamp)
+        "timestamp": detected_at,
+        "detected_at": detected_at,
+        # 백엔드 severity
         "severity": getattr(args, "event_severity", "HIGH"),
+        # 백엔드 confidence (@JsonAlias({"confidence", "score"}))
         "confidence": float(prediction["score"]),
+        "faint_prob": faint_prob,
+        "score": float(prediction["score"]),
+        # 백엔드 bbox: List<Number>
         "bbox": bbox,
-        "track_id": track_id,
+        # 메시지 유형 식별자
+        "message_type": "AI_EVENT",
     }
+    if track_id is not None:
+        payload["track_id"] = track_id
     clip_path = sequence.get("clip_path") if sequence else None
     clip_url = sequence.get("clip_url") if sequence else None
-    # TODO: Event clip writing is asynchronous, so run_rtsp_inference cannot
-    # attach the final saved MP4 path at trigger time without a larger callback
-    # flow. Include clip_path/clip_url only when an upstream sequence already
-    # provides one.
     if clip_path:
         payload["clip_path"] = clip_path
     if clip_url:
@@ -113,12 +193,14 @@ def build_inference_event_payload(args, packet, prediction, boxes, sequence):
 def build_inference_event_log(args, packet, prediction, boxes, sequence):
     bbox = sequence.get("bbox") if sequence else None
     track_id = sequence.get("track_id") if sequence else None
+    faint_prob = faint_probability(prediction)
     return {
         "camera_id": args.camera_id,
         "frame_idx": int(packet.frame_idx),
         "timestamp": float(packet.timestamp),
         "event_type": prediction["label"],
         "confidence": float(prediction["score"]),
+        "faint_prob": faint_prob,
         "bbox": bbox,
         "track_id": track_id,
         "sequence_window": {"start": sequence["start_frame"], "end": sequence["end_frame"]} if sequence else None,

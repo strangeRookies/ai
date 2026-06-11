@@ -11,11 +11,13 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 from ai.action.per_track_sequence_buffer import PerTrackCropSequenceBuffers, PerTrackKeypointSequenceBuffers
 from ai.inference.rtsp_runtime import (
     build_inference_event_payload,
+    create_detection_postprocessor,
     ensure_mock_keypoints,
     maybe_log_debug,
     normalize_detections,
     update_prediction_counts,
     update_tracking_summary,
+    update_detections_with_postprocessor,
 )
 from ai.overlay_http import OverlayState, create_overlay_server
 from ai.streams.video_reader import VideoReader
@@ -40,8 +42,8 @@ from scripts.run_rtsp_inference import (
 )
 from stream.rtsp_reader import redact_url
 from tracking.display_id_mapper import DisplayIdMapper
-from tracking.simple_tracker import SimpleTrackAssigner
 from ai.publishers.event_publisher import create_event_publisher
+from ai.publishers.camera_status_publisher import CameraStatusPublisher
 
 
 def initial_summary():
@@ -53,7 +55,7 @@ def process_frame(packet, detector, classifier, sequence_buffer, summary, args, 
     if args.detector_mode == "mock":
         detections = ensure_mock_keypoints(detections)
     if tracker is not None:
-        detections = tracker.update(detections, now=packet.timestamp)
+        detections = update_detections_with_postprocessor(tracker, detections, packet.frame, packet.timestamp)
     boxes = normalize_detections(detections)
     frame_keypoint_count = sum(1 for item in detections if item.get("keypoints"))
     active_tracks = len({int(item["track_id"]) for item in detections if item.get("track_id") is not None})
@@ -159,20 +161,21 @@ class OverlayWorker:
         classifier, _classifier_mode = create_classifier(self.args.action_model, self.args.action_device, self.args.action_threshold)
         publisher, publisher_mode = create_event_publisher(self.args)
         print(f"[ai-overlay] initialized event publisher: {publisher_mode}", flush=True)
+
+        # 카메라 연결 상태 퍼블리셔 (safety/cameras/status 토픽)
+        camera_login_id = getattr(self.args, "camera_login_id", self.args.camera_id)
+        status_publisher = CameraStatusPublisher(
+            mqtt_publisher=publisher,
+            camera_login_id=camera_login_id,
+            rtsp_url=self.args.rtsp_url,
+        )
         summary = initial_summary()
         post_processor = FaintEventPostProcessor(
             min_consecutive_faint=self.args.min_consecutive_faint,
             cooldown_seconds=self.args.camera_cooldown_seconds,
         )
-        tracker = SimpleTrackAssigner(
-            track_thresh=self.args.track_thresh,
-            match_thresh=self.args.match_thresh,
-            track_buffer=self.args.track_buffer,
-            min_box_area=self.args.min_box_area,
-            bbox_smoothing_alpha=self.args.bbox_smoothing_alpha,
-            max_missing_seconds=self.args.track_max_missing_seconds,
-            center_match_ratio=self.args.center_match_ratio,
-        )
+        tracker, postprocessing_mode = create_detection_postprocessor(self.args)
+        print(f"[ai-overlay] tracking postprocessor: {postprocessing_mode}", flush=True)
         display_id_mapper = DisplayIdMapper()
         while not self.stop_event.is_set():
             if self.args.classifier_input == "crops":
@@ -193,9 +196,13 @@ class OverlayWorker:
             try:
                 with VideoReader(self.args.rtsp_url) as reader:
                     print(f"[ai-overlay] connected: {redact_url(self.args.rtsp_url)}", flush=True)
+                    # RTSP 연결 성공 → MQTT 상태 이벤트 발행
+                    status_publisher.notify_connected()
                     while not self.stop_event.is_set():
                         packet = reader.read()
                         if packet is None:
+                            # 스트림 종료 (프레임 없음) → 연결 끊김으로 판단
+                            status_publisher.notify_disconnected(reason="STREAM_ENDED")
                             break
                         overlay = process_frame(
                             packet, detector, classifier, sequence_buffer, summary, self.args,
@@ -210,6 +217,11 @@ class OverlayWorker:
                 message = f"{type(exc).__name__}: {exc}"
                 print(f"[ai-overlay] {message}", file=sys.stderr, flush=True)
                 self.state.update_error(message)
+                # 연결 오류 → MQTT 상태 이벤트 발행
+                status_publisher.notify_error(reason=type(exc).__name__)
+            # 재연결 대기 → MQTT 상태 이벤트 발행
+            if not self.stop_event.is_set():
+                status_publisher.notify_reconnecting()
             time.sleep(self.args.reconnect_delay)
 
 
@@ -217,6 +229,8 @@ def main():
     parser = argparse.ArgumentParser(description="Serve a local MJPEG stream with AI bbox/keypoint/action overlays.")
     parser.add_argument("--rtsp-url", default="rtsp://localhost:8554/cam1")
     parser.add_argument("--camera-id", default="cam_01")
+    parser.add_argument("--camera-login-id", default=None,
+                        help="DB cameras.camera_login_id 와 일치하는 식별자. 미지정 시 --camera-id 값 사용")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8010)
     parser.add_argument("--mjpeg-fps", type=float, default=8.0)
@@ -234,6 +248,7 @@ def main():
     parser.add_argument("--sequence-length", type=int, default=8)
     parser.add_argument("--sequence-stride", type=int, default=4)
     parser.add_argument("--resize-size", type=int, default=224)
+    parser.add_argument("--tracking-mode", choices=["auto", "simple", "supervision"], default="auto")
     parser.add_argument("--track-thresh", type=float, default=0.10)
     parser.add_argument("--match-thresh", "--tracker-iou-threshold", dest="match_thresh", type=float, default=0.20)
     parser.add_argument("--track-buffer", type=int, default=90)

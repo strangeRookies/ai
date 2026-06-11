@@ -19,6 +19,43 @@ DataLoader = None
 TensorDataset = None
 
 
+def print_cuda_diagnostics():
+    try:
+        import torch as torch_module
+
+        print("\n========== CUDA / cuDNN Diagnostics ==========")
+        print(f"torch version        : {torch_module.__version__}")
+        print(f"cuda available       : {torch_module.cuda.is_available()}")
+        print(f"torch cuda version   : {torch_module.version.cuda}")
+        print(f"cuDNN enabled        : {torch_module.backends.cudnn.enabled}")
+        print(f"cuDNN version        : {torch_module.backends.cudnn.version()}")
+
+        if torch_module.cuda.is_available():
+            device_count = torch_module.cuda.device_count()
+            print(f"cuda device count    : {device_count}")
+
+            for idx in range(device_count):
+                props = torch_module.cuda.get_device_properties(idx)
+                print(f"device {idx} name     : {props.name}")
+                print(f"device {idx} memory   : {props.total_memory / 1024**3:.2f} GB")
+                print(f"device {idx} capability: {props.major}.{props.minor}")
+
+            current = torch_module.cuda.current_device()
+            print(f"current cuda device  : cuda:{current}")
+            print(f"current device name  : {torch_module.cuda.get_device_name(current)}")
+
+            test_tensor = torch_module.tensor([1.0, 2.0, 3.0]).cuda()
+            print(f"test tensor device   : {test_tensor.device}")
+        else:
+            print("[train-lstm][warning] CUDA is not available. Training will run on CPU.")
+
+        print("==============================================\n")
+    except Exception as exc:  # noqa: BROAD_EXCEPT_OK - diagnostics must not abort training.
+        print("\n========== CUDA / cuDNN Diagnostics ==========")
+        print(f"[train-lstm][warning] Failed to check CUDA diagnostics: {exc}")
+        print("==============================================\n")
+
+
 def set_seed(seed):
     random.seed(seed)
     np.random.seed(seed)
@@ -279,6 +316,9 @@ def main():
     parser.add_argument("--device", default="auto")
     parser.add_argument("--dry-run-preprocess", action="store_true")
     args = parser.parse_args()
+
+    print_cuda_diagnostics()
+    print(f"[train-lstm] requested device: {args.device}")
 
     if not args.dry_run_preprocess:
         import torch as torch_module

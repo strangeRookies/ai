@@ -538,6 +538,105 @@ Keep the existing console-only dry-run path:
 python scripts/run_rtsp_inference.py --rtsp-url rtsp://localhost:8554/cam1 --camera-id cam_01 --dry-run --publisher console
 ```
 
+Optional Supervision post-processing is available but disabled by default:
+
+```text
+ENABLE_SUPERVISION_POSTPROCESSING=false
+```
+
+When the flag is unset or false, the RTSP path keeps the existing YOLO26n-pose detections, fallback tracker, per-track keypoint sequence buffers, LSTM Faint/Normal classifier input, and MQTT publish flow. To dry-run the optional Supervision ByteTrack path without publishing to MQTT:
+
+```bash
+ENABLE_SUPERVISION_POSTPROCESSING=true python scripts/run_rtsp_inference.py \
+  --rtsp-url rtsp://localhost:8554/cam1 \
+  --camera-id cam_01 \
+  --detector-mode real \
+  --yolo-model yolo26n-pose.pt \
+  --action-model benchmark/results/lstm_final_11n_vs_26n_audit/YOLO26n-pose/best.pt \
+  --classifier-input keypoints \
+  --dry-run \
+  --publisher console \
+  --max-frames 60
+```
+
+On Windows PowerShell:
+
+```powershell
+$env:ENABLE_SUPERVISION_POSTPROCESSING="true"
+python scripts/run_rtsp_inference.py --rtsp-url rtsp://localhost:8554/cam1 --camera-id cam_01 --detector-mode real --yolo-model yolo26n-pose.pt --classifier-input keypoints --dry-run --publisher console --max-frames 60
+```
+
+`track_id` is included only when the active tracker has assigned one. Snapshot saving, CDN upload, and history lookup files are intentionally out of scope for the current RTSP/LSTM path.
+
+### RTSP LSTM evaluation logging
+
+The RTSP + YOLO26n-pose + optional Supervision/ByteTrack + LSTM + MQTT flow is unchanged, but the inference script can now append one JSONL row per LSTM prediction/event candidate for offline confidence and accuracy tuning. The evaluation log is separate from the MQTT payload, so payload schema remains backward-compatible.
+
+Dry-run a normal labeled sample without MQTT publish:
+
+```bash
+python scripts/run_rtsp_inference.py \
+  --rtsp-url samples/evaluation/normal_basic/cam1.mp4 \
+  --camera-id cam_01 \
+  --detector-mode mock \
+  --dry-run \
+  --publisher console \
+  --ground-truth Normal \
+  --source-id normal_basic_cam1 \
+  --video-id normal_basic_cam1 \
+  --evaluation-log samples/evaluation/normal_basic/cam1_predictions.jsonl
+```
+
+Suggested labeled evaluation folder structure:
+
+```text
+samples/evaluation/
+  normal_basic/
+  faint/
+  hard_negative/
+  rtsp_real/
+```
+
+`hard_negative` remains part of the 2-class setup and is evaluated as `Normal`. `rtsp_real` can be used for real stream logs; rows without usable ground truth should be treated as monitoring/audit data rather than labeled metric rows.
+
+Evaluate logs and run a threshold sweep:
+
+```bash
+python scripts/evaluate_prediction_logs.py \
+  --sample-root samples/evaluation \
+  --output runs/evaluation/prediction_metrics.json \
+  --sweep-csv runs/evaluation/threshold_sweep.csv \
+  --faint-confidence-thresholds 0.3,0.4,0.5 \
+  --consecutive-faint-counts 1,2,3 \
+  --event-cooldown-seconds 0,10,30 \
+  --max-keypoint-missing-rates 0.3,0.5,1.0 \
+  --min-avg-keypoint-confs 0.0,0.3,0.5
+```
+
+Example metric output shape:
+
+```json
+{
+  "metrics": {
+    "confusion_matrix": {"TP": 18, "FP": 3, "FN": 5, "TN": 44},
+    "precision": 0.857143,
+    "recall": 0.782609,
+    "f1_score": 0.818182,
+    "false_positive_count": 3,
+    "false_negative_count": 5
+  },
+  "best_thresholds": {
+    "faint_confidence_threshold": 0.4,
+    "consecutive_faint_count": 2,
+    "event_cooldown_seconds": 10.0,
+    "max_keypoint_missing_rate": 0.5,
+    "min_avg_keypoint_conf": 0.3
+  }
+}
+```
+
+Current verification: unit tests cover event payload compatibility, candidate JSONL logging, hard-negative-as-Normal evaluation, confusion metrics, and threshold sweep filters. Remaining TODOs are to collect real labeled `normal_basic`, `faint`, and `hard_negative` clips on the GPU PC, run the sweep against real YOLO26n-pose/LSTM outputs, then choose operational thresholds from Faint recall, F1, and false positive count. Snapshot saving/CDN upload/history lookup remain future tasks.
+
 Run the older AI server path:
 
 ```bash
@@ -601,13 +700,13 @@ Detection
 -> Event schema v1.0
 ```
 
-`SimpleTrackAssigner` is a lightweight IoU-based adapter so detections without native tracker IDs still get stable-enough `track_id` values in local testing. It is intentionally isolated behind `tracking/simple_tracker.py` so ByteTrack can replace it later without changing the event rule or MQTT schema.
+`SimpleTrackAssigner` is a lightweight IoU-based adapter so detections without native tracker IDs still get stable-enough `track_id` values in local testing. The optional Supervision post-processing path can use ByteTrack when `ENABLE_SUPERVISION_POSTPROCESSING=true`, without changing the event rule or MQTT schema.
 
 `FallRuleEngine` confirms an event only after the candidate score passes the threshold in at least `FALL_DECISION_REQUIRED` of the last `FALL_DECISION_WINDOW` observations and remains active for `FALL_MIN_DURATION_SECONDS`. This keeps the diagram's "2 out of recent 3" decision rule while preserving duration and cooldown safeguards.
 
 TODO:
 
-- Replace `SimpleTrackAssigner` with ByteTrack or another production tracker for stable `track_id` across crowded real streams.
+- Validate optional Supervision ByteTrack on the GPU PC before deciding whether it should replace the default `SimpleTrackAssigner` path.
 - Expand rule modules for unconscious, bed fall, unauthorized exit, and violence detection.
 - Add RTSP benchmark tooling in `benchmark/benchmark_rtsp.py`.
 - Calibrate thresholds with real non-sensitive sample videos.

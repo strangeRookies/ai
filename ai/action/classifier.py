@@ -1,3 +1,6 @@
+from pathlib import Path
+
+
 class ActionClassifier:
     def predict(self, sequence):
         raise NotImplementedError
@@ -34,6 +37,9 @@ class LSTMActionModel:
 
 class LSTMActionClassifier(ActionClassifier):
     def __init__(self, checkpoint_path, device="auto", faint_threshold=0.5):
+        checkpoint = Path(checkpoint_path)
+        if not checkpoint.exists():
+            raise FileNotFoundError(f"LSTM action checkpoint not found: {checkpoint_path}")
         try:
             import torch
         except ImportError as exc:
@@ -42,7 +48,7 @@ class LSTMActionClassifier(ActionClassifier):
         self.torch = torch
         self.device = torch.device(normalize_torch_device(device, torch))
         self.faint_threshold = float(faint_threshold)
-        checkpoint = torch.load(checkpoint_path, map_location="cpu")
+        checkpoint = torch.load(checkpoint, map_location="cpu")
         self.classes = checkpoint.get("classes", ["Normal", "Fall"])
         model_cfg = checkpoint["model_config"]
         wrapper = LSTMActionModel(**model_cfg)
