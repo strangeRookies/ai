@@ -34,8 +34,8 @@ bash scripts/run_rtsp_server.sh
 # REAL_RTSP      : 백엔드 rtspUrl을 그대로 분석
 # SIMULATED_RTSP : assignedVideoPath 또는 video_pool mp4를 rtsp://GPU_PC_IP:8554/{cameraLoginId} 로 반복 송출 후 분석
 python scripts/run_registered_cameras.py \
-  --backend-base-url "http://127.0.0.1:8080" \
-  --rtsp-base-url "rtsp://58.127.241.84:8554" \
+  --backend-base-url "http://BACKEND_HOST:8080" \
+  --rtsp-base-url "rtsp://@58.127.241.84:8554" \
   --video-pool video_pool \
   --overlay-base-port 8010 \
   --detector-mode real \
@@ -55,7 +55,7 @@ python scripts/run_registered_cameras.py \
 
 # 실제 실행 전 명령만 확인하고 싶으면 --dry-run 추가
 python scripts/run_registered_cameras.py \
-  --backend-base-url "http://127.0.0.1:8080" \
+  --backend-base-url "http://BACKEND_HOST:8080" \
   --rtsp-base-url "rtsp://GPU_PC_IP:8554" \
   --dry-run
 ```
