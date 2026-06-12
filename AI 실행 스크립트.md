@@ -1,5 +1,17 @@
 # AI Edge Worker & Backend 실행 스크립트
 
+> **💡 요약: 전체 시스템 실행을 위해 총 4개의 터미널 창이 필요합니다.**
+> - **[터미널 1] (GPU 서버)**: 기존 프로세스 초기화 및 AI Worker / RTSP 서버 실행
+> - **[터미널 2] (로컬 PC)**: GPU 서버 ↔ 로컬 PC 포트포워딩
+> - **[터미널 3] (로컬 PC)**: AWS RDS DB 터널링
+> - **[터미널 4] (로컬 PC)**: Spring Boot 백엔드 서버 실행
+> - *(선택)* **[터미널 5] (GPU 서버)**: 실시간 로그 및 리소스 모니터링
+> 
+> *참고: 본 문서의 가이드는 '2. 등록 카메라 기반 실행 (권장)' 방식을 기준으로 작성되었습니다.*
+
+---
+
+
 ## 1. GPU 서버 접속 및 전체 프로세스 초기화
 ```bash
 ssh welabs@58.127.241.84
@@ -63,7 +75,7 @@ python scripts/run_registered_cameras.py \
   --skip-rtsp-probe
 ```
 
-## 2. 영상 송출 (RTSP & 테스트 비디오)
+## 3. [수동/테스트] 영상 송출 (RTSP & 테스트 비디오)
 ```bash
 # 1. MediaMTX 서버 백그라운드 실행
 bash scripts/run_rtsp_server.sh
@@ -72,7 +84,7 @@ bash scripts/run_rtsp_server.sh
 bash scripts/start_demo_stream.sh
 ```
 
-## 3. AI 분석 엔진 (Overlay) 실행
+## 4. [수동/테스트] AI 분석 엔진 (Overlay) 실행
 ```bash
 mkdir -p runs/overlay_logs
 for idx in 1 2 3 4; do
@@ -107,29 +119,29 @@ for idx in 1 2 3 4; do
 done
 ```
 
-## 4. 백엔드 및 DB 접속 환경 구성 (로컬 PC)
+## 5. 백엔드 및 DB 접속 환경 구성 (로컬 PC)
 
 로컬 PC(Windows PowerShell)에서 **새 창**을 열고 각각 실행합니다.
 
-### 4-1. GPU 서버 -> 로컬 PC 포트포워딩
+### 5-1. GPU 서버 -> 로컬 PC 포트포워딩
 ```cmd
 ssh -N -L 8010:localhost:8010 -L 8011:localhost:8011 -L 8012:localhost:8012 -L 8013:localhost:8013 welabs@58.127.241.84
 ```
 
-### 4-2. AWS RDS DB 터널링
+### 5-2. AWS RDS DB 터널링
 새 PowerShell 창에서 실행합니다.
 ```cmd
 aws ssm start-session --target i-0e43b10f72af9f159 --document-name AWS-StartPortForwardingSessionToRemoteHost --parameters "host=[smart-safety-db.cleq04iqogz6.ap-northeast-2.rds.amazonaws.com],portNumber=[5432],localPortNumber=[15432]"
 ```
 
-### 4-3. Spring Boot 백엔드 서버 실행
+### 5-3. Spring Boot 백엔드 서버 실행
 DB 터널링 연결이 완료된 후, 새 PowerShell 창에서 실행합니다.
 ```cmd
 cd strange_back
 .\gradlew.bat bootRun
 ```
 
-## 5. 모니터링 및 문제 점검 (GPU 서버 터미널)
+## 6. 모니터링 및 문제 점검 (GPU 서버 터미널)
 
 ```bash
 # 영상 포트 응답 확인 (정상 시 200 출력)
