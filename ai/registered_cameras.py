@@ -71,6 +71,8 @@ class RunnerConfig:
     tracking_mode: str
     print_events: bool
     dry_run: bool
+    rtsp_probe_enabled: bool
+    refresh_interval_seconds: float
 
 
 def camera_rtsp_url(rtsp_base_url: str, camera_login_id: str) -> str:
