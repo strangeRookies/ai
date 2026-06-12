@@ -46,7 +46,7 @@ bash scripts/run_rtsp_server.sh
 # REAL_RTSP      : 백엔드 rtspUrl을 그대로 분석
 # SIMULATED_RTSP : assignedVideoPath 또는 video_pool mp4를 rtsp://GPU_PC_IP:8554/{cameraLoginId} 로 반복 송출 후 분석
 python scripts/run_registered_cameras.py \
-  --backend-base-url "http://BACKEND_HOST:8080" \
+  --backend-base-url "http://127.0.0.1:8080" \
   --rtsp-base-url "rtsp://@58.127.241.84:8554" \
   --video-pool video_pool \
   --overlay-base-port 8010 \
@@ -69,7 +69,7 @@ python scripts/run_registered_cameras.py \
 # 실제 실행 전 명령만 확인하고 싶으면 --dry-run 추가
 # RTSP URL 접속 테스트를 건너뛰고 싶으면 --skip-rtsp-probe 추가
 python scripts/run_registered_cameras.py \
-  --backend-base-url "http://BACKEND_HOST:8080" \
+  --backend-base-url "http://127.0.0.1:8080" \
   --rtsp-base-url "rtsp://GPU_PC_IP:8554" \
   --dry-run \
   --skip-rtsp-probe
@@ -123,9 +123,10 @@ done
 
 로컬 PC(Windows PowerShell)에서 **새 창**을 열고 각각 실행합니다.
 
-### 5-1. GPU 서버 -> 로컬 PC 포트포워딩
+### 5-1. GPU 서버 ↔ 로컬 PC 양방향 포트포워딩
+GPU 서버의 AI Worker가 로컬 백엔드(8080)에 접속할 수 있도록 원격 포워딩(`-R`)을 추가하고, 로컬 PC에서 GPU 서버의 영상 스트림(8010~8013)을 볼 수 있도록 로컬 포워딩(`-L`)을 한 번에 결합하여 실행합니다.
 ```cmd
-ssh -N -L 8010:localhost:8010 -L 8011:localhost:8011 -L 8012:localhost:8012 -L 8013:localhost:8013 welabs@58.127.241.84
+ssh -N -L 8010:localhost:8010 -L 8011:localhost:8011 -L 8012:localhost:8012 -L 8013:localhost:8013 -R 8080:localhost:8080 welabs@58.127.241.84
 ```
 
 ### 5-2. AWS RDS DB 터널링
