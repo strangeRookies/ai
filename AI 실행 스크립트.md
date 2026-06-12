@@ -1,141 +1,111 @@
-# AI Edge Worker & Backend 실행 스크립트
+# Front Stream / AI Overlay 실행 가이드
 
-## 1. GPU 서버 접속 및 전체 프로세스 초기화
-```bash
-ssh welabs@58.127.241.84
+작업 경로는 반드시 `/home/welabs/yolo_training/strange_ai_lstm` 기준입니다. 카메라 경로와 ID는 `cam_01`, `cam_02`, `cam_03`, `cam_04` 규칙을 유지합니다.
 
-cd ~/yolo_training/strange_ai_lstm
-source .venv/bin/activate 2>/dev/null || source ../strange_ai/.venv/bin/activate
+## 포트 역할
 
-# 최신 코드 업데이트
-git fetch origin
-git checkout codex/ai-worker-flow-improvements
-git pull origin codex/ai-worker-flow-improvements
+- `8554`: MediaMTX RTSP
+- `8888`: MediaMTX raw HLS
+- `8010~8013`: AI overlay MJPEG
 
-# 기존 백그라운드 프로세스 모두 강제 종료
-fuser -k 8010/tcp 2>/dev/null || true
-fuser -k 8011/tcp 2>/dev/null || true
-fuser -k 8012/tcp 2>/dev/null || true
-fuser -k 8013/tcp 2>/dev/null || true
-pkill -f "scripts/serve_ai_overlay.py" 2>/dev/null || true
-pkill -9 ffmpeg 2>/dev/null || true
-docker stop mediamtx 2>/dev/null || true
+프론트 기본값은 AI 박스가 보이는 overlay 모드입니다.
+
+```env
+VITE_STREAM_MODE=overlay
+VITE_HLS_BASE_URL=http://localhost:8888
+VITE_OVERLAY_BASE_URL=http://localhost:8010
 ```
 
-## 2. 등록 카메라 기반 실행 (권장)
+raw HLS 모드는 `http://localhost:8888/{cameraLoginId}/index.m3u8`를 사용합니다.
+
+overlay MJPEG 모드는 포트를 카메라 번호에 맞춰 사용합니다.
+
+- `cam_01 -> http://localhost:8010`
+- `cam_02 -> http://localhost:8011`
+- `cam_03 -> http://localhost:8012`
+- `cam_04 -> http://localhost:8013`
+
+## 1. GPU PC에서 MediaMTX 실행
+
 ```bash
-cd ~/yolo_training/strange_ai_lstm
-source .venv/bin/activate 2>/dev/null || source ../strange_ai/.venv/bin/activate
-
-# MediaMTX 서버 실행
+cd /home/welabs/yolo_training/strange_ai_lstm
 bash scripts/run_rtsp_server.sh
+```
 
-# 백엔드에 등록된 ACTIVE + aiEnabled 카메라 목록을 읽어서 카메라별 AI overlay worker 실행
-# REAL_RTSP      : 백엔드 rtspUrl을 그대로 분석
-# SIMULATED_RTSP : assignedVideoPath 또는 video_pool mp4를 rtsp://GPU_PC_IP:8554/{cameraLoginId} 로 반복 송출 후 분석
+확인:
+
+```bash
+curl -L http://127.0.0.1:8888/cam_01/index.m3u8
+```
+
+정상이라면 `#EXTM3U`가 출력됩니다.
+
+## 2. GPU PC에서 folder-based RTSP publisher 실행
+
+```bash
+cd /home/welabs/yolo_training/strange_ai_lstm
+source .venv/bin/activate
+python scripts/start_simulated_rtsp_from_folder.py \
+  --video-dir /home/welabs/yolo_training/ai_fall_experiments/data/raw/indoor_chromakey/videos \
+  --backend-url http://localhost:8080 \
+  --rtsp-host 127.0.0.1 \
+  --rtsp-port 8554 \
+  --poll-interval 30
+```
+
+## 3. GPU PC에서 AI runner 실행
+
+```bash
+cd /home/welabs/yolo_training/strange_ai_lstm
+source .venv/bin/activate
 python scripts/run_registered_cameras.py \
-  --backend-base-url "http://BACKEND_HOST:8080" \
-  --rtsp-base-url "rtsp://@58.127.241.84:8554" \
-  --video-pool video_pool \
+  --backend-base-url "http://127.0.0.1:8080" \
+  --rtsp-base-url "rtsp://127.0.0.1:8554" \
+  --video-pool /home/welabs/yolo_training/ai_fall_experiments/data/raw/indoor_chromakey/videos \
   --overlay-base-port 8010 \
   --detector-mode real \
   --yolo-model yolo26n-pose.pt \
-  --device 0 \
-  --tracking-mode supervision \
-  --action-model benchmark/results/lstm_yolo26n_train1000/YOLO26n-pose/best.pt \
-  --action-device 0 \
-  --action-threshold 0.3 \
-  --classifier-input keypoints \
-  --publisher mqtt \
-  --mqtt-host "3.38.142.174" \
-  --mqtt-port 1883 \
-  --mqtt-topic "safety/events" \
-  --mqtt-client-id-prefix "ai-registered" \
-  --print-events
-
-# 실제 실행 전 명령만 확인하고 싶으면 --dry-run 추가
-python scripts/run_registered_cameras.py \
-  --backend-base-url "http://BACKEND_HOST:8080" \
-  --rtsp-base-url "rtsp://GPU_PC_IP:8554" \
-  --dry-run
+  --skip-simulated-ffmpeg
 ```
 
-## 2. 영상 송출 (RTSP & 테스트 비디오)
-```bash
-# 1. MediaMTX 서버 백그라운드 실행
-bash scripts/run_rtsp_server.sh
+## 4. Windows PC에서 SSH 터널링 실행
 
-# 2. 테스트용 시뮬레이션 영상 송출 시작 (cam1 ~ cam4)
-bash scripts/start_demo_stream.sh
-```
-
-## 3. AI 분석 엔진 (Overlay) 실행
-```bash
-mkdir -p runs/overlay_logs
-for idx in 1 2 3 4; do
-  port=$((8009 + idx))
-  nohup python -u scripts/serve_ai_overlay.py \
-    --rtsp-url "rtsp://localhost:8554/cam${idx}" \
-    --camera-id "cam_0${idx}" \
-    --camera-login-id "cam_0${idx}" \
-    --detector-mode real \
-    --yolo-model yolo26n-pose.pt \
-    --device 0 \
-    --imgsz 640 \
-    --detector-conf 0.10 \
-    --tracking-mode supervision \
-    --track-thresh 0.10 \
-    --match-thresh 0.20 \
-    --track-buffer 45 \
-    --min-box-area 100 \
-    --bbox-smoothing-alpha 0.60 \
-    --track-max-missing-seconds 3.0 \
-    --action-model benchmark/results/lstm_yolo26n_train1000/YOLO26n-pose/best.pt \
-    --action-device 0 \
-    --action-threshold 0.3 \
-    --classifier-input keypoints \
-    --port "$port" \
-    --publisher mqtt \
-    --mqtt-host "3.38.142.174" \
-    --mqtt-port 1883 \
-    --mqtt-topic "safety/events" \
-    --mqtt-client-id "ai-cam${idx}" \
-    --print-events > "runs/overlay_logs/camera-${idx}.log" 2>&1 &
-done
-```
-
-## 4. 백엔드 및 DB 접속 환경 구성 (로컬 PC)
-
-로컬 PC(Windows PowerShell)에서 **새 창**을 열고 각각 실행합니다.
-
-### 4-1. GPU 서버 -> 로컬 PC 포트포워딩
-```cmd
-ssh -N -L 8010:localhost:8010 -L 8011:localhost:8011 -L 8012:localhost:8012 -L 8013:localhost:8013 welabs@58.127.241.84
-```
-
-### 4-2. AWS RDS DB 터널링
-새 PowerShell 창에서 실행합니다.
-```cmd
-aws ssm start-session --target i-0e43b10f72af9f159 --document-name AWS-StartPortForwardingSessionToRemoteHost --parameters "host=[smart-safety-db.cleq04iqogz6.ap-northeast-2.rds.amazonaws.com],portNumber=[5432],localPortNumber=[15432]"
-```
-
-### 4-3. Spring Boot 백엔드 서버 실행
-DB 터널링 연결이 완료된 후, 새 PowerShell 창에서 실행합니다.
-```cmd
-cd strange_back
-.\gradlew.bat bootRun
-```
-
-## 5. 모니터링 및 문제 점검 (GPU 서버 터미널)
+GPU PC IP 직접 접근이 timeout이면 Windows 브라우저에서는 GPU PC IP 대신 `localhost`를 사용합니다.
 
 ```bash
-# 영상 포트 응답 확인 (정상 시 200 출력)
-for port in 8010 8011 8012 8013; do curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:${port}/stream; done
-
-# 실시간 이벤트 및 에러 로그 확인
-tail -f runs/overlay_logs/camera-1.log
-
-# GPU/CPU 사용량 모니터링
-watch -n 1 nvidia-smi
-htop
+ssh -L 8888:127.0.0.1:8888 \
+    -L 8010:127.0.0.1:8010 \
+    -L 8011:127.0.0.1:8011 \
+    -L 8012:127.0.0.1:8012 \
+    -L 8013:127.0.0.1:8013 \
+    welabs@192.168.0.66
 ```
+
+## 5. 브라우저 확인
+
+- RAW HLS: `http://localhost:8888/cam_01/index.m3u8`
+- AI Overlay: `http://localhost:8010`
+
+## 6. 프론트 확인
+
+overlay 모드:
+
+```env
+VITE_STREAM_MODE=overlay
+VITE_HLS_BASE_URL=http://localhost:8888
+VITE_OVERLAY_BASE_URL=http://localhost:8010
+```
+
+raw 모드:
+
+```env
+VITE_STREAM_MODE=raw
+VITE_HLS_BASE_URL=http://localhost:8888
+VITE_OVERLAY_BASE_URL=http://localhost:8010
+```
+
+검증 기준:
+
+- `VITE_STREAM_MODE=raw`에서 원본 HLS 영상이 표시됩니다.
+- `VITE_STREAM_MODE=overlay`에서 AI 박스가 포함된 MJPEG 영상이 표시됩니다.
+- 프론트 콘솔에 최종 stream URL이 출력됩니다.

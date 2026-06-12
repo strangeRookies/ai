@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -12,6 +13,7 @@ from ai.registered_cameras import (
     load_active_cameras,
     parse_camera,
 )
+from ai.registered_camera_workers import CameraWorker, publish_unavailable_camera_status, sync_camera_workers
 
 
 class RegisteredCameraRunnerTest(unittest.TestCase):
@@ -98,6 +100,101 @@ class RegisteredCameraRunnerTest(unittest.TestCase):
         self.assertEqual(cameras[0].camera_login_id, "cam_02")
         self.assertEqual(cameras[0].rtsp_url, "rtsp://cctv/cam_02")
 
+    def test_publish_unavailable_camera_status_uses_camera_login_id(self):
+        camera = RegisteredCamera(
+            camera_id="10",
+            camera_login_id="cam4",
+            rtsp_url="rtsp://gpu-pc:8554/cam4",
+            source_type="REAL_RTSP",
+            assigned_video_path=None,
+        )
+
+        with patch("ai.registered_camera_workers.create_event_publisher", return_value=(FakePublisher(), "console")) as create_publisher:
+            publish_unavailable_camera_status(
+                camera,
+                "rtsp://gpu-pc:8554/cam4",
+                fake_config(Path("video_pool")),
+                "ERROR",
+                "RTSP_PROBE_FAILED",
+            )
+
+        publisher = create_publisher.return_value[0]
+        self.assertEqual(len(publisher.client.payloads), 1)
+        self.assertEqual(publisher.client.payloads[0]["camera_login_id"], "cam4")
+        self.assertEqual(publisher.client.payloads[0]["status"], "ERROR")
+        self.assertEqual(publisher.client.payloads[0]["reason"], "RTSP_PROBE_FAILED")
+
+    def test_sync_camera_workers_skips_unreachable_real_rtsp(self):
+        camera = RegisteredCamera(
+            camera_id="11",
+            camera_login_id="cam5",
+            rtsp_url="rtsp://gpu-pc:8554/cam5",
+            source_type="REAL_RTSP",
+            assigned_video_path=None,
+        )
+        config = replace(fake_config(Path("video_pool")), dry_run=False, publisher="console")
+        workers: dict[str, CameraWorker] = {}
+
+        with (
+            patch("ai.registered_camera_workers.rtsp_has_readable_frame", return_value=False),
+            patch("ai.registered_camera_workers.publish_unavailable_camera_status") as publish_status,
+            patch("ai.registered_camera_workers.spawn_process") as spawn_process,
+        ):
+            sync_camera_workers(workers, [camera], config)
+
+        publish_status.assert_called_once()
+        spawn_process.assert_not_called()
+        self.assertNotIn("cam5", workers)
+
+    def test_sync_camera_workers_starts_new_active_camera(self):
+        camera = RegisteredCamera(
+            camera_id="12",
+            camera_login_id="cam6",
+            rtsp_url="rtsp://gpu-pc:8554/cam6",
+            source_type="REAL_RTSP",
+            assigned_video_path=None,
+        )
+        worker = CameraWorker(processes=[], overlay_port=8010, source_signature="REAL_RTSP:rtsp://gpu-pc:8554/cam6")
+        workers: dict[str, CameraWorker] = {}
+
+        with patch("ai.registered_camera_workers.start_camera_worker", return_value=worker) as start_worker:
+            sync_camera_workers(workers, [camera], fake_config(Path("video_pool")))
+
+        start_worker.assert_called_once()
+        self.assertIs(workers["cam6"], worker)
+
+    def test_sync_camera_workers_stops_removed_camera(self):
+        worker = CameraWorker(processes=[], overlay_port=8010, source_signature="REAL_RTSP:rtsp://gpu-pc:8554/cam7")
+        workers = {"cam7": worker}
+
+        with patch("ai.registered_camera_workers.stop_processes") as stop_processes:
+            sync_camera_workers(workers, [], fake_config(Path("video_pool")))
+
+        stop_processes.assert_called_once_with(worker.processes)
+        self.assertNotIn("cam7", workers)
+
+    def test_sync_camera_workers_restarts_camera_when_rtsp_url_changes(self):
+        camera = RegisteredCamera(
+            camera_id="13",
+            camera_login_id="cam8",
+            rtsp_url="rtsp://gpu-pc:8554/cam8-new",
+            source_type="REAL_RTSP",
+            assigned_video_path=None,
+        )
+        old_worker = CameraWorker(processes=[], overlay_port=8010, source_signature="REAL_RTSP:rtsp://gpu-pc:8554/cam8-old")
+        new_worker = CameraWorker(processes=[], overlay_port=8010, source_signature="REAL_RTSP:rtsp://gpu-pc:8554/cam8-new")
+        workers = {"cam8": old_worker}
+
+        with (
+            patch("ai.registered_camera_workers.stop_processes") as stop_processes,
+            patch("ai.registered_camera_workers.start_camera_worker", return_value=new_worker) as start_worker,
+        ):
+            sync_camera_workers(workers, [camera], fake_config(Path("video_pool")))
+
+        stop_processes.assert_called_once_with(old_worker.processes)
+        start_worker.assert_called_once()
+        self.assertIs(workers["cam8"], new_worker)
+
 
 class FakeHttpResponse:
     def __init__(self, body: bytes):
@@ -111,6 +208,25 @@ class FakeHttpResponse:
 
     def read(self):
         return self._body
+
+
+class FakePublisher:
+    def __init__(self):
+        self.client = FakeMqttClient()
+
+    def close(self):
+        return None
+
+
+class FakeMqttClient:
+    def __init__(self):
+        self.payloads = []
+
+    def publish(self, unused_topic, payload, qos=0):
+        import json
+
+        self.payloads.append(json.loads(payload))
+        return None
 
 
 def fake_config(video_pool: Path) -> RunnerConfig:
@@ -142,4 +258,6 @@ def fake_config(video_pool: Path) -> RunnerConfig:
         tracking_mode="supervision",
         print_events=False,
         dry_run=True,
+        rtsp_probe_enabled=True,
+        refresh_interval_seconds=30.0,
     )
