@@ -30,7 +30,7 @@ source .venv/bin/activate 2>/dev/null || source ../strange_ai/.venv/bin/activate
 # MediaMTX 서버 실행
 bash scripts/run_rtsp_server.sh
 
-# 백엔드에 등록된 ACTIVE + aiEnabled 카메라 목록을 읽어서 카메라별 AI overlay worker 실행
+# 백엔드에 등록된 ACTIVE + aiEnabled 카메라 목록을 주기적(기본 30초)으로 동기화하며 AI overlay worker를 실행 및 관리합니다.
 # REAL_RTSP      : 백엔드 rtspUrl을 그대로 분석
 # SIMULATED_RTSP : assignedVideoPath 또는 video_pool mp4를 rtsp://GPU_PC_IP:8554/{cameraLoginId} 로 반복 송출 후 분석
 python scripts/run_registered_cameras.py \
@@ -51,13 +51,16 @@ python scripts/run_registered_cameras.py \
   --mqtt-port 1883 \
   --mqtt-topic "safety/events" \
   --mqtt-client-id-prefix "ai-registered" \
+  --refresh-interval-seconds 30.0 \
   --print-events
 
 # 실제 실행 전 명령만 확인하고 싶으면 --dry-run 추가
+# RTSP URL 접속 테스트를 건너뛰고 싶으면 --skip-rtsp-probe 추가
 python scripts/run_registered_cameras.py \
   --backend-base-url "http://BACKEND_HOST:8080" \
   --rtsp-base-url "rtsp://GPU_PC_IP:8554" \
-  --dry-run
+  --dry-run \
+  --skip-rtsp-probe
 ```
 
 ## 2. 영상 송출 (RTSP & 테스트 비디오)
