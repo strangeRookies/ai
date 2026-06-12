@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>GPU PC RTSP 채널과 AI 분석 대상 동기화</title>
+</head>
+<body>
+<h1 style="font-size: 2em; font-weight: bold;">GPU PC RTSP 채널과 AI 분석 대상 동기화</h1>
+<p>&nbsp;</p>
+<h2 style="font-size: 1.5em; font-weight: bold;">도입부</h2>
+<p>&nbsp;</p>
+<p>이 글에서는 GPU PC RTSP 채널과 AI 분석 대상 동기화를 중심으로 배경, 해결 방향, 실행 예시 흐름을 차근차근 정리합니다.</p>
+<p>&nbsp;</p>
+<h2 style="font-size: 1.5em; font-weight: bold;">목차</h2>
+<p>&nbsp;</p>
+<p class="se-text-paragraph se-text-paragraph-align-left" style="line-height: 1.8;"><span class="se-ff-nanumgothic se-fs15 __se-node" style="color: rgb(0, 0, 0);">• 배경</span></p>
+<p class="se-text-paragraph se-text-paragraph-align-left" style="line-height: 1.8;"><span class="se-ff-nanumgothic se-fs15 __se-node" style="color: rgb(0, 0, 0);">• 해결 방향</span></p>
+<p class="se-text-paragraph se-text-paragraph-align-left" style="line-height: 1.8;"><span class="se-ff-nanumgothic se-fs15 __se-node" style="color: rgb(0, 0, 0);">• 실행 예시</span></p>
+<p class="se-text-paragraph se-text-paragraph-align-left" style="line-height: 1.8;"><span class="se-ff-nanumgothic se-fs15 __se-node" style="color: rgb(0, 0, 0);">• 이미지 메모</span></p>
+<p>&nbsp;</p>
+<h2 style="font-size: 1.5em; font-weight: bold;">본문</h2>
+<p>&nbsp;</p>
+<h3 style="font-size: 1.17em; font-weight: bold;">배경</h3>
+<p>&nbsp;</p>
+<p>GPU PC에서는 cam1, cam2, cam3, cam4만 실제 RTSP로 송출 중인데, 백엔드 DB나 프론트 화면에는 더 많은 카메라가 남아 있을 수 있다.</p>
+<p>&nbsp;</p>
+<p>이 상태에서는 프론트에서 영상이 보이지 않는 카메라에서도 AI 알림이 발생할 수 있다.</p>
+<p>&nbsp;</p>
+<h3 style="font-size: 1.17em; font-weight: bold;">해결 방향</h3>
+<p>&nbsp;</p>
+<p class="se-text-paragraph se-text-paragraph-align-left" style="line-height: 1.8;"><span class="se-ff-nanumgothic se-fs15 __se-node" style="color: rgb(0, 0, 0);">• 백엔드는 active 상태인 카메라만 내려준다.</span></p>
+<p class="se-text-paragraph se-text-paragraph-align-left" style="line-height: 1.8;"><span class="se-ff-nanumgothic se-fs15 __se-node" style="color: rgb(0, 0, 0);">• 프론트는 백엔드 API에서 받은 활성 카메라만 렌더링한다.</span></p>
+<p class="se-text-paragraph se-text-paragraph-align-left" style="line-height: 1.8;"><span class="se-ff-nanumgothic se-fs15 __se-node" style="color: rgb(0, 0, 0);">• AI 분석 서버는 실제 RTSP 연결이 가능한 카메라만 분석한다.</span></p>
+<p>&nbsp;</p>
+<h3 style="font-size: 1.17em; font-weight: bold;">실행 예시</h3>
+<p>&nbsp;</p>
+<div style="background-color: rgb(246, 248, 250); border: 1px solid rgb(221, 221, 221); border-radius: 6px; padding: 16px; font-family: &quot;Courier New&quot;, monospace; font-size: 0.9em; color: rgb(36, 41, 46);"><div>python&nbsp;scripts/run_registered_cameras.py&nbsp;--backend-base-url&nbsp;&quot;http://127.0.0.1:18080&quot;&nbsp;--rtsp-base-url&nbsp;&quot;rtsp://127.0.0.1:8554&quot;</div></div>
+<p>&nbsp;</p>
+<h3 style="font-size: 1.17em; font-weight: bold;">이미지 메모</h3>
+<p>&nbsp;</p>
+<div><img src="./images/camera-flow.png" alt="카메라 흐름도" style="max-width: 100%; height: auto;"></div>
+<p>&nbsp;</p>
+<h2 style="font-size: 1.5em; font-weight: bold;">핵심 정리</h2>
+<p>&nbsp;</p>
+<p class="se-text-paragraph se-text-paragraph-align-left" style="line-height: 1.8;"><span class="se-ff-nanumgothic se-fs15 __se-node" style="color: rgb(0, 0, 0);">• 배경 내용을 중심으로 확인합니다.</span></p>
+<p class="se-text-paragraph se-text-paragraph-align-left" style="line-height: 1.8;"><span class="se-ff-nanumgothic se-fs15 __se-node" style="color: rgb(0, 0, 0);">• 해결 방향 내용을 중심으로 확인합니다.</span></p>
+<p class="se-text-paragraph se-text-paragraph-align-left" style="line-height: 1.8;"><span class="se-ff-nanumgothic se-fs15 __se-node" style="color: rgb(0, 0, 0);">• 실행 예시 내용을 중심으로 확인합니다.</span></p>
+<p class="se-text-paragraph se-text-paragraph-align-left" style="line-height: 1.8;"><span class="se-ff-nanumgothic se-fs15 __se-node" style="color: rgb(0, 0, 0);">• 이미지 메모 내용을 중심으로 확인합니다.</span></p>
+<p>&nbsp;</p>
+<h2 style="font-size: 1.5em; font-weight: bold;">마무리</h2>
+<p>&nbsp;</p>
+<p>GPU PC RTSP 채널과 AI 분석 대상 동기화를 적용할 때는 위 내용을 기준으로 먼저 흐름을 확인하고, 코드나 명령어, 설정값은 원본 맥락에 맞게 다시 점검해 주세요.</p>
+</body>
+</html>

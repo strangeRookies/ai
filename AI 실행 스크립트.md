@@ -1,13 +1,14 @@
 # AI Edge Worker & Backend 실행 스크립트
 
-> **💡 요약: 전체 시스템 실행을 위해 총 4개의 터미널 창이 필요합니다.**
-> - **[터미널 1] (GPU 서버)**: 기존 프로세스 초기화 및 AI Worker / RTSP 서버 실행
-> - **[터미널 2] (로컬 PC)**: GPU 서버 ↔ 로컬 PC 포트포워딩
-> - **[터미널 3] (로컬 PC)**: AWS RDS DB 터널링
-> - **[터미널 4] (로컬 PC)**: Spring Boot 백엔드 서버 실행
-> - *(선택)* **[터미널 5] (GPU 서버)**: 실시간 로그 및 리소스 모니터링
+> **💡 요약: 전체 시스템 실행을 위해 총 5개의 터미널 창이 필요합니다.**
+> - **[터미널 1] (GPU 서버)**: MediaMTX 실행 및 영상 폴더 기반 자동 RTSP 송출 (`start_simulated_rtsp_from_folder.py`) 실행
+> - **[터미널 2] (GPU 서버)**: AI 분석 엔진 (`run_registered_cameras.py` + `--skip-simulated-ffmpeg`) 실행
+> - **[터미널 3] (로컬 PC)**: GPU 서버 ↔ 로컬 PC 포트포워딩 (양방향 터널링)
+> - **[터미널 4] (로컬 PC)**: AWS RDS DB 터널링
+> - **[터미널 5] (로컬 PC)**: Spring Boot 백엔드 서버 실행
+> - *(선택)* **[터미널 6] (GPU 서버)**: 실시간 로그 및 리소스 모니터링
 > 
-> *참고: 본 문서의 가이드는 '2. 등록 카메라 기반 실행 (권장)' 방식을 기준으로 작성되었습니다.*
+> *참고: 본 가이드는 신규 추가된 '영상 폴더 기반 자동 송출 및 AI 분석 흐름'을 기준으로 작성되었습니다.*
 
 ---
 
@@ -35,6 +36,9 @@ docker stop mediamtx 2>/dev/null || true
 ```
 
 ## 2. 등록 카메라 기반 실행 (권장)
+
+### [터미널 1] (GPU 서버) - MediaMTX 실행 및 영상 폴더 기반 자동 RTSP 송출
+백엔드에 등록된 `SIMULATED_RTSP` 카메라 목록에 맞추어, 지정된 폴더의 비디오 파일들을 1:1 또는 순환 매핑하여 RTSP 스트림을 자동 송출합니다.
 ```bash
 cd ~/yolo_training/strange_ai_lstm
 source .venv/bin/activate 2>/dev/null || source ../strange_ai/.venv/bin/activate
@@ -42,9 +46,22 @@ source .venv/bin/activate 2>/dev/null || source ../strange_ai/.venv/bin/activate
 # MediaMTX 서버 실행
 bash scripts/run_rtsp_server.sh
 
-# 백엔드에 등록된 ACTIVE + aiEnabled 카메라 목록을 주기적(기본 30초)으로 동기화하며 AI overlay worker를 실행 및 관리합니다.
-# REAL_RTSP      : 백엔드 rtspUrl을 그대로 분석
-# SIMULATED_RTSP : assignedVideoPath 또는 video_pool mp4를 rtsp://GPU_PC_IP:8554/{cameraLoginId} 로 반복 송출 후 분석
+# 영상 폴더 기반 RTSP 자동 송출 스크립트 실행
+# (영상 개수 < 카메라 개수일 경우, 영상 파일이 순환하며 배정됨)
+python scripts/start_simulated_rtsp_from_folder.py \
+  --video-dir video_pool \
+  --backend-url "http://127.0.0.1:8080" \
+  --rtsp-host 127.0.0.1 \
+  --rtsp-port 8554 \
+  --poll-interval 30
+```
+
+### [터미널 2] (GPU 서버) - AI 분석 엔진 (Overlay) 실행
+백엔드에 등록된 ACTIVE 카메라 목록을 동기화하여 실시간 분석을 수행합니다. **중요: `--skip-simulated-ffmpeg` 옵션을 붙여 자체 중복 송출을 방지합니다.**
+```bash
+cd ~/yolo_training/strange_ai_lstm
+source .venv/bin/activate 2>/dev/null || source ../strange_ai/.venv/bin/activate
+
 python scripts/run_registered_cameras.py \
   --backend-base-url "http://127.0.0.1:8080" \
   --rtsp-base-url "rtsp://@58.127.241.84:8554" \
@@ -64,15 +81,8 @@ python scripts/run_registered_cameras.py \
   --mqtt-topic "safety/events" \
   --mqtt-client-id-prefix "ai-registered" \
   --refresh-interval-seconds 30.0 \
-  --print-events
-
-# 실제 실행 전 명령만 확인하고 싶으면 --dry-run 추가
-# RTSP URL 접속 테스트를 건너뛰고 싶으면 --skip-rtsp-probe 추가
-python scripts/run_registered_cameras.py \
-  --backend-base-url "http://127.0.0.1:8080" \
-  --rtsp-base-url "rtsp://GPU_PC_IP:8554" \
-  --dry-run \
-  --skip-rtsp-probe
+  --print-events \
+  --skip-simulated-ffmpeg
 ```
 
 ## 3. [수동/테스트] 영상 송출 (RTSP & 테스트 비디오)

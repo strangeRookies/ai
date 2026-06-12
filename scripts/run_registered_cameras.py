@@ -52,6 +52,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--skip-rtsp-probe", action="store_true", help="Skip real RTSP preflight before starting AI workers.")
     parser.add_argument("--refresh-interval-seconds", type=float, default=30.0)
+    parser.add_argument("--skip-simulated-ffmpeg", action="store_true", help="Skip spawning internal ffmpeg for simulated cameras.")
     return parser.parse_args(argv)
 
 
@@ -86,6 +87,7 @@ def config_from_args(args: argparse.Namespace) -> RunnerConfig:
         dry_run=args.dry_run,
         rtsp_probe_enabled=not args.skip_rtsp_probe,
         refresh_interval_seconds=args.refresh_interval_seconds,
+        skip_ffmpeg_spawn=args.skip_simulated_ffmpeg,
     )
 
 

@@ -73,6 +73,7 @@ class RunnerConfig:
     dry_run: bool
     rtsp_probe_enabled: bool
     refresh_interval_seconds: float
+    skip_ffmpeg_spawn: bool = False
 
 
 def camera_rtsp_url(rtsp_base_url: str, camera_login_id: str) -> str:
@@ -256,6 +257,8 @@ def input_rtsp_for_camera(camera: RegisteredCamera, config: RunnerConfig) -> tup
             return camera.rtsp_url, None
         case "SIMULATED_RTSP":
             rtsp_url = camera_rtsp_url(config.rtsp_base_url, camera.camera_login_id)
+            if getattr(config, "skip_ffmpeg_spawn", False):
+                return rtsp_url, None
             video_path = resolve_simulated_video(camera, config.video_pool)
             return rtsp_url, build_ffmpeg_command(video_path, rtsp_url)
         case unreachable:
