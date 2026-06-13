@@ -2,6 +2,27 @@
 
 작업 경로는 반드시 `/home/welabs/yolo_training/strange_ai_lstm` 기준입니다. 카메라 경로와 ID는 `cam_01`, `cam_02`, `cam_03`, `cam_04` 규칙을 유지합니다.
 
+## 0. GPU PC 접속 및 최신 코드 업데이트 (필수)
+
+ssh welabs@58.127.241.84
+
+GPU PC에 접속하여 변경된 코드를 최신화하고 불필요한 기존 프로세스를 종료합니다.
+
+```bash
+cd /home/welabs/yolo_training/strange_ai_lstm
+git fetch origin
+git checkout codex/ai-worker-flow-improvements
+git pull origin codex/ai-worker-flow-improvements
+
+# 백그라운드 프로세스 강제 종료 (포트 충돌 방지)
+fuser -k 8010/tcp 2>/dev/null || true
+fuser -k 8011/tcp 2>/dev/null || true
+fuser -k 8012/tcp 2>/dev/null || true
+fuser -k 8013/tcp 2>/dev/null || true
+pkill -f "scripts/serve_ai_overlay.py" 2>/dev/null || true
+docker stop mediamtx 2>/dev/null || true
+```
+
 ## 포트 역할
 
 - `8554`: MediaMTX RTSP
@@ -32,14 +53,6 @@ cd /home/welabs/yolo_training/strange_ai_lstm
 bash scripts/run_rtsp_server.sh
 ```
 
-확인:
-
-```bash
-curl -L http://127.0.0.1:8888/cam_01/index.m3u8
-```
-
-정상이라면 `#EXTM3U`가 출력됩니다.
-
 ## 2. GPU PC에서 folder-based RTSP publisher 실행
 
 ```bash
@@ -53,6 +66,14 @@ python scripts/start_simulated_rtsp_from_folder.py \
   --poll-interval 30
 ```
 
+송출 확인:
+
+```bash
+curl -L http://127.0.0.1:8888/cam_01/index.m3u8
+```
+
+정상이라면 `#EXTM3U`가 출력됩니다.
+
 ## 3. GPU PC에서 AI runner 실행
 
 ```bash
@@ -65,6 +86,10 @@ python scripts/run_registered_cameras.py \
   --overlay-base-port 8010 \
   --detector-mode real \
   --yolo-model yolo26n-pose.pt \
+  --publisher mqtt \
+  --mqtt-host "3.38.142.174" \
+  --mqtt-port 1883 \
+  --mqtt-topic "safety/events" \
   --skip-simulated-ffmpeg
 ```
 
@@ -72,13 +97,8 @@ python scripts/run_registered_cameras.py \
 
 GPU PC IP 직접 접근이 timeout이면 Windows 브라우저에서는 GPU PC IP 대신 `localhost`를 사용합니다.
 
-```bash
-ssh -L 8888:127.0.0.1:8888 \
-    -L 8010:127.0.0.1:8010 \
-    -L 8011:127.0.0.1:8011 \
-    -L 8012:127.0.0.1:8012 \
-    -L 8013:127.0.0.1:8013 \
-    welabs@192.168.0.66
+```powershell
+ssh -N -L 8888:127.0.0.1:8888 -L 8010:127.0.0.1:8010 -L 8011:127.0.0.1:8011 -L 8012:127.0.0.1:8012 -L 8013:127.0.0.1:8013 welabs@58.127.241.84
 ```
 
 ## 5. 브라우저 확인
