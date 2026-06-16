@@ -22,6 +22,7 @@ def run_cameras(cameras: list[RegisteredCamera], config: RunnerConfig) -> None:
     run_camera_sync_loop(cameras, config)
 
 
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run AI overlay workers for backend-registered cameras.")
     parser.add_argument("--backend-base-url", default=DEFAULT_BACKEND_BASE_URL)
@@ -95,6 +96,13 @@ def config_from_args(args: argparse.Namespace) -> RunnerConfig:
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     config = config_from_args(args)
+    print(
+        "[registered-cameras] sequence config: "
+        f"sequence_length={config.sequence_length} "
+        f"sequence_stride={config.sequence_stride} "
+        "defaults=8/4 stride_is_sequence_start_interval",
+        flush=True,
+    )
     cameras = []
     while True:
         try:
