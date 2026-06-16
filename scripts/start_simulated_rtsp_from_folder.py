@@ -93,6 +93,28 @@ def build_ffmpeg_cmd(video_path: Path, rtsp_url: str, loop: bool) -> list[str]:
     return cmd
 
 
+def resolve_assigned_video_path(camera: RegisteredCamera) -> Path | None:
+    if not camera.assigned_video_path:
+        return None
+
+    assigned = Path(camera.assigned_video_path)
+    if assigned.exists():
+        return assigned
+
+    repo_relative = Path(__file__).resolve().parents[1] / assigned
+    if repo_relative.exists():
+        return repo_relative
+
+    return None
+
+
+def video_for_camera(camera: RegisteredCamera, video_files: list[Path], index: int) -> Path:
+    assigned_video = resolve_assigned_video_path(camera)
+    if assigned_video is not None:
+        return assigned_video
+    return video_files[index % len(video_files)]
+
+
 def main() -> None:
     args = parse_arguments()
     video_dir = args.video_dir
@@ -181,7 +203,7 @@ def main() -> None:
                     cid = camera.camera_login_id
                     current_active_ids.add(cid)
 
-                    assigned_video = video_files[idx % len(video_files)]
+                    assigned_video = video_for_camera(camera, video_files, idx)
                     target_rtsp_url = camera_rtsp_url(rtsp_base_url, cid)
 
                     # Check if stream is already running for this camera
