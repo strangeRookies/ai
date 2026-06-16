@@ -69,16 +69,33 @@ strange_ai/ (GPU PC 분석 경로)
 * 감지가 누락되어도 `track_buffer` 설정 시간(기본 45프레임/약 1.5초) 동안 추적 상태를 소멸시키지 않고 좌표 예측으로 유지합니다.
 
 ### 3. Keypoint Sequence Buffer 생성
-* 각 `track_id`에 할당된 포즈가 입력되면 `PerTrackKeypointSequenceBuffers`에 17개 COCO 포즈 관절의 (x, y, confidence) 정보를 16프레임 동안 적재합니다.
-* 버퍼 사이즈: `(16, 17, 3)` (Frames, Keypoints, Channels)
-* Stride: 기본 8프레임 단위 오버랩 시퀀스 생성.
+* 각 `track_id`에 할당된 포즈가 입력되면 `PerTrackKeypointSequenceBuffers` 및 `KeypointSequenceBuffer`에 17개 COCO 포즈 관절의 (x, y, confidence) 정보를 적재하여 LSTM 분류기 입력을 위한 시퀀스를 구성합니다.
+* **LSTM 입력 데이터 텐서 구조:** `(Batch, sequence_length, 51)`
+  * `51`: 17개 keypoints × 3채널(x, y, confidence)로 구성된 피처 벡터 차원수.
+* **가변 설정 및 실행 경로별 기본값:**
+  시스템은 하나의 고정된 시퀀스 길이를 사용하는 대신, 분석 대상과 실행 스크립트에 따라 상이한 기본값을 사용하도록 설계되었습니다.
+
+| 실행 경로 / 클래스 | 기본 sequence_length | 기본 stride | 설명 |
+| :--- | :--- | :--- | :--- |
+| **`config.py`** | 30 | - | `SEQUENCE_LENGTH` 상수 정의 |
+| **`main.py`** | 30 | - | `config.py`의 `SEQUENCE_LENGTH`를 기본값으로 사용 |
+| **`run_registered_cameras.py`** | 8 | 4 | 다중 카메라 실시간 분석기 (`--sequence-length`, `--sequence-stride` 옵션 제공) |
+| **`run_dataset_evaluation.py`** | 8 | 4 | 데이터셋 평가기 (`--sequence-length`, `--sequence-stride` 옵션 제공) |
+| **`KeypointSequenceBuffer`** (클래스) | 16 | 8 | 단독 버퍼 클래스 생성자 기본값 |
+| **`PerTrackKeypointSequenceBuffers`** (클래스) | 8 | 4 | 추적 관리용 버퍼 묶음 기본값 |
+| **`sequence_buffer.py`** (생성자) | 16 | 8 | 버퍼 모듈 내 생성자 기본값 |
+
+* **원본 영상(약 29.97 FPS) 기준 설정별 실제 시간 길이 (Duration) 및 다음 sequence 생성 간격:**
+  * **30 프레임 설정:** 시간 길이 `30 / 29.97 ≈ 1.00초` (지연이 비교적 길지만 긴 동작 감지에 유리)
+  * **16 프레임 / 8 Stride 설정:** 시간 길이 `16 / 29.97 ≈ 0.53초`, 생성 간격 `8 / 29.97 ≈ 0.27초`
+  * **8 프레임 / 4 Stride 설정:** 시간 길이 `8 / 29.97 ≈ 0.27초`, 생성 간격 `4 / 29.97 ≈ 0.13초`
 
 ### 4. missing keypoint 처리 (결측치 대체)
 * 프레임 내 사람의 신체 일부가 구조물에 가려져 신뢰도(Confidence)가 기준 이하로 떨어진 관절은 이전 프레임의 위치 값을 지수 가중 이동평균(EMA) 필터로 보간 및 완화하여 사용합니다.
 * 가중 필터 Alpha 계수: `0.60` (급격한 튀는 현상 제어).
 
 ### 5. LSTM Faint/Normal 분류 흐름 및 임계치
-* 16프레임 버퍼가 꽉 차는 시점부터 LSTM 분류기가 동작하여 현재 시퀀스가 `Faint`(쓰러짐) 행동인지 여부의 확률(0.0 ~ 1.0)을 추론합니다.
+* 설정된 `sequence_length` 크기만큼 시퀀스 버퍼가 꽉 차는 시점부터 LSTM 분류기가 동작하여 현재 시퀀스가 `Faint`(쓰러짐) 행동인지 여부의 확률(0.0 ~ 1.0)을 추론합니다.
 * **추론 임계값 (Action Threshold):** 기본 `0.3` (Faint Recall을 최대화하고 위경보를 줄이기 위한 최적화 지점).
 
 ### 6. 디바운스 및 Cooldown 처리
