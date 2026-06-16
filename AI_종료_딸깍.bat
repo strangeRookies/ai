@@ -6,7 +6,7 @@ echo ========================================================
 
 echo.
 echo [1/2] GPU PC의 백그라운드 프로세스들을 종료합니다...
-ssh welabs@58.127.241.84 "pkill -f 'scripts/run_registered_cameras.py' 2>/dev/null || true; pkill -f 'scripts/start_simulated_rtsp_from_folder.py' 2>/dev/null || true; pkill -f 'scripts/serve_ai_overlay.py' 2>/dev/null || true; fuser -k 8010/tcp 2>/dev/null || true; fuser -k 8011/tcp 2>/dev/null || true; fuser -k 8012/tcp 2>/dev/null || true; fuser -k 8013/tcp 2>/dev/null || true; docker stop mediamtx 2>/dev/null || true; echo 'GPU PC 프로세스 종료 완료.'"
+ssh welabs@58.127.241.84 "pkill -f 'scripts/run_registered_cameras.py' 2>/dev/null || true; pkill -f 'scripts/start_simulated_rtsp_from_folder.py' 2>/dev/null || true; pkill -f 'scripts/serve_ai_overlay.py' 2>/dev/null || true; fuser -k 8010/tcp 2>/dev/null || true; fuser -k 8011/tcp 2>/dev/null || true; fuser -k 8012/tcp 2>/dev/null || true; fuser -k 8013/tcp 2>/dev/null || true; docker rm -f mediamtx 2>/dev/null || true; echo 'GPU PC 프로세스 종료 완료.'"
 
 echo.
 echo [2/2] 로컬 Windows PC의 SSH 터널링 프로세스를 종료합니다...

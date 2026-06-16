@@ -10,6 +10,7 @@ if command -v mediamtx >/dev/null 2>&1; then
 fi
 
 if command -v docker >/dev/null 2>&1; then
+  docker rm -f mediamtx >/dev/null 2>&1 || true
   exec docker run --rm \
     --name mediamtx \
     --network=host \
