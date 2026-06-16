@@ -87,7 +87,7 @@ python scripts/run_registered_cameras.py \
   --detector-mode real \
   --yolo-model yolo26n-pose.pt \
   --publisher mqtt \
-  --mqtt-host "3.38.142.174" \
+  --mqtt-host "54.116.37.232" \
   --mqtt-port 1883 \
   --mqtt-topic "safety/events" \
   --skip-simulated-ffmpeg
