@@ -166,9 +166,8 @@ def main() -> None:
             try:
                 active_cameras = load_active_cameras(backend_url, None, timeout_seconds=10.0)
                 # Filter to only keep SIMULATED_RTSP cameras
-                simulated_cameras = [
-                    cam for cam in active_cameras if cam.source_type == "SIMULATED_RTSP"
-                ]
+                # 테스트를 위해 REAL_RTSP를 포함한 모든 카메라에 풀영상을 송출하도록 필터 조건 임시 해제
+                simulated_cameras = active_cameras
             except Exception as e:
                 print(f"[simulated-rtsp][warning] Failed to load active cameras from backend: {e}", file=sys.stderr)
                 # Fallback to keep existing streams running if backend query fails
