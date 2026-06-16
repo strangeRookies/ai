@@ -6,7 +6,7 @@ echo ========================================================
 
 echo.
 echo [1/3] GPU PC에 접속하여 기존 프로세스 종료 및 최신 코드 업데이트를 진행합니다...
-ssh welabs@58.127.241.84 "cd /home/welabs/yolo_training/strange_ai_lstm && git fetch origin && git checkout codex/ai-worker-flow-improvements && git pull origin codex/ai-worker-flow-improvements && fuser -k 8010/tcp 2>/dev/null || true && fuser -k 8011/tcp 2>/dev/null || true && fuser -k 8012/tcp 2>/dev/null || true && fuser -k 8013/tcp 2>/dev/null || true && pkill -f 'scripts/serve_ai_overlay.py' 2>/dev/null || true && docker stop mediamtx 2>/dev/null || true"
+ssh welabs@58.127.241.84 "cd /home/welabs/yolo_training/strange_ai_lstm && git fetch origin && git checkout codex/ai-worker-flow-improvements && git pull origin codex/ai-worker-flow-improvements && fuser -k 8010/tcp 2>/dev/null || true && fuser -k 8011/tcp 2>/dev/null || true && fuser -k 8012/tcp 2>/dev/null || true && fuser -k 8013/tcp 2>/dev/null || true && pkill -f 'scripts/serve_ai_overlay.py' 2>/dev/null || true && docker rm -f mediamtx 2>/dev/null || true"
 
 echo.
 echo [2/3] GPU PC에서 AI 시스템(MediaMTX, RTSP Publisher, AI Runner)을 백그라운드로 실행합니다...
