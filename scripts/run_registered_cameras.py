@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
@@ -94,11 +95,23 @@ def config_from_args(args: argparse.Namespace) -> RunnerConfig:
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     config = config_from_args(args)
-    cameras = load_active_cameras(
-        config.backend_base_url,
-        config.backend_token,
-        timeout_seconds=config.backend_timeout_seconds,
-    )
+    cameras = []
+    while True:
+        try:
+            cameras = load_active_cameras(
+                config.backend_base_url,
+                config.backend_token,
+                timeout_seconds=config.backend_timeout_seconds,
+            )
+            break
+        except Exception as exc:
+            print(
+                f"[registered-cameras][warning] failed to load active cameras from {config.backend_base_url}: {exc}. "
+                "Retrying in 5 seconds...",
+                file=sys.stderr,
+                flush=True,
+            )
+            time.sleep(5)
     if not cameras:
         print("[registered-cameras][warning] no active AI cameras returned by backend", flush=True)
     run_cameras(cameras, config)
