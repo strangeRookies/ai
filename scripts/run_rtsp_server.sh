@@ -10,7 +10,9 @@ if command -v mediamtx >/dev/null 2>&1; then
 fi
 
 if command -v docker >/dev/null 2>&1; then
-  exec docker run --rm -it \
+  docker rm -f mediamtx >/dev/null 2>&1 || true
+  exec docker run --rm \
+    --name mediamtx \
     --network=host \
     -v "$PWD/$CONFIG_PATH:/mediamtx.yml:ro" \
     bluenviron/mediamtx:1

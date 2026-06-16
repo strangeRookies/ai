@@ -87,7 +87,7 @@ python scripts/run_registered_cameras.py \
   --detector-mode real \
   --yolo-model yolo26n-pose.pt \
   --publisher mqtt \
-  --mqtt-host "3.38.142.174" \
+  --mqtt-host "54.116.37.232" \
   --mqtt-port 1883 \
   --mqtt-topic "safety/events" \
   --skip-simulated-ffmpeg
@@ -98,7 +98,8 @@ python scripts/run_registered_cameras.py \
 GPU PC IP 직접 접근이 timeout이면 Windows 브라우저에서는 GPU PC IP 대신 `localhost`를 사용합니다.
 
 ```powershell
-ssh -N -L 8888:127.0.0.1:8888 -L 8010:127.0.0.1:8010 -L 8011:127.0.0.1:8011 -L 8012:127.0.0.1:8012 -L 8013:127.0.0.1:8013 welabs@58.127.241.84
+ssh -N -L 8888:127.0.0.1:8888 -L 8010:127.0.0.1:8010 -L 8011:127.0.0.1:8011 -L 8012:127.0.0.1:8012 -L 8013:127.0.0.1:8013 -R 8080:127.0.0.1:8080 welabs@58.127.241.84
+
 ```
 
 ## 5. 브라우저 확인

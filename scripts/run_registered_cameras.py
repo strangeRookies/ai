@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
@@ -19,6 +20,7 @@ from ai.registered_camera_workers import run_camera_sync_loop
 
 def run_cameras(cameras: list[RegisteredCamera], config: RunnerConfig) -> None:
     run_camera_sync_loop(cameras, config)
+
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -94,11 +96,30 @@ def config_from_args(args: argparse.Namespace) -> RunnerConfig:
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     config = config_from_args(args)
-    cameras = load_active_cameras(
-        config.backend_base_url,
-        config.backend_token,
-        timeout_seconds=config.backend_timeout_seconds,
+    print(
+        "[registered-cameras] sequence config: "
+        f"sequence_length={config.sequence_length} "
+        f"sequence_stride={config.sequence_stride} "
+        "defaults=8/4 stride_is_sequence_start_interval",
+        flush=True,
     )
+    cameras = []
+    while True:
+        try:
+            cameras = load_active_cameras(
+                config.backend_base_url,
+                config.backend_token,
+                timeout_seconds=config.backend_timeout_seconds,
+            )
+            break
+        except Exception as exc:
+            print(
+                f"[registered-cameras][warning] failed to load active cameras from {config.backend_base_url}: {exc}. "
+                "Retrying in 5 seconds...",
+                file=sys.stderr,
+                flush=True,
+            )
+            time.sleep(5)
     if not cameras:
         print("[registered-cameras][warning] no active AI cameras returned by backend", flush=True)
     run_cameras(cameras, config)
