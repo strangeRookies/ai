@@ -37,16 +37,16 @@ echo "[2/4] Connecting to GPU PC to stop old processes and pull latest code..."
 run_ssh "bash -c 'cd /home/welabs/yolo_training/strange_ai_lstm && \
   git fetch origin && \
   git checkout codex/ai-worker-flow-improvements && \
-  git stash && \
   git pull origin codex/ai-worker-flow-improvements && \
   (pkill -f \"[s]cripts/run_registered_cameras.py\" || true) && \
   (pkill -f \"[s]cripts/start_simulated_rtsp_from_folder.py\" || true) && \
   (pkill -f \"[s]cripts/serve_ai_overlay.py\" || true) && \
   (pkill -f \"[r]tsp://127.0.0.1:8554\" || true) && \
   (fuser -k 8010/tcp || true) && \
-  (fuser -k 8011/tcp || true) && \
-  (fuser -k 8012/tcp || true) && \
-  (fuser -k 8013/tcp || true) && \
+  (fuser -k 8080/tcp || true) && \
+  (fuser -k 8888/tcp || true) && \
+  (fuser -k 8889/tcp || true) && \
+  (fuser -k 8189/tcp || true) && \
   (docker rm -f mediamtx || true)'"
 
 echo ""
@@ -93,11 +93,11 @@ echo "Keep this container running. Press Ctrl+C or run 'docker compose down' to 
 # 마스터 세션을 경유해 포트포워딩 터널을 실행
 ssh $SSH_OPTS -S "$MUX_SOCKET" -N \
   -L 0.0.0.0:8888:127.0.0.1:8888 \
-  -L 0.0.0.0:8889:127.0.0.1:8889 \
   -L 0.0.0.0:8010:127.0.0.1:8010 \
   -L 0.0.0.0:8011:127.0.0.1:8011 \
   -L 0.0.0.0:8012:127.0.0.1:8012 \
   -L 0.0.0.0:8013:127.0.0.1:8013 \
+  -L 0.0.0.0:8189:127.0.0.1:8189 \
   -R 8080:host.docker.internal:8080 \
   $REMOTE_DEST &
 
