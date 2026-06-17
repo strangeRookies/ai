@@ -37,6 +37,7 @@ echo "[2/4] Connecting to GPU PC to stop old processes and pull latest code..."
 run_ssh "bash -c 'cd /home/welabs/yolo_training/strange_ai_lstm && \
   git fetch origin && \
   git checkout codex/ai-worker-flow-improvements && \
+  git stash && \
   git pull origin codex/ai-worker-flow-improvements && \
   (pkill -f \"[s]cripts/run_registered_cameras.py\" || true) && \
   (pkill -f \"[s]cripts/start_simulated_rtsp_from_folder.py\" || true) && \
