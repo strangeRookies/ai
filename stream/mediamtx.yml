@@ -10,8 +10,8 @@ logLevel: info
 
 rtspAddress: :8554
 rtmp: no
-hls: no
-webrtc: no
+hls: yes
+webrtc: yes
 srt: no
 
 paths:

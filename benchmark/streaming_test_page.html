@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Streaming Benchmark Test</title>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@1.4.12"></script>
+    <style>
+        body { font-family: sans-serif; background: #111; color: #fff; display: flex; flex-direction: column; align-items: center; }
+        video { background: #000; border: 2px solid #333; margin-top: 20px; }
+        #log { margin-top: 20px; width: 800px; height: 150px; background: #222; overflow-y: scroll; padding: 10px; font-family: monospace; }
+    </style>
+</head>
+<body>
+    <h2>Streaming Benchmark</h2>
+    <video id="videoPlayer" autoplay muted controls width="800" height="450"></video>
+    <div id="log"></div>
+
+    <script>
+        window.benchmarkStats = {
+            ttff_ms: null,
+            buffering_events: 0,
+            frames_decoded: 0,
+            dropped_frames: 0,
+            jitter: 0,
+            packets_lost: 0,
+            error: null,
+            playing: false
+        };
+
+        const video = document.getElementById('videoPlayer');
+        const logEl = document.getElementById('log');
+        let startTime = null;
+        let webrtcPeerConnection = null;
+
+        function log(msg) {
+            console.log(msg);
+            logEl.innerHTML += `<div>[${new Date().toISOString().split('T')[1].slice(0,-1)}] ${msg}</div>`;
+            logEl.scrollTop = logEl.scrollHeight;
+        }
+
+        video.addEventListener('playing', () => {
+            if (window.benchmarkStats.ttff_ms === null && startTime !== null) {
+                window.benchmarkStats.ttff_ms = performance.now() - startTime;
+                log(`[TTFF] First frame rendered in ${Math.round(window.benchmarkStats.ttff_ms)} ms`);
+            }
+            window.benchmarkStats.playing = true;
+            log('Video playing');
+        });
+
+        video.addEventListener('waiting', () => {
+            if (window.benchmarkStats.ttff_ms !== null) {
+                window.benchmarkStats.buffering_events++;
+                log(`Buffering... (Total: ${window.benchmarkStats.buffering_events})`);
+            }
+            window.benchmarkStats.playing = false;
+        });
+
+        window.startHLS = function(url) {
+            log(`Starting HLS: ${url}`);
+            startTime = performance.now();
+            if (Hls.isSupported()) {
+                const hls = new Hls({
+                    maxBufferLength: 5,
+                    maxMaxBufferLength: 10,
+                    liveSyncDurationCount: 2
+                });
+                hls.loadSource(url);
+                hls.attachMedia(video);
+                hls.on(Hls.Events.ERROR, function (event, data) {
+                    if (data.fatal) {
+                        window.benchmarkStats.error = data.type;
+                        log(`[ERROR] HLS fatal error: ${data.type}`);
+                    }
+                });
+            } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                video.src = url;
+                video.play();
+            }
+        };
+
+        window.startWebRTC = async function(url) {
+            log(`Starting WebRTC WHEP: ${url}`);
+            startTime = performance.now();
+            webrtcPeerConnection = new RTCPeerConnection();
+            
+            // Add a transceiver to receive video
+            webrtcPeerConnection.addTransceiver('video', {direction: 'recvonly'});
+            
+            webrtcPeerConnection.ontrack = (event) => {
+                log('Received WebRTC track');
+                video.srcObject = event.streams[0];
+            };
+
+            try {
+                const offer = await webrtcPeerConnection.createOffer();
+                await webrtcPeerConnection.setLocalDescription(offer);
+                
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/sdp' },
+                    body: offer.sdp
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`WHEP request failed: ${response.status}`);
+                }
+                
+                const answerSdp = await response.text();
+                await webrtcPeerConnection.setRemoteDescription({ type: 'answer', sdp: answerSdp });
+                log('WebRTC negotiation complete');
+            } catch (err) {
+                window.benchmarkStats.error = err.message;
+                log(`[ERROR] WebRTC setup failed: ${err.message}`);
+            }
+        };
+
+        // Periodic Stats Collection
+        setInterval(async () => {
+            if (video.getVideoPlaybackQuality) {
+                const quality = video.getVideoPlaybackQuality();
+                window.benchmarkStats.dropped_frames = quality.droppedVideoFrames;
+                if (!webrtcPeerConnection) {
+                    window.benchmarkStats.frames_decoded = quality.totalVideoFrames;
+                }
+            }
+
+            if (webrtcPeerConnection) {
+                try {
+                    const stats = await webrtcPeerConnection.getStats();
+                    stats.forEach(report => {
+                        if (report.type === 'inbound-rtp' && report.kind === 'video') {
+                            window.benchmarkStats.jitter = report.jitter || 0;
+                            window.benchmarkStats.packets_lost = report.packetsLost || 0;
+                            if (report.framesDecoded) {
+                                window.benchmarkStats.frames_decoded = report.framesDecoded;
+                            }
+                        }
+                    });
+                } catch (e) {
+                    // ignore stats error
+                }
+            }
+        }, 1000);
+
+        // Auto-start if query params are provided
+        const params = new URLSearchParams(window.location.search);
+        const streamUrl = params.get('url');
+        const mode = params.get('mode');
+        if (streamUrl && mode) {
+            if (mode === 'hls') startHLS(streamUrl);
+            else if (mode === 'webrtc') startWebRTC(streamUrl);
+        }
+    </script>
+</body>
+</html>
