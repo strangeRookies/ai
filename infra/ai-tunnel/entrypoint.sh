@@ -92,6 +92,7 @@ echo "Keep this container running. Press Ctrl+C or run 'docker compose down' to 
 # 마스터 세션을 경유해 포트포워딩 터널을 실행
 ssh $SSH_OPTS -S "$MUX_SOCKET" -N \
   -L 0.0.0.0:8888:127.0.0.1:8888 \
+  -L 0.0.0.0:8889:127.0.0.1:8889 \
   -L 0.0.0.0:8010:127.0.0.1:8010 \
   -L 0.0.0.0:8011:127.0.0.1:8011 \
   -L 0.0.0.0:8012:127.0.0.1:8012 \
