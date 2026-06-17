@@ -93,15 +93,32 @@ echo "Keep this container running. Press Ctrl+C or run 'docker compose down' to 
 # 마스터 세션을 경유해 포트포워딩 터널을 실행
 ssh $SSH_OPTS -S "$MUX_SOCKET" -N \
   -L 0.0.0.0:8888:127.0.0.1:8888 \
+  -L 0.0.0.0:8889:127.0.0.1:8889 \
+  -L 0.0.0.0:8189:127.0.0.1:8189 \
   -L 0.0.0.0:8010:127.0.0.1:8010 \
   -L 0.0.0.0:8011:127.0.0.1:8011 \
   -L 0.0.0.0:8012:127.0.0.1:8012 \
   -L 0.0.0.0:8013:127.0.0.1:8013 \
-  -L 0.0.0.0:8189:127.0.0.1:8189 \
   -R 8080:host.docker.internal:8080 \
   $REMOTE_DEST &
 
 SSH_PID=$!
 
-# SSH 백그라운드 프로세스가 끝날 때까지 대기 (시그널 수신 대기)
-wait $SSH_PID
+# SSH 서브채널이 죽으면 마스터 소켓을 통해 재연결, 컨테이너는 계속 유지
+while true; do
+  if ! kill -0 $SSH_PID 2>/dev/null; then
+    echo "[Tunnel] SSH sub-channel exited. Reconnecting..."
+    ssh $SSH_OPTS -S "$MUX_SOCKET" -N \
+      -L 0.0.0.0:8888:127.0.0.1:8888 \
+      -L 0.0.0.0:8889:127.0.0.1:8889 \
+      -L 0.0.0.0:8189:127.0.0.1:8189 \
+      -L 0.0.0.0:8010:127.0.0.1:8010 \
+      -L 0.0.0.0:8011:127.0.0.1:8011 \
+      -L 0.0.0.0:8012:127.0.0.1:8012 \
+      -L 0.0.0.0:8013:127.0.0.1:8013 \
+      -R 8080:host.docker.internal:8080 \
+      $REMOTE_DEST &
+    SSH_PID=$!
+  fi
+  sleep 10
+done
