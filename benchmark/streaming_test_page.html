@@ -84,20 +84,40 @@
             
             // Add a transceiver to receive video
             webrtcPeerConnection.addTransceiver('video', {direction: 'recvonly'});
+            webrtcPeerConnection.addTransceiver('video', {direction: 'recvonly'});
             
             webrtcPeerConnection.ontrack = (event) => {
                 log('Received WebRTC track');
-                video.srcObject = event.streams[0];
+                video.srcObject = event.streams[0]; video.play().catch(e => console.error(e));
             };
 
             try {
                 const offer = await webrtcPeerConnection.createOffer();
                 await webrtcPeerConnection.setLocalDescription(offer);
-                
+
+                // Wait for ICE gathering to complete so SDP contains candidates
+                await new Promise((resolve) => {
+                    if (webrtcPeerConnection.iceGatheringState === 'complete') {
+                        resolve();
+                    } else {
+                        const checkState = () => {
+                            if (webrtcPeerConnection.iceGatheringState === 'complete') {
+                                webrtcPeerConnection.removeEventListener('icegatheringstatechange', checkState);
+                                resolve();
+                            }
+                        };
+                        webrtcPeerConnection.addEventListener('icegatheringstatechange', checkState);
+                        // Fallback timeout just in case gathering gets stuck
+                        setTimeout(resolve, 3000);
+                    }
+                });
+
                 const response = await fetch(url, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/sdp' },
-                    body: offer.sdp
+                    headers: {
+                        'Content-Type': 'application/sdp'
+                    },
+                    body: webrtcPeerConnection.localDescription.sdp
                 });
                 
                 if (!response.ok) {
