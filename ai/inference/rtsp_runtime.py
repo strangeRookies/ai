@@ -5,6 +5,7 @@ import time as _time
 from pathlib import Path
 
 from ai.action.classifier import LSTMActionClassifier, MockActionClassifier
+from ai.action.cheap_filter import CheapFilterConfig
 from ai.action.faint_post_processing import (
     DEFAULT_ACTION_MODEL,
     DEFAULT_CAMERA_COOLDOWN_SECONDS,
@@ -54,6 +55,18 @@ def create_classifier(action_model=DEFAULT_ACTION_MODEL, device="auto", action_t
     if action_model:
         return LSTMActionClassifier(action_model, device=device, faint_threshold=action_threshold), "lstm_checkpoint"
     return MockActionClassifier(default_label="Faint", score=0.80), "mock_lstm"
+
+
+def cheap_filter_config_from_args(args):
+    return CheapFilterConfig(
+        enabled=bool(getattr(args, "cheap_filter_enabled", True)),
+        slope_ratio_threshold=float(getattr(args, "cheap_filter_slope_ratio", 1.3)),
+        min_avg_keypoint_confidence=float(getattr(args, "cheap_filter_min_keypoint_conf", 0.25)),
+        min_bbox_area_ratio=float(getattr(args, "cheap_filter_min_bbox_area_ratio", 0.005)),
+        min_center_drop_ratio=float(getattr(args, "cheap_filter_min_center_drop_ratio", 0.03)),
+        min_aspect_ratio_growth=float(getattr(args, "cheap_filter_min_aspect_ratio_growth", 0.20)),
+        min_risk_score=float(getattr(args, "cheap_filter_min_risk_score", 1.0)),
+    )
 
 
 def env_flag(name, default=False):

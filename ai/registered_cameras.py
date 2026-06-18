@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import re
 import sys
 import urllib.error
 import urllib.request
@@ -83,8 +85,18 @@ class RunnerConfig:
     skip_ffmpeg_spawn: bool = False
 
 
+def normalize_camera_login_id(login_id: str) -> str:
+    # Normalize cam1 -> cam_01, cam_1 -> cam_01, cam01 -> cam_01
+    match = re.match(r'^cam_?(\d+)$', login_id, re.IGNORECASE)
+    if match:
+        num = int(match.group(1))
+        return f"cam_{num:02d}"
+    return login_id
+
+
 def camera_rtsp_url(rtsp_base_url: str, camera_login_id: str) -> str:
-    return f"{rtsp_base_url.rstrip('/')}/{camera_login_id}"
+    normalized_id = normalize_camera_login_id(camera_login_id)
+    return f"{rtsp_base_url.rstrip('/')}/{normalized_id}"
 
 
 def parse_camera(raw: RawCamera) -> RegisteredCamera | None:
@@ -96,6 +108,10 @@ def parse_camera(raw: RawCamera) -> RegisteredCamera | None:
     login_id = str(raw.get("cameraLoginId") or "").strip()
     if not login_id:
         return None
+    
+    # Normalize path to prevent conflicts and ensure cam_01 format
+    login_id = normalize_camera_login_id(login_id)
+    
     if not is_safe_camera_login_id(login_id):
         print(
             f"[registered-cameras][warning] unsafe cameraLoginId={login_id!r}; skipping",
@@ -189,24 +205,27 @@ def resolve_simulated_video(camera: RegisteredCamera, video_pool: Path) -> Path:
 
 
 def build_ffmpeg_command(video_path: Path, rtsp_url: str) -> list[str]:
-    return [
-        "ffmpeg",
-        "-re",
-        "-stream_loop",
-        "-1",
-        "-i",
-        str(video_path),
-        "-an",
-        "-c:v",
-        "libx264",
-        "-preset",
-        "ultrafast",
-        "-tune",
-        "zerolatency",
-        "-f",
-        "rtsp",
-        rtsp_url,
-    ]
+    ffmpeg_mode = os.environ.get("FFMPEG_MODE", "cpu").lower()
+    
+    cmd = ["ffmpeg", "-re", "-stream_loop", "-1", "-i", str(video_path), "-an"]
+    
+    if ffmpeg_mode == "copy":
+        cmd.extend(["-c:v", "copy"])
+    elif ffmpeg_mode == "nvenc":
+        cmd.extend([
+            "-c:v", "h264_nvenc",
+            "-preset", "p1",
+            "-tune", "zerolatency"
+        ])
+    else: # cpu mode (default)
+        cmd.extend([
+            "-c:v", "libx264",
+            "-preset", "ultrafast",
+            "-tune", "zerolatency"
+        ])
+        
+    cmd.extend(["-f", "rtsp", rtsp_url])
+    return cmd
 
 
 def build_overlay_command(

@@ -1,5 +1,6 @@
 import time
 
+from ai.action.cheap_filter import CheapFilterConfig, evaluate_sequence_candidate
 from ai.action.keypoint_sequence_buffer import KeypointSequenceBuffer
 from ai.action.sequence_buffer import CropSequenceBuffer
 
@@ -12,13 +13,17 @@ class PerTrackKeypointSequenceBuffers:
     runtime scripts may pass different values, such as 8/4.
     """
 
-    def __init__(self, sequence_length=8, stride=4, max_track_age_seconds=5.0):
+    def __init__(self, sequence_length=8, stride=4, max_track_age_seconds=5.0, cheap_filter_config=None):
         self.sequence_length = int(sequence_length)
         self.stride = int(stride)
         self.max_track_age_seconds = float(max_track_age_seconds)
+        self.cheap_filter_config = cheap_filter_config or CheapFilterConfig(enabled=False)
         self._buffers = {}
         self._last_seen_at = {}
         self.sequences_generated_by_track = {}
+        self.sequences_kept_by_filter = 0
+        self.sequences_skipped_by_filter = 0
+        self.cheap_filter_reasons = {}
 
     def add(self, frame_idx, detections, frame_shape=None, now=None):
         now = time.time() if now is None else float(now)
@@ -33,6 +38,18 @@ class PerTrackKeypointSequenceBuffers:
             buffer = self._buffers.setdefault(track_id, KeypointSequenceBuffer(self.sequence_length, self.stride))
             sequence = buffer.add(frame_idx, [detection], frame_shape)
             if sequence:
+                decision = evaluate_sequence_candidate(sequence, self.cheap_filter_config)
+                sequence["cheap_filter"] = {
+                    "keep": decision.keep,
+                    "risk_score": decision.risk_score,
+                    "reasons": list(decision.reasons),
+                }
+                for reason in decision.reasons:
+                    self.cheap_filter_reasons[reason] = self.cheap_filter_reasons.get(reason, 0) + 1
+                if not decision.keep:
+                    self.sequences_skipped_by_filter += 1
+                    continue
+                self.sequences_kept_by_filter += 1
                 sequence["track_id"] = track_id
                 self.sequences_generated_by_track[track_id] = self.sequences_generated_by_track.get(track_id, 0) + 1
                 sequences.append(sequence)

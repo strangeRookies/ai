@@ -166,8 +166,15 @@ class RtspEventPayloadTest(unittest.TestCase):
         self.assertEqual(published[0]["type"], "fall_detected")
         self.assertIn("metadata", published[0])
 
+    def test_cheap_filter_reduces_lstm_calls_for_low_risk_sequences(self):
+        summary = run_with_fake_rtsp(fake_run_args(event_log_dir=None, cheap_filter_enabled=True))
 
-def fake_run_args(event_log_dir, dry_run=True):
+        self.assertEqual(summary["cheap_filter_sequences_skipped"], 3)
+        self.assertEqual(summary["lstm_predictions"], 0)
+        self.assertEqual(summary["events_generated"], 0)
+
+
+def fake_run_args(event_log_dir, dry_run=True, cheap_filter_enabled=False):
     return Namespace(
         rtsp_url="fake://cam1",
         camera_id="cam_01",
@@ -188,6 +195,7 @@ def fake_run_args(event_log_dir, dry_run=True):
         classifier_input="keypoints",
         sequence_length=2,
         sequence_stride=1,
+        cheap_filter_enabled=cheap_filter_enabled,
         resize_size=32,
         tracker_iou_threshold=0.3,
         track_max_missing_seconds=2.0,
