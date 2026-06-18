@@ -47,6 +47,24 @@ class RtspInferenceTest(unittest.TestCase):
         self.assertEqual(sequence["bbox"], [0, 0, 10, 20])
         self.assertEqual(sequence["track_id"], 7)
 
+    def test_keypoint_sequence_buffer_stride_controls_overlap_not_sampling(self):
+        buffer = KeypointSequenceBuffer(sequence_length=4, stride=2)
+        detection = {
+            "bbox": [0, 0, 10, 20],
+            "keypoints": [{"x": 1, "y": 2, "confidence": 0.9} for _ in range(17)],
+            "track_id": 7,
+        }
+
+        emitted = [buffer.add(frame_idx, [detection]) for frame_idx in range(6)]
+
+        self.assertIsNotNone(emitted[3])
+        self.assertIsNone(emitted[4])
+        self.assertIsNotNone(emitted[5])
+        assert emitted[3] is not None
+        assert emitted[5] is not None
+        self.assertEqual(emitted[3]["start_frame"], 0)
+        self.assertEqual(emitted[5]["start_frame"], 2)
+
     @unittest.skipIf(not CV2_AVAILABLE, "cv2 is required for video smoke tests")
     def test_mock_rtsp_inference_reports_required_counts(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -134,14 +152,16 @@ class RtspInferenceTest(unittest.TestCase):
         self.assertFalse(processor.should_trigger("cam_01", {"label": "Faint"}, 9.0))
         self.assertTrue(processor.should_trigger("cam_01", {"label": "Faint"}, 10.0))
 
-    def test_faint_post_processor_debounces_per_track(self):
+    def test_faint_post_processor_debounces_events_per_camera_across_tracks(self):
         processor = FaintEventPostProcessor(min_consecutive_faint=2, cooldown_seconds=5)
 
         self.assertFalse(processor.should_trigger("cam_01", {"label": "Faint"}, 1.0, track_id=1))
         self.assertTrue(processor.should_trigger("cam_01", {"label": "Faint"}, 2.0, track_id=1))
         self.assertFalse(processor.should_trigger("cam_01", {"label": "Faint"}, 3.0, track_id=1))
         self.assertFalse(processor.should_trigger("cam_01", {"label": "Faint"}, 3.0, track_id=2))
-        self.assertTrue(processor.should_trigger("cam_01", {"label": "Faint"}, 4.0, track_id=2))
+        self.assertFalse(processor.should_trigger("cam_01", {"label": "Faint"}, 4.0, track_id=2))
+        self.assertTrue(processor.cooldown_active("cam_01", 4.0, track_id=2))
+        self.assertTrue(processor.should_trigger("cam_01", {"label": "Faint"}, 7.0, track_id=2))
 
     def test_per_track_keypoint_buffer_emits_independent_sequences(self):
         buffer = PerTrackKeypointSequenceBuffers(sequence_length=2, stride=1)

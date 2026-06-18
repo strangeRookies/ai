@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import signal
+import os
 import subprocess
 import sys
 import time
@@ -33,13 +34,14 @@ class CameraWorker:
     source_signature: str
 
 
-def spawn_process(command: list[str], log_path: Path) -> subprocess.Popen[str]:
+def spawn_process(command: list[str], log_path: Path, env: dict[str, str] | None = None) -> subprocess.Popen[str]:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_file = log_path.open("a", encoding="utf-8")
     try:
         return subprocess.Popen(
             command,
             cwd=REPO_ROOT,
+            env=env,
             stdout=log_file,
             stderr=subprocess.STDOUT,
             text=True,
@@ -92,6 +94,19 @@ def rtsp_has_readable_frame(rtsp_url: str) -> bool:
             flush=True,
         )
         return False
+
+
+def safe_command_text(command: list[str]) -> str:
+    masked: list[str] = []
+    redact_next = False
+    for value in command:
+        if redact_next:
+            masked.append("***")
+            redact_next = False
+            continue
+        masked.append(redact_url(value) if value.startswith("rtsp://") else value)
+        redact_next = value == "--mqtt-password"
+    return " ".join(masked)
 
 
 def publish_unavailable_camera_status(
@@ -150,10 +165,10 @@ def start_camera_worker(camera: RegisteredCamera, config: RunnerConfig, port: in
             )
             return None
     overlay_command = build_overlay_command(camera, rtsp_url, port, config)
-    print(f"[registered-cameras] {camera.camera_login_id} input={rtsp_url}", flush=True)
+    print(f"[registered-cameras] {camera.camera_login_id} input={redact_url(rtsp_url)}", flush=True)
     if ffmpeg_command is not None:
-        print(f"[registered-cameras] ffmpeg: {' '.join(ffmpeg_command)}", flush=True)
-    print(f"[registered-cameras] overlay: {' '.join(overlay_command)}", flush=True)
+        print(f"[registered-cameras] ffmpeg: {safe_command_text(ffmpeg_command)}", flush=True)
+    print(f"[registered-cameras] overlay: {safe_command_text(overlay_command)}", flush=True)
 
     if config.dry_run:
         return CameraWorker(processes=[], overlay_port=port, source_signature=camera_source_signature(camera, config))
@@ -165,10 +180,15 @@ def start_camera_worker(camera: RegisteredCamera, config: RunnerConfig, port: in
             )
         )
         time.sleep(1)
+    overlay_env = os.environ.copy()
+    overlay_env["RTSP_URL"] = rtsp_url
+    if config.mqtt_password:
+        overlay_env["MQTT_PASSWORD"] = config.mqtt_password
     processes.append(
         spawn_process(
             overlay_command,
             REPO_ROOT / "runs" / "registered_cameras" / f"{camera.camera_login_id}-overlay.log",
+            env=overlay_env,
         )
     )
     return CameraWorker(processes=processes, overlay_port=port, source_signature=camera_source_signature(camera, config))

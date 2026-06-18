@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>Naver Blog Preview</title>
+</head>
+<body>
+<p><strong style="font-weight: bold;">[1단계: SEO 최적화 제목 제안]</strong></p>
+<p class="se-text-paragraph se-text-paragraph-align-left" style="line-height: 1.8;"><span class="se-ff-nanumgothic se-fs15 __se-node" style="color: rgb(0, 0, 0);">1. <strong style="font-weight: bold;">HLS vs WebRTC:</strong> 다중 카메라 지연율, 정확한 측정 방법과 최적화 전략</span></p>
+<p class="se-text-paragraph se-text-paragraph-align-left" style="line-height: 1.8;"><span class="se-ff-nanumgothic se-fs15 __se-node" style="color: rgb(0, 0, 0);">2. <strong style="font-weight: bold;">다중 카메라 스트리밍:</strong> HLS와 WebRTC 지연율, 크롬 스로틀링 극복 실험기</span></p>
+<p class="se-text-paragraph se-text-paragraph-align-left" style="line-height: 1.8;"><span class="se-ff-nanumgothic se-fs15 __se-node" style="color: rgb(0, 0, 0);">3. <strong style="font-weight: bold;">실시간 영상 최적화:</strong> HLS vs WebRTC, 카메라 1,2,4대 지연율 측정의 함정과 해결책</span></p>
+<p>&nbsp;</p>
+<hr style="border: 0; border-top: 1px solid #ddd;">
+<p>&nbsp;</p>
+<p><strong style="font-weight: bold;">[2단계: 본문 초안 작성]</strong></p>
+<h2 style="font-size: 1.5em; font-weight: bold;">HLS vs WebRTC: 다중 카메라 환경, 지연율 측정의 딜레마와 해결책</h2>
+<p>&nbsp;</p>
+<p>실시간 영상 스트리밍은 현대 웹 서비스와 AI 기반 시스템에서 필수적인 요소입니다. 특히 <strong style="font-weight: bold;">다중 카메라 지연율</strong> 최적화는 사용자 경험과 시스템 효율성을 좌우하는 핵심 과제입니다. HLS(HTTP Live Streaming)와 WebRTC(Web Real-Time Communication)는 대표적인 스트리밍 기술이지만, 여러 대의 카메라를 동시에 처리할 때 발생하는 지연율 측정은 예상치 못한 복잡성을 가집니다.</p>
+<p>&nbsp;</p>
+<p>이 글에서는 다중 카메라 환경에서 HLS와 WebRTC의 지연율을 정확히 비교하기 위한 실험 과정에서 겪었던 문제점과, 이를 해결하기 위한 구체적인 최적화 방안을 공유합니다. 정확한 지연율 측정은 시스템 성능 개선의 첫걸음입니다.</p>
+<p>&nbsp;</p>
+<h2 style="font-size: 1.5em; font-weight: bold;">기존 지연율 측정 방식의 문제점 분석</h2>
+<p>&nbsp;</p>
+<p>초기 실험에서는 다수의 카메라 탭을 순차적으로 열고 각 탭의 로딩 시간을 측정하여 TTFF(Time To First Frame)를 기록했습니다. 하지만 이 방식은 여러 가지 문제점을 야기하며 실제 지연율과는 거리가 있는 결과를 보여주었습니다.</p>
+<p>&nbsp;</p>
+<h3 style="font-size: 1.17em; font-weight: bold;">순차적 탭 로딩으로 인한 지연율 누적 현상</h3>
+<p>카메라 탭을 하나씩 순차적으로 열 때, 각 탭이 로딩되는 데 약 1.5초씩 소요되었습니다. 이는 탭의 개수가 늘어날수록 전체적인 측정 시작 시간이 인위적으로 지연되는 결과를 초래했습니다.</p>
+<p>&nbsp;</p>
+<div style="border-left: 4px solid rgb(220, 53, 69); padding: 1em 1.5em; background-color: rgb(246, 248, 250); color: rgb(36, 41, 46); border-radius: 4px;">
+<p>&quot;탭당 1.5초씩 늦어지는 현상 발견, 페이지 로드 직후 HTML 내부에서부터 시간을 측정하는데 탭이 생성되는동안 브라우저 초기화 딜레이가 TTFF에 산입되어 수천 ms수준으로 기록됨.&quot;</p>
+</div>
+<p>&nbsp;</p>
+<p>이처럼 브라우저 초기화 딜레이가 TTFF에 포함되면서 실제 미디어 스트림 수신 및 디코딩 지연과는 무관한 수천 ms 수준의 오차가 발생했습니다.</p>
+<p>&nbsp;</p>
+<h3 style="font-size: 1.17em; font-weight: bold;">크롬 브라우저의 백그라운드 탭 스로틀링 문제</h3>
+<p>크롬(Chrome)은 CPU 자원 절약을 위해 포커스가 없는 백그라운드 탭의 타이머, 네트워크 요청, 미디어 디코딩 속도를 강제로 제한합니다. 이로 인해 다음과 같은 현상이 나타났습니다.</p>
+<p>&nbsp;</p>
+<p class="se-text-paragraph se-text-paragraph-align-left" style="line-height: 1.8;"><span class="se-ff-nanumgothic se-fs15 __se-node" style="color: rgb(0, 0, 0);">• 먼저 생성된 카메라 탭들이 백그라운드로 밀려나면서 미디어 스트림을 수신하더라도 디코더가 멈춰있었습니다.</span></p>
+<p class="se-text-paragraph se-text-paragraph-align-left" style="line-height: 1.8;"><span class="se-ff-nanumgothic se-fs15 __se-node" style="color: rgb(0, 0, 0);">• 모든 탭 생성이 완료된 후에야 디코더가 활성화되어 영상이 재생되기 시작했습니다.</span></p>
+<p class="se-text-paragraph se-text-paragraph-align-left" style="line-height: 1.8;"><span class="se-ff-nanumgothic se-fs15 __se-node" style="color: rgb(0, 0, 0);">• 반면, 단일 카메라 측정 시에는 백그라운드 대기 오버헤드나 스로틀링의 영향을 전혀 받지 않아 정확한 측정이 가능했습니다.</span></p>
+<p>&nbsp;</p>
+<p>이러한 문제는 다중 카메라 환경에서 HLS와 WebRTC의 진정한 성능 차이를 왜곡시키는 주된 원인이었습니다.</p>
+<p>&nbsp;</p>
+<h2 style="font-size: 1.5em; font-weight: bold;">정확한 지연율 측정을 위한 실험 개선 방안</h2>
+<p>&nbsp;</p>
+<p>위에서 언급된 문제점들을 해결하고 <strong style="font-weight: bold;">HLS vs WebRTC</strong> 지연율을 보다 정확하게 비교하기 위해 다음과 같은 개선 사항을 적용했습니다.</p>
+<p>&nbsp;</p>
+<h3 style="font-size: 1.17em; font-weight: bold;">미디어 재생 동시 트리거 도입</h3>
+<p>각 카메라 탭을 열 때 미디어를 즉시 자동 재생하지 않고 '준비 상태'로 대기시킵니다. 그리고 모든 탭의 생성 및 로딩이 완료된 시점에 파이썬 스크립트가 동시 재생 트리거를 보냅니다.</p>
+<p>&nbsp;</p>
+<p class="se-text-paragraph se-text-paragraph-align-left" style="line-height: 1.8;"><span class="se-ff-nanumgothic se-fs15 __se-node" style="color: rgb(0, 0, 0);">• 모든 탭이 포그라운드 상태와 유사한 조건에서 동시에 미디어 스트림을 시작합니다.</span></p>
+<p class="se-text-paragraph se-text-paragraph-align-left" style="line-height: 1.8;"><span class="se-ff-nanumgothic se-fs15 __se-node" style="color: rgb(0, 0, 0);">• 이때부터 TTFF를 측정하여 백그라운드 스로틀링으로 인한 오차를 최소화합니다.</span></p>
+<p class="se-text-paragraph se-text-paragraph-align-left" style="line-height: 1.8;"><span class="se-ff-nanumgothic se-fs15 __se-node" style="color: rgb(0, 0, 0);">• 이는 미디어 디코더가 모든 탭에서 동시에 활성화되도록 유도하여 정확한 지연율 측정을 가능하게 합니다.</span></p>
+<p>&nbsp;</p>
+<h3 style="font-size: 1.17em; font-weight: bold;">비동기 동시 페이지 로딩 적용 (asyncio.gather)</h3>
+<p>탭을 순차적으로 여는 루프 방식 대신 Python의 <code style="color: #c7254e; font-weight: bold; font-family: &quot;Courier New&quot;, monospace; font-size: 0.9em;">asyncio.gather</code>를 사용하여 모든 카메라 페이지를 동시에 열도록 변경했습니다.</p>
+<p>&nbsp;</p>
+<p class="se-text-paragraph se-text-paragraph-align-left" style="line-height: 1.8;"><span class="se-ff-nanumgothic se-fs15 __se-node" style="color: rgb(0, 0, 0);">• <code style="color: #c7254e; font-weight: bold; font-family: &quot;Courier New&quot;, monospace; font-size: 0.9em;">asyncio.gather</code>는 여러 비동기 작업을 병렬로 실행하여 전체 탭 로딩 오버헤드를 크게 줄여줍니다.</span></p>
+<p class="se-text-paragraph se-text-paragraph-align-left" style="line-height: 1.8;"><span class="se-ff-nanumgothic se-fs15 __se-node" style="color: rgb(0, 0, 0);">• 이로써 초기 페이지 로딩 및 브라우저 초기화 딜레이가 TTFF에 미치는 영향을 최소화합니다.</span></p>
+<p class="se-text-paragraph se-text-paragraph-align-left" style="line-height: 1.8;"><span class="se-ff-nanumgothic se-fs15 __se-node" style="color: rgb(0, 0, 0);">• 결과적으로 다중 카메라 환경에서도 단일 카메라 측정과 유사한 조건에서 지연율을 측정할 수 있는 기반을 마련합니다.</span></p>
+<p>&nbsp;</p>
+<h2 style="font-size: 1.5em; font-weight: bold;">시스템 구성 및 통신 경로 최적화</h2>
+<p>&nbsp;</p>
+<p>정확한 지연율 측정을 위해서는 하부 시스템의 안정성 또한 중요합니다. 실험 과정에서 다음과 같은 요소들을 점검하고 최적화했습니다.</p>
+<p>&nbsp;</p>
+<p class="se-text-paragraph se-text-paragraph-align-left" style="line-height: 1.8;"><span class="se-ff-nanumgothic se-fs15 __se-node" style="color: rgb(0, 0, 0);">• <strong style="font-weight: bold;">MQTT Topic JSON 형식 확인 및 공유 (완료):</strong> AI 모듈에서 보내는 MQTT 메시지의 형식을 표준화하여 통신 오류를 방지했습니다.</span></p>
+<p class="se-text-paragraph se-text-paragraph-align-left" style="line-height: 1.8;"><span class="se-ff-nanumgothic se-fs15 __se-node" style="color: rgb(0, 0, 0);">• <strong style="font-weight: bold;">Docker 환경 설정:</strong> <code style="color: #c7254e; font-weight: bold; font-family: &quot;Courier New&quot;, monospace; font-size: 0.9em;">docker</code>로 시스템을 묶었을 때 <code style="color: #c7254e; font-weight: bold; font-family: &quot;Courier New&quot;, monospace; font-size: 0.9em;">bat</code> 스크립트 실행 시 영상이 나오지 않던 문제를 해결하여 안정적인 실험 환경을 구축했습니다.</span></p>
+<p class="se-text-paragraph se-text-paragraph-align-left" style="line-height: 1.8;"><span class="se-ff-nanumgothic se-fs15 __se-node" style="color: rgb(0, 0, 0);">• <strong style="font-weight: bold;">MQTT 통신 해결 (완료):</strong> MQTT 브로커와 클라이언트 간의 통신 문제를 해결하여 데이터 흐름을 원활하게 만들었습니다.</span></p>
+<p class="se-text-paragraph se-text-paragraph-align-left" style="line-height: 1.8;"><span class="se-ff-nanumgothic se-fs15 __se-node" style="color: rgb(0, 0, 0);">• <strong style="font-weight: bold;">통신 경로 및 AI 분석 프로세스 정리:</strong> 전체 시스템의 통신 흐름과 AI 분석 단계를 명확히 정리하여 병목 현상을 파악하고 개선했습니다.</span></p>
+<p>&nbsp;</p>
+<p>이러한 기반 작업들은 <strong style="font-weight: bold;">HLS vs WebRTC</strong>의 지연율 비교 실험이 더욱 신뢰성 있는 결과를 도출하는 데 기여했습니다.</p>
+<p>&nbsp;</p>
+<h2 style="font-size: 1.5em; font-weight: bold;">결론 및 향후 과제</h2>
+<p>&nbsp;</p>
+<p>다중 카메라 환경에서 <strong style="font-weight: bold;">HLS와 WebRTC</strong>의 지연율을 정확히 측정하는 것은 단순히 기술적인 문제를 넘어, 실제 서비스의 품질을 결정하는 중요한 과정입니다. 브라우저의 특성과 실험 환경의 함정을 이해하고, <code style="color: #c7254e; font-weight: bold; font-family: &quot;Courier New&quot;, monospace; font-size: 0.9em;">asyncio.gather</code>를 활용한 동시 페이지 로딩 및 미디어 재생 동시 트리거와 같은 최적화 방안을 적용함으로써 우리는 보다 신뢰할 수 있는 데이터를 얻을 수 있었습니다.</p>
+<p>&nbsp;</p>
+<p>앞으로도 이러한 개선된 측정 방식을 통해 각 스트리밍 기술의 장단점을 명확히 파악하고, 특정 사용 사례에 가장 적합한 <strong style="font-weight: bold;">실시간 영상 최적화</strong> 솔루션을 찾아 나갈 것입니다. 이 글이 다중 카메라 스트리밍 시스템을 구축하거나 최적화하려는 모든 분들께 유용한 지침이 되기를 바랍니다. 궁금한 점이나 추가적인 실험 아이디어가 있다면 댓글로 공유해주세요!</p>
+<p>&nbsp;</p>
+<hr style="border: 0; border-top: 1px solid #ddd;">
+<p>&nbsp;</p>
+<p><strong style="font-weight: bold;">[3단계: 티스토리 입력용 태그]</strong><br>HLS, WebRTC, 다중카메라, 지연율, 레이턴시, 스트리밍, 실시간영상, 브라우저성능, 크롬, asyncio, Python, MQTT, AI모듈, Docker, 웹개발, 비디오최적화, ai, emqx, mqtt, Rookies개발5기, SK쉴더스, 부트캠프, 클라우드</p>
+</body>
+</html>

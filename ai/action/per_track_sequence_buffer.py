@@ -5,6 +5,13 @@ from ai.action.sequence_buffer import CropSequenceBuffer
 
 
 class PerTrackKeypointSequenceBuffers:
+    """Maintain one KeypointSequenceBuffer per track_id.
+
+    sequence_length is frames per sequence. stride is the next sequence start
+    interval in frames, not frame sampling. Class defaults are only fallbacks;
+    runtime scripts may pass different values, such as 8/4.
+    """
+
     def __init__(self, sequence_length=8, stride=4, max_track_age_seconds=5.0):
         self.sequence_length = int(sequence_length)
         self.stride = int(stride)
@@ -46,6 +53,13 @@ class PerTrackKeypointSequenceBuffers:
 
 
 class PerTrackCropSequenceBuffers:
+    """Maintain one CropSequenceBuffer per track_id.
+
+    sequence_length is frames per sequence. stride is the next sequence start
+    interval in frames, not frame sampling. Class defaults are only fallbacks;
+    runtime scripts may pass different values, such as 8/4.
+    """
+
     def __init__(self, sequence_length=8, stride=4, resize_size=224, max_track_age_seconds=5.0):
         self.sequence_length = int(sequence_length)
         self.stride = int(stride)

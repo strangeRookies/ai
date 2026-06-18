@@ -16,6 +16,7 @@ class FaintEventPostProcessor:
 
     def should_trigger(self, camera_id, prediction, timestamp, track_id=None):
         key = event_state_key(camera_id, track_id)
+        cooldown_key = event_cooldown_key(camera_id)
         if not is_alert_prediction(prediction):
             self._consecutive_by_camera[key] = 0
             return False
@@ -23,21 +24,25 @@ class FaintEventPostProcessor:
         self._consecutive_by_camera[key] = consecutive
         if consecutive < self.min_consecutive_faint:
             return False
-        last_event_time = self._last_event_time_by_camera.get(key)
+        last_event_time = self._last_event_time_by_camera.get(cooldown_key)
         if last_event_time is not None and float(timestamp) - float(last_event_time) < self.cooldown_seconds:
             return False
-        self._last_event_time_by_camera[key] = float(timestamp)
+        self._last_event_time_by_camera[cooldown_key] = float(timestamp)
         return True
 
     def consecutive_count(self, camera_id, track_id=None):
         return int(self._consecutive_by_camera.get(event_state_key(camera_id, track_id), 0))
 
     def cooldown_active(self, camera_id, timestamp, track_id=None):
-        key = event_state_key(camera_id, track_id)
+        key = event_cooldown_key(camera_id)
         last_event_time = self._last_event_time_by_camera.get(key)
         if last_event_time is None:
             return False
         return float(timestamp) - float(last_event_time) < self.cooldown_seconds
+
+
+def event_cooldown_key(camera_id):
+    return str(camera_id)
 
 
 def event_state_key(camera_id, track_id=None):

@@ -1,4 +1,11 @@
 class CropSequenceBuffer:
+    """Build overlapping crop sequences without changing input FPS.
+
+    sequence_length is the number of frames in one emitted sequence. stride is
+    the next sequence start interval in frames, not FPS sampling. For example,
+    8/4 emits 8-frame sequences and permits the next sequence 4 frames later.
+    """
+
     def __init__(self, sequence_length=16, stride=8, resize_size=224):
         self.sequence_length = sequence_length
         self.stride = stride

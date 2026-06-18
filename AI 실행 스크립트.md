@@ -27,6 +27,8 @@ docker stop mediamtx 2>/dev/null || true
 
 - `8554`: MediaMTX RTSP
 - `8888`: MediaMTX raw HLS
+- `8889`: MediaMTX WebRTC WHEP HTTP
+- `8189`: MediaMTX WebRTC ICE TCP
 - `8010~8013`: AI overlay MJPEG
 
 프론트 기본값은 AI 박스가 보이는 overlay 모드입니다.
@@ -98,13 +100,14 @@ python scripts/run_registered_cameras.py \
 GPU PC IP 직접 접근이 timeout이면 Windows 브라우저에서는 GPU PC IP 대신 `localhost`를 사용합니다.
 
 ```powershell
-ssh -N -L 8888:127.0.0.1:8888 -L 8010:127.0.0.1:8010 -L 8011:127.0.0.1:8011 -L 8012:127.0.0.1:8012 -L 8013:127.0.0.1:8013 -R 8080:127.0.0.1:8080 welabs@58.127.241.84
+ssh -N -L 8888:127.0.0.1:8888 -L 8889:127.0.0.1:8889 -L 8189:127.0.0.1:8189 -L 8010:127.0.0.1:8010 -L 8011:127.0.0.1:8011 -L 8012:127.0.0.1:8012 -L 8013:127.0.0.1:8013 -R 8080:127.0.0.1:8080 welabs@58.127.241.84
 
 ```
 
 ## 5. 브라우저 확인
 
 - RAW HLS: `http://localhost:8888/cam_01/index.m3u8`
+- WebRTC WHEP smoke: `benchmark/webrtc_whep_smoke.html?url=http://localhost:8889/cam_01/whep`
 - AI Overlay: `http://localhost:8010`
 
 ## 6. 프론트 확인

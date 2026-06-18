@@ -166,7 +166,7 @@ def aggregate(rows, clip_summaries, args):
     }
 
 
-def main():
+def parse_args(argv=None):
     parser = argparse.ArgumentParser(description="Run a safe dataset pose/keypoint sequence evaluation dry-run.")
     parser.add_argument("--metadata-csv", default="../ai_fall_experiments/data/metadata/metadata.csv")
     parser.add_argument("--detector-mode", choices=["real", "mock"], default="mock")
@@ -177,7 +177,18 @@ def main():
     parser.add_argument("--sequence-length", type=int, default=8)
     parser.add_argument("--sequence-stride", type=int, default=4)
     parser.add_argument("--output", default=None)
-    args = parser.parse_args()
+    return parser.parse_args(argv)
+
+
+def main():
+    args = parse_args()
+    print(
+        "[dataset-evaluation] sequence config: "
+        f"sequence_length={args.sequence_length} "
+        f"sequence_stride={args.sequence_stride} "
+        "defaults=8/4 frame_sampling=disabled",
+        flush=True,
+    )
 
     rows = limit_rows_by_split(read_dataset_rows(args.metadata_csv), args.max_rows_per_split)
     detector = create_detector(args.detector_mode, args.yolo_model, args.device)

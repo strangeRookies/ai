@@ -31,15 +31,64 @@ headers = {
 
 PROJECT_KEY = "SSD"
 
-# 2. 기존 백로그 정리 (삭제)
-print("[1/4] Cleaning up previous project keys...")
-for i in range(1, 150):
-    issue_key = f"{PROJECT_KEY}-{i}"
-    url = f"{JIRA_URL}/rest/api/3/issue/{issue_key}"
+# 2. 기존 WBS 백로그 정보 로딩 (기존 다른 팀원들의 티켓 유지 목적)
+print("[1/4] Loading existing task keys from project_wbs.csv...")
+existing_jira_keys = {}
+current_dir = os.path.dirname(os.path.abspath(__file__))
+csv_path = os.path.join(current_dir, "project_wbs.csv")
+if os.path.exists(csv_path):
     try:
-        res = requests.delete(url, auth=auth, headers=headers)
-    except Exception:
-        pass
+        import csv
+        with open(csv_path, "r", encoding="utf-8-sig") as csv_file:
+            reader = csv.reader(csv_file)
+            header = next(reader)
+            for row in reader:
+                if len(row) >= 10:
+                    wbs_code = row[2].strip()
+                    jira_key = row[9].strip()
+                    if wbs_code and jira_key and jira_key != "N/A":
+                        existing_jira_keys[wbs_code] = jira_key
+        print(f" -> Loaded {len(existing_jira_keys)} existing task key mappings.")
+    except Exception as e:
+        print(f" -> Warning: Failed to parse existing project_wbs.csv: {e}")
+else:
+    print(" -> project_wbs.csv not found. Will create new tickets if mapping doesn't exist.")
+
+# 기존 에픽 키 검색 및 캐싱 (팀원이 만들어 놓은 에픽 유지 목적)
+print(" -> Querying existing Epics from Jira to reuse them...")
+epic_keys = {
+    "strange_ai": None,
+    "strange_infra": None,
+    "strange_back": None,
+    "strange_front": None
+}
+try:
+    search_url = f"{JIRA_URL}/rest/api/3/search/jql"
+    search_payload = {
+        "jql": f"project = {PROJECT_KEY} AND issuetype = Epic",
+        "maxResults": 50,
+        "fields": ["summary"]
+    }
+    search_res = requests.post(search_url, auth=auth, headers=headers, json=search_payload)
+    if search_res.status_code == 200:
+        found_issues = search_res.json().get("issues", [])
+        for issue in found_issues:
+            key = issue["key"]
+            summary = issue["fields"]["summary"]
+            print(f"    * Found existing Epic in Jira: {key} - {summary}")
+            if "[AI]" in summary or "AI" in summary or "비전" in summary:
+                epic_keys["strange_ai"] = key
+            elif "[인프라]" in summary or "인프라" in summary or "infra" in summary.lower():
+                epic_keys["strange_infra"] = key
+            elif "[Back]" in summary or "Back" in summary or "백엔드" in summary or "back" in summary.lower():
+                epic_keys["strange_back"] = key
+            elif "[Front]" in summary or "Front" in summary or "프론트" in summary or "front" in summary.lower():
+                epic_keys["strange_front"] = key
+    else:
+        print(f"    * Warning: Epic query failed with status {search_res.status_code}: {search_res.text}")
+except Exception as e:
+    print(f"    * Warning: Failed to fetch existing Epics: {e}")
+
 
 # 3. 4대 에픽 및 32개 균형 태스크 구조 정의
 wbs_data = [
@@ -404,88 +453,65 @@ wbs_data = [
     }
 ]
 
-# 4. Jira 에픽 생성 정의 (4대 트랙별)
-epics_to_create = [
-    {
-        "summary": "[AI][M2] 엣지 AI 비전 분석 파이프라인 구축",
-        "description": "Jetson Orin 하드웨어 가속기(TensorRT) 기반의 실시간 다채널 비디오 디코딩, YOLO Pose 기반 관절 특징점 추출, LSTM/ST-GCN 시계열 행동 분석 및 Identity Stitching을 포함한 코어 비전 AI 분석 인프라를 마련합니다.",
-        "track": "strange_ai"
-    },
-    {
-        "summary": "[인프라][M1] 클라우드 및 엣지 인프라 환경 구축",
-        "track": "strange_infra",
-        "description": "EMQX MQTT 브로커 Docker 클러스터 배포, PostgreSQL 및 Redis 분산 캐시 DB 구축, Github Actions 자동 빌드 및 배포(CI/CD) 파이프라인, Prometheus/Grafana 및 Loki/Promtail 연계 모니터링 및 전체 통합 Docker Compose 환경을 수립합니다."
-    },
-    {
-        "summary": "[Back][M2] 핵심 이벤트 처리 및 이원화 라이프사이클 백엔드 구축",
-        "track": "strange_back",
-        "description": "Spring Boot 3.3 기반 아키텍처 초기화, Spring Security/JWT 회원 및 보안 아키텍처, WebFlux 리액티브 MQTT 리스너, Redis 분산락/디바운싱, Google FCM HTTP v1 비동기 Push 알림 전송 API, AWS S3 다중 스토리지 동영상 MP4 아카이빙 및 조회 조건 API를 완수합니다."
-    },
-    {
-        "summary": "[Front][M3] 실시간 통합 관제 및 아카이빙 대시보드 연동",
-        "track": "strange_front",
-        "description": "React/Next.js 14 기반 HUD 디자인 시스템 구축, WebSocket STOMP 연동 헬스체크, N분할 실시간 비디오 렌더링(Canvas), 위협 경보 Toast 알림, 모바일 웹뷰 대응 푸시 랜딩 및 2D SVG 매장 평면도 맵 동적 핀 맵, OpenAPI 외부 유관기관 에스컬레이션 112/119 호출 및 아카이브 타임라인 플레이어를 완료합니다."
-    }
-]
+# 4. AI 관련 에픽 확보/생성 (팀원들이 만든 다른 에픽은 건드리지 않음)
+print("\n[2/4] Ensuring AI Epic exists (without touching team epics)...")
+ai_epic_key = epic_keys.get("strange_ai")
 
-created_epic_keys = []
-
-print("[2/4] Creating 4 Core Epics in Jira...")
-for i, epic in enumerate(epics_to_create):
+if not ai_epic_key:
+    print(" -> AI Epic not found in Jira. Creating a new one...")
     url = f"{JIRA_URL}/rest/api/3/issue"
     payload = {
         "fields": {
             "project": {"key": PROJECT_KEY},
-            "summary": epic["summary"],
+            "summary": "[AI][M2] 엣지 AI 비전 분석 파이프라인 구축",
             "description": {
                 "type": "doc",
                 "version": 1,
                 "content": [
                     {
                         "type": "paragraph",
-                        "content": [{"type": "text", "text": epic["description"]}]
+                        "content": [{"type": "text", "text": "Jetson Orin 하드웨어 가속기(TensorRT) 기반의 실시간 다채널 비디오 디코딩, YOLO Pose 기반 관절 특징점 추출, LSTM/ST-GCN 시계열 행동 분석 및 Identity Stitching을 포함한 코어 비전 AI 분석 인프라를 마련합니다."}]
                     }
                 ]
             },
-            "issuetype": {"name": "Epic"}  # fallback check
+            "issuetype": {"name": "Epic"}
         }
     }
-    # JWM template might require using standard Issue Types like Epic, or standard Task. We try standard Epic.
-    # In some JWM instances, "Epic" is named "Epic" or "Task". We first try Epic.
     res = requests.post(url, auth=auth, headers=headers, json=payload)
     if res.status_code == 201:
-        epic_key = res.json()["key"]
-        print(f" -> Created Epic {epic_key}: {epic['summary']}")
-        created_epic_keys.append(epic_key)
+        ai_epic_key = res.json()["key"]
+        print(f" -> Created New AI Epic {ai_epic_key}")
     else:
-        # Fallback to Task if Epic is not supported as an issue type
-        print(f" -> Failed to create Epic '{epic['summary']}' (Status {res.status_code}). Retrying as Task...")
+        # Fallback to Task
+        print(f" -> Failed to create AI Epic (Status {res.status_code}). Retrying as Task...")
         payload["fields"]["issuetype"] = {"name": "Task"}
         res2 = requests.post(url, auth=auth, headers=headers, json=payload)
         if res2.status_code == 201:
-            epic_key = res2.json()["key"]
-            print(f" -> Created pseudo-Epic Task {epic_key}: {epic['summary']}")
-            created_epic_keys.append(epic_key)
+            ai_epic_key = res2.json()["key"]
+            print(f" -> Created pseudo-Epic AI Task {ai_epic_key}")
         else:
             print(f" -> Retry Failed! {res2.status_code}: {res2.text}")
-            created_epic_keys.append(None)
+else:
+    print(f" -> Reusing existing AI Epic: {ai_epic_key}")
 
-# 5. 32개 태스크 생성 및 에픽에 바인딩
-print("\n[3/4] Creating 32 Balanced WBS Tasks in Jira...")
+# 5. 태스크 생성/업데이트 루프 (AI 업무만 처리하며, 다른 트랙 태스크는 기존 티켓 유지)
+print("\n[3/4] Processing WBS Tasks (AI Track only, other tracks preserved)...")
 jira_keys = {}
 
 for task in wbs_data:
-    epic_idx = task["epic_idx"]
-    epic_key = created_epic_keys[epic_idx] if epic_idx < len(created_epic_keys) else None
+    task_code = task["code"]
+    track = task["track"]
     
-    # 트랙 접두사 부여
-    track_labels = {
-        "strange_ai": "[AI]",
-        "strange_infra": "[인프라]",
-        "strange_back": "[Back]",
-        "strange_front": "[Front]"
-    }
-    prefix = track_labels.get(task["track"], "")
+    # 1) AI 이외의 트랙인 경우: Jira API 요청 없이 기존 project_wbs.csv의 연동 정보를 그대로 유지
+    if track != "strange_ai":
+        existing_key = existing_jira_keys.get(task_code, "N/A")
+        print(f" -> [Skip] Preserving {task_code} ({track}) with existing Jira key: {existing_key}")
+        jira_keys[task_code] = existing_key
+        continue
+        
+    # 2) AI 트랙인 경우: 신규 생성 또는 기존 티켓 업데이트
+    track_labels = {"strange_ai": "[AI]"}
+    prefix = track_labels.get(track, "")
     milestone_tag = f"[{task['milestone'].split(':')[0]}]"
     summary = f"{prefix}{milestone_tag} {task['task']}"
     
@@ -501,7 +527,7 @@ for task in wbs_data:
     payload = {
         "fields": {
             "project": {"key": PROJECT_KEY},
-            "summary": summary[:255], # Jira summary limit safety
+            "summary": summary[:255],
             "description": {
                 "type": "doc",
                 "version": 1,
@@ -516,18 +542,40 @@ for task in wbs_data:
         }
     }
     
-    if epic_key:
-        payload["fields"]["parent"] = {"key": epic_key}
+    if ai_epic_key:
+        payload["fields"]["parent"] = {"key": ai_epic_key}
         
-    url = f"{JIRA_URL}/rest/api/3/issue"
-    res = requests.post(url, auth=auth, headers=headers, json=payload)
-    if res.status_code == 201:
-        task_key = res.json()["key"]
-        print(f" -> Created Task {task_key}: {summary}")
-        jira_keys[task["code"]] = task_key
+    existing_key = existing_jira_keys.get(task_code)
+    if existing_key and existing_key != "N/A":
+        # 기존 티켓이 존재하면 업데이트 (UPSERT)
+        url = f"{JIRA_URL}/rest/api/3/issue/{existing_key}"
+        res = requests.put(url, auth=auth, headers=headers, json=payload)
+        if res.status_code in [200, 204]:
+            print(f" -> [Update] Updated AI Task {existing_key}: {summary}")
+            jira_keys[task_code] = existing_key
+        else:
+            print(f" -> [Update Failed] {existing_key} (Status {res.status_code}): {res.text}. Creating new...")
+            # Fallback to create if update fails
+            create_url = f"{JIRA_URL}/rest/api/3/issue"
+            create_res = requests.post(create_url, auth=auth, headers=headers, json=payload)
+            if create_res.status_code == 201:
+                new_key = create_res.json()["key"]
+                print(f" -> [Create Fallback] Created AI Task {new_key}: {summary}")
+                jira_keys[task_code] = new_key
+            else:
+                print(f" -> [Create Fallback Failed] (Status {create_res.status_code}): {create_res.text}")
+                jira_keys[task_code] = "N/A"
     else:
-        print(f" -> Failed to create Task '{summary}' (Status {res.status_code}): {res.text}")
-        jira_keys[task["code"]] = "N/A"
+        # 기존 티켓이 없으면 신규 생성
+        url = f"{JIRA_URL}/rest/api/3/issue"
+        res = requests.post(url, auth=auth, headers=headers, json=payload)
+        if res.status_code == 201:
+            new_key = res.json()["key"]
+            print(f" -> [Create] Created AI Task {new_key}: {summary}")
+            jira_keys[task_code] = new_key
+        else:
+            print(f" -> [Create Failed] {summary} (Status {res.status_code}): {res.text}")
+            jira_keys[task_code] = "N/A"
 
 # 6. WBS CSV 및 HTML 재생성
 print("\n[4/4] Rendering new balanced project_wbs.csv & project_wbs.html...")

@@ -15,6 +15,8 @@ class VideoReader:
         self.input_uri = input_uri
         self.cap = None
         self.fps = 30.0
+        self.total_frames = 0.0
+        self.duration_sec = 0.0
         self.frame_idx = 0
 
     def __enter__(self):
@@ -28,6 +30,17 @@ class VideoReader:
         if not self.cap.isOpened():
             raise RuntimeError(f"Failed to open video input: {self.input_uri}")
         self.fps = float(self.cap.get(cv2.CAP_PROP_FPS) or 30.0)
+        self.total_frames = float(self.cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0.0)
+        self.duration_sec = self.total_frames / self.fps if self.fps > 0 else 0.0
+        print(
+            "[video-reader] opened: "
+            f"input_uri={self.input_uri} "
+            f"source_fps={self.fps:.6f} "
+            f"total_frames={int(self.total_frames)} "
+            f"duration_sec={self.duration_sec:.6f} "
+            "frame_sampling=disabled",
+            flush=True,
+        )
         return self
 
     def __exit__(self, exc_type, exc, traceback):

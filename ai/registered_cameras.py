@@ -8,6 +8,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Literal, TypedDict, assert_never
 
+from ai.camera_input_safety import (
+    assigned_video_candidates,
+    is_path_under,
+    is_safe_camera_login_id,
+    resolved_video_pool,
+)
+
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[1]
 DEFAULT_BACKEND_BASE_URL: Final = "http://localhost:8080"
@@ -89,6 +96,13 @@ def parse_camera(raw: RawCamera) -> RegisteredCamera | None:
     login_id = str(raw.get("cameraLoginId") or "").strip()
     if not login_id:
         return None
+    if not is_safe_camera_login_id(login_id):
+        print(
+            f"[registered-cameras][warning] unsafe cameraLoginId={login_id!r}; skipping",
+            file=sys.stderr,
+            flush=True,
+        )
+        return None
 
     raw_source_type = raw.get("sourceType") or "REAL_RTSP"
     match raw_source_type:
@@ -156,12 +170,14 @@ def first_video_from_pool(video_pool: Path) -> Path | None:
 
 def resolve_simulated_video(camera: RegisteredCamera, video_pool: Path) -> Path:
     if camera.assigned_video_path:
-        assigned = Path(camera.assigned_video_path)
-        if assigned.exists():
-            return assigned
-        repo_relative = REPO_ROOT / assigned
-        if repo_relative.exists():
-            return repo_relative
+        pool_root = resolved_video_pool(video_pool, REPO_ROOT)
+        for candidate in assigned_video_candidates(camera.assigned_video_path, video_pool, REPO_ROOT):
+            if candidate.exists() and candidate.is_file():
+                if is_path_under(candidate, pool_root):
+                    return candidate
+                raise RuntimeError(
+                    f"assignedVideoPath must stay under video_pool for camera_login_id={camera.camera_login_id}"
+                )
 
     fallback = first_video_from_pool(video_pool)
     if fallback is not None:
@@ -202,8 +218,6 @@ def build_overlay_command(
     command = [
         config.python_executable,
         "scripts/serve_ai_overlay.py",
-        "--rtsp-url",
-        rtsp_url,
         "--camera-id",
         camera.camera_login_id,
         "--camera-login-id",
@@ -237,7 +251,6 @@ def build_overlay_command(
         ("--mqtt-topic", config.mqtt_topic),
         ("--mqtt-client-id", f"{config.mqtt_client_id_prefix}-{camera.camera_login_id}"),
         ("--mqtt-username", config.mqtt_username),
-        ("--mqtt-password", config.mqtt_password),
         ("--action-model", config.action_model),
         ("--action-threshold", str(config.action_threshold) if config.action_threshold is not None else None),
     ]

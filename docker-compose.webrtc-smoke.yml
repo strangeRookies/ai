@@ -1,0 +1,14 @@
+name: strange-webrtc-smoke
+
+services:
+  mediamtx:
+    image: bluenviron/mediamtx:1
+    container_name: strange-webrtc-mediamtx
+    ports:
+      - "8554:8554"
+      - "8888:8888"
+      - "8889:8889"
+      - "8189:8189"
+    volumes:
+      - ./stream/mediamtx.webrtc.direct.yml:/mediamtx.yml:ro
+    restart: unless-stopped

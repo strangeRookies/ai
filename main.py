@@ -43,7 +43,7 @@ def mock_frames(interval_seconds):
         time.sleep(interval_seconds)
 
 
-def rtsp_frames(settings):
+def rtsp_frames(settings, metrics=None):
     reader = RtspFrameReader(
         settings.rtsp_url,
         queue_size=settings.frame_queue_size,
@@ -53,7 +53,11 @@ def rtsp_frames(settings):
     try:
         while True:
             try:
-                yield reader.read_latest(timeout=1)
+                frame = reader.read_latest(timeout=1)
+                if metrics is not None:
+                    metrics["frames_read"] = reader.frames_read
+                    metrics["queue_drop_count"] = reader.drop_count
+                yield frame
             except Empty:
                 if settings.allow_mock_fallback:
                     print("[edge-ai] no RTSP frame available, using mock frame fallback", file=sys.stderr)
@@ -136,6 +140,14 @@ def main():
         sequence_length=settings.sequence_length,
         max_track_age_seconds=settings.sequence_max_track_age_seconds,
     )
+    print(
+        "[edge-ai] sequence config: "
+        f"path=main.py sequence_length={settings.sequence_length} "
+        "sequence_stride=TODO(confirm; this path has no stride setting) "
+        "buffer=rules.track_sequence.PerTrackSequenceBuffer "
+        "note=stride is not configured on this path",
+        flush=True,
+    )
 
     if args.dry_run:
         publisher = DryRunPublisher()
@@ -167,17 +179,22 @@ def main():
         clip_worker = ClipWriterWorker(clip_queue)
         clip_worker.start()
 
+    rtsp_metrics = None
     frames = mock_frames(settings.mock_frame_interval_seconds)
     if settings.detector_mode != "mock":
-        frames = rtsp_frames(settings)
+        rtsp_metrics = {"frames_read": 0, "queue_drop_count": 0}
+        frames = rtsp_frames(settings, rtsp_metrics)
 
     processed = 0
+    started_at = time.perf_counter()
+    inference_latency_ms = None
     try:
         for frame in frames:
             clip_task = clip_buffer.add_frame(frame) if clip_buffer else None
             if clip_task and clip_queue:
                 enqueue_event_clip(clip_queue, clip_task)
 
+            inference_started_at = time.perf_counter()
             detections = detector.detect(frame)
             detections = tracker.update(detections)
             detections = sequence_buffer.update(detections)
@@ -197,8 +214,24 @@ def main():
                     )
                 if args.once:
                     return 0
+            inference_latency_ms = (time.perf_counter() - inference_started_at) * 1000.0
 
             processed += 1
+            if processed % 30 == 0:
+                runtime_seconds = max(time.perf_counter() - started_at, 1e-9)
+                effective_processing_fps = processed / runtime_seconds
+                frames_read = rtsp_metrics["frames_read"] if rtsp_metrics is not None else "TODO(non-RTSP path)"
+                queue_drop_count = rtsp_metrics["queue_drop_count"] if rtsp_metrics is not None else "TODO(non-RTSP path)"
+                latency_text = "TODO(no completed inference)" if inference_latency_ms is None else f"{inference_latency_ms:.3f}"
+                print(
+                    "[edge-ai] rtsp processing status: "
+                    f"frames_read={frames_read} "
+                    f"frames_processed={processed} "
+                    f"effective_processing_fps={effective_processing_fps:.3f} "
+                    f"inference_latency_ms={latency_text} "
+                    f"queue_drop_count={queue_drop_count}",
+                    flush=True,
+                )
             if settings.max_frames > 0 and processed >= settings.max_frames:
                 print(f"[edge-ai] reached MAX_FRAMES={settings.max_frames}")
                 return 0

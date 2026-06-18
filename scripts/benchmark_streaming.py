@@ -14,8 +14,7 @@ async def run_benchmark(mode, cameras, duration, results_dir):
     raw_dir = results_dir / 'raw'
     raw_dir.mkdir(parents=True, exist_ok=True)
 
-    cam_str = 'single' if len(cameras) == 1 else 'multi'
-    output_file = raw_dir / f"{mode}_{cam_str}_camera_raw.jsonl"
+    output_file = raw_dir / f"{mode}_{len(cameras)}_camera_raw.jsonl"
     sys_metrics_file = results_dir / "system_metrics.csv"
 
     if not sys_metrics_file.exists():
@@ -35,6 +34,8 @@ async def run_benchmark(mode, cameras, duration, results_dir):
         pages = []
         for cam in cameras:
             page = await context.new_page()
+            page.on("console", lambda msg, c=cam: print(f"[{c} BROWSER] {msg.text}"))
+            page.on("pageerror", lambda err, c=cam: print(f"[{c} BROWSER ERROR] {err.message}"))
             if mode == 'hls':
                 stream_url = f"http://127.0.0.1:8888/{cam}/index.m3u8"
             else:
@@ -43,6 +44,9 @@ async def run_benchmark(mode, cameras, duration, results_dir):
             test_url = f"{html_url}?url={stream_url}&mode={mode}"
             await page.goto(test_url)
             pages.append({'cam': cam, 'page': page})
+            
+        # Wait a moment for video players to initialize
+        await asyncio.sleep(2)
 
         with open(output_file, 'w') as f_out, open(sys_metrics_file, 'a') as f_sys:
             start_time = time.time()
