@@ -153,6 +153,9 @@
                             if (report.framesDecoded) {
                                 window.benchmarkStats.frames_decoded = report.framesDecoded;
                             }
+                            if (report.bytesReceived) {
+                                window.benchmarkStats.bytes_received = report.bytesReceived;
+                            }
                         }
                     });
                 } catch (e) {

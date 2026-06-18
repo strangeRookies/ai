@@ -1,21 +1,29 @@
 # RTSP to Web Streaming
 
-The frontend does not use RTSP URLs directly. Keep RTSP on the AI/GPU PC, then expose browser-safe MJPEG URLs to the dashboard:
+The frontend does not use RTSP URLs directly. Keep RTSP on the AI/GPU PC, then expose browser-safe streams to the dashboard.
 
-```text
-http://localhost:8000/stream/camera-1
-http://localhost:8000/stream/camera-2
-http://localhost:8000/stream/camera-3
-http://localhost:8000/stream/camera-4
-```
+## Path Standard: `cameraLoginId`
+
+All camera path identifiers are based on `cameraLoginId` as registered in the backend DB.
+Do **not** use bare `cam1`, `cam2` paths — use `cam_01`, `cam_02`, etc.
+
+| Layer | URL pattern |
+| --- | --- |
+| RTSP publish | `rtsp://<host>:8554/cam_01` |
+| HLS | `http://<host>:8888/cam_01/index.m3u8` |
+| WebRTC WHEP | `http://<host>:8889/cam_01/whep` |
+| AI Overlay (MJPEG) | `http://<host>:8010` (cam_01), `:8011` (cam_02), … |
+| AI runner input | same RTSP path as publish |
 
 ## Architecture
 
 ```text
 Camera or video file
-  -> RTSP server, MediaMTX on :8554
-  -> serve_mjpeg.py, OpenCV frame decoder and buffer on :8000
-  -> frontend <img> MJPEG stream
+  -> MediaMTX RTSP server :8554 (path = cameraLoginId, e.g. cam_01)
+  -> HLS :8888/{cameraLoginId}/index.m3u8
+  -> WebRTC WHEP :8889/{cameraLoginId}/whep
+  -> AI overlay MJPEG :8010~8013 (per camera port)
+  -> frontend video player / canvas
 ```
 
 `serve_mjpeg.py` does not shell out to ffmpeg. It reads RTSP through OpenCV, which commonly uses FFmpeg internally. FFmpeg is used here to publish test webcams or recorded videos into the RTSP server.
@@ -23,48 +31,46 @@ Camera or video file
 ## 1. Start RTSP Server
 
 ```bash
-cd /home/welabs/yolo_training/strange_ai
+cd /home/welabs/yolo_training/strange_ai_lstm
 chmod +x scripts/*.sh
 ./scripts/run_rtsp_server.sh
 ```
 
-This serves these RTSP paths:
-
-```text
-rtsp://localhost:8554/cam1
-rtsp://localhost:8554/cam2
-rtsp://localhost:8554/cam3
-rtsp://localhost:8554/cam4
-```
+This serves any publisher path. Active camera paths are registered in the backend DB as `cameraLoginId`.
 
 ## 2. Publish Test Video or Webcam
 
-Recorded video:
+Recorded video (publish to `cam_01`):
 
 ```bash
-./scripts/publish_sample_video.sh sample_videos/example.mp4 cam1
+ffmpeg -re -stream_loop -1 \
+  -i /path/to/sample.mp4 \
+  -an -c:v libx264 -preset ultrafast -tune zerolatency \
+  -f rtsp rtsp://127.0.0.1:8554/cam_01
 ```
 
 Linux webcam:
 
 ```bash
 ls /dev/video*
-./scripts/publish_webcam_linux.sh /dev/video0 cam1
+ffmpeg -f v4l2 -i /dev/video0 \
+  -c:v libx264 -preset ultrafast -tune zerolatency \
+  -f rtsp rtsp://localhost:8554/cam_01
 ```
 
 Windows webcam to GPU PC:
 
 ```powershell
 ffmpeg -list_devices true -f dshow -i dummy
-ffmpeg -f dshow -i video="YOUR WEBCAM NAME" -c:v libx264 -preset ultrafast -tune zerolatency -f rtsp rtsp://GPU_PC_IP:8554/cam1
+ffmpeg -f dshow -i video="YOUR WEBCAM NAME" -c:v libx264 -preset ultrafast -tune zerolatency -f rtsp rtsp://GPU_PC_IP:8554/cam_01
 ```
 
-## 3. Start Web Stream Bridge
+## 3. Start Web Stream Bridge (MJPEG legacy mode)
 
 In another terminal:
 
 ```bash
-cd /home/welabs/yolo_training/strange_ai
+cd /home/welabs/yolo_training/strange_ai_lstm
 source .venv/bin/activate
 ./scripts/run_stream_bridge.sh
 ```
@@ -84,13 +90,13 @@ http://GPU_PC_IP:8000/stream/camera-1
 
 ## Real Cameras
 
-Configure real RTSP URLs only on the AI server:
+Configure real RTSP URLs only on the AI server. Paths must match cameraLoginId:
 
 ```bash
-export CAMERA_1_RTSP_URL='rtsp://localhost:8554/cam1'
-export CAMERA_2_RTSP_URL='rtsp://localhost:8554/cam2'
-export CAMERA_3_RTSP_URL='rtsp://192.168.0.10:8554/cam3'
-export CAMERA_4_RTSP_URL='rtsp://192.168.0.11:8554/cam4'
+export CAMERA_1_RTSP_URL='rtsp://localhost:8554/cam_01'
+export CAMERA_2_RTSP_URL='rtsp://localhost:8554/cam_02'
+export CAMERA_3_RTSP_URL='rtsp://192.168.0.10:8554/cam_03'
+export CAMERA_4_RTSP_URL='rtsp://192.168.0.11:8554/cam_04'
 ./scripts/run_stream_bridge.sh
 ```
 
@@ -111,6 +117,9 @@ If Linux blocks ports:
 ```bash
 sudo ufw allow 8554/tcp
 sudo ufw allow 8000/tcp
+sudo ufw allow 8888/tcp
+sudo ufw allow 8889/tcp
+sudo ufw allow 8189/tcp
 ```
 
 Do not put RTSP usernames or passwords in frontend code.

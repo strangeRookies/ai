@@ -2,6 +2,7 @@ import json
 import pandas as pd
 from pathlib import Path
 import sys
+import time
 
 def summarize_benchmark(results_dir):
     raw_dir = results_dir / 'raw'
@@ -38,12 +39,19 @@ def summarize_benchmark(results_dir):
         buffering = 0
         total_fps_diff = 0
         dropped = 0
+        total_bytes = 0
+        error_reasons = set()
+        status = "SUCCESS"
         
         for cam, stats_list in cameras.items():
             valid_stats = [s for s in stats_list if s]
             if not valid_stats: continue
             
             last_stat = valid_stats[-1]
+            if last_stat.get('error'):
+                status = "FAILED"
+                error_reasons.add(str(last_stat['error']))
+
             if last_stat.get('ttff_ms') is not None:
                 ttff_list.append(last_stat['ttff_ms'])
             
@@ -52,8 +60,14 @@ def summarize_benchmark(results_dir):
             
             first_decoded = valid_stats[0].get('frames_decoded', 0)
             last_decoded = last_stat.get('frames_decoded', 0)
+            
+            if last_decoded == 0:
+                status = "FAILED"
+                error_reasons.add("No frames decoded")
+
             # crude fps calc based on seconds
             total_fps_diff += (last_decoded - first_decoded) / (len(valid_stats) or 1)
+            total_bytes += last_stat.get('bytes_received', 0)
 
         avg_ttff = sum(ttff_list) / len(ttff_list) if ttff_list else 0
         avg_fps = total_fps_diff / len(cameras) if cameras else 0
@@ -61,10 +75,13 @@ def summarize_benchmark(results_dir):
         summary_data.append({
             'Mode': mode,
             'Cameras': cam_type,
-            'Avg TTFF (ms)': round(avg_ttff, 2),
-            'Total Buffering Events': buffering,
-            'Total Dropped Frames': dropped,
-            'Avg FPS': round(avg_fps, 2)
+            'Status': status,
+            'Error Reason': ', '.join(error_reasons) if status == "FAILED" else None,
+            'Avg TTFF (ms)': round(avg_ttff, 2) if status == "SUCCESS" else None,
+            'Total Buffering Events': buffering if status == "SUCCESS" else None,
+            'Total Dropped Frames': dropped if status == "SUCCESS" else None,
+            'Avg FPS': round(avg_fps, 2) if status == "SUCCESS" else None,
+            'Bytes Received': total_bytes if status == "SUCCESS" else None
         })
 
     if not summary_data:
@@ -72,12 +89,22 @@ def summarize_benchmark(results_dir):
         return
 
     df = pd.DataFrame(summary_data)
-    csv_path = summary_dir / 'summary.csv'
-    df.to_csv(csv_path, index=False)
+    csv_path = summary_dir / 'benchmark_summary.csv'
+    try:
+        df.to_csv(csv_path, index=False)
+    except PermissionError:
+        csv_path = summary_dir / f'benchmark_summary_{int(time.time())}.csv'
+        df.to_csv(csv_path, index=False)
 
     # Markdown generation
-    md_path = summary_dir / 'summary.md'
-    with open(md_path, 'w', encoding='utf-8') as f:
+    md_path = summary_dir / 'benchmark_summary.md'
+    try:
+        f = open(md_path, 'w', encoding='utf-8')
+    except PermissionError:
+        md_path = summary_dir / f'benchmark_summary_{int(time.time())}.md'
+        f = open(md_path, 'w', encoding='utf-8')
+
+    with f:
         f.write("# 스마트 안전 관제 시스템: 스트리밍 체감 성능(HLS vs WebRTC) 비교 보고서\n\n")
         f.write("## 1. 실험 목적 및 환경\n")
         f.write("- **목적:** GPU PC에서 송출되는 RTSP 영상이 웹 화면에 표시되기까지의 '사용자 체감 전달 성능' 측정 및 비교\n")
