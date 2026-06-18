@@ -18,29 +18,22 @@ def main():
     print("==================================================")
 
     duration = 15  # duration in seconds for each scenario
-
-    # Scenarios to run:
-    # 1. HLS 1-Cam
-    # 2. WebRTC 1-Cam
-    # 3. HLS 2-Cam
-    # 4. WebRTC 2-Cam
-    # 5. HLS 4-Cam
-    # 6. WebRTC 4-Cam
+    run_id = f"run_{int(time.time())}"
 
     # 1. Single Camera Scenarios
     print("\n--- 1. Single Camera Scenarios ---")
-    run_cmd([sys.executable, "scripts/benchmark_streaming.py", "--mode", "hls", "--cameras", "cam_01", "--duration", str(duration)])
-    run_cmd([sys.executable, "scripts/benchmark_streaming.py", "--mode", "webrtc", "--cameras", "cam_01", "--duration", str(duration)])
+    run_cmd([sys.executable, "scripts/benchmark_streaming.py", "--mode", "hls", "--cameras", "cam_01", "--duration", str(duration), "--run-id", run_id])
+    run_cmd([sys.executable, "scripts/benchmark_streaming.py", "--mode", "webrtc", "--cameras", "cam_01", "--duration", str(duration), "--run-id", run_id])
 
     # 2. 2-Camera Scenarios
     print("\n--- 2. 2-Camera Scenarios ---")
-    run_cmd([sys.executable, "scripts/benchmark_streaming.py", "--mode", "hls", "--cameras", "cam_01", "cam_02", "--duration", str(duration)])
-    run_cmd([sys.executable, "scripts/benchmark_streaming.py", "--mode", "webrtc", "--cameras", "cam_01", "cam_02", "--duration", str(duration)])
+    run_cmd([sys.executable, "scripts/benchmark_streaming.py", "--mode", "hls", "--cameras", "cam_01", "cam_02", "--duration", str(duration), "--run-id", run_id])
+    run_cmd([sys.executable, "scripts/benchmark_streaming.py", "--mode", "webrtc", "--cameras", "cam_01", "cam_02", "--duration", str(duration), "--run-id", run_id])
 
     # 3. 4-Camera Scenarios
     print("\n--- 3. 4-Camera Scenarios ---")
-    run_cmd([sys.executable, "scripts/benchmark_streaming.py", "--mode", "hls", "--cameras", "cam_01", "cam_02", "cam_03", "cam_04", "--duration", str(duration)])
-    run_cmd([sys.executable, "scripts/benchmark_streaming.py", "--mode", "webrtc", "--cameras", "cam_01", "cam_02", "cam_03", "cam_04", "--duration", str(duration)])
+    run_cmd([sys.executable, "scripts/benchmark_streaming.py", "--mode", "hls", "--cameras", "cam_01", "cam_02", "cam_03", "cam_04", "--duration", str(duration), "--run-id", run_id])
+    run_cmd([sys.executable, "scripts/benchmark_streaming.py", "--mode", "webrtc", "--cameras", "cam_01", "cam_02", "cam_03", "cam_04", "--duration", str(duration), "--run-id", run_id])
 
     # 4. Run Event Notification Latency Test
     print("\n--- 4. Event Notification Latency Test ---")
@@ -48,10 +41,11 @@ def main():
 
     # 5. Generate summary report
     print("\n--- 5. Generating Summary Report ---")
-    run_cmd([sys.executable, "scripts/summarize_streaming_benchmark.py"])
+    run_cmd([sys.executable, "scripts/summarize_streaming_benchmark.py", "--run-id", run_id])
 
     print("\n==================================================")
     print("Benchmark completed successfully!")
+    print(f"Run ID is: {run_id}")
     print("==================================================")
 
 if __name__ == "__main__":
