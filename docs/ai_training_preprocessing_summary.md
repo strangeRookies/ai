@@ -131,9 +131,9 @@ CSV row는 `load_training_rows()`에서 읽는다.
 7. validation accuracy가 가장 높을 때 `best.pt` 저장
 8. `history.json` 저장
 
-`best.pt` 저장 기준은 `val_acc > best_acc`다. 저장 내용은 `model_state`, `model_config`, `classes`, `feature_size`, `sequence_length`, `best_val_acc`, `preprocess_summary`다.
+`best.pt` 저장 기준은 `val_acc > best_acc`다. 저장 내용은 `model_state`, `model_config`, `classes`, `feature_size`, `sequence_length`, `sequence_stride`, `feature_type`, `crop_feature_size`, `input_size`, `label_mapping`, `best_val_acc`, `preprocess_summary`다.
 
-현재 `classes`는 `["Normal", "Fall"]`로 저장된다. 반면 운영 classifier의 threshold 로직은 `Faint`와 `Normal` class가 있을 때만 `faint_threshold`를 적용한다. 이 불일치는 현재 코드 기준 확인 필요 항목이다.
+신규 `train_lstm.py` checkpoint의 `classes`는 `["Normal", "Faint"]`로 저장된다. 기존 checkpoint에 별도 `classes`가 들어 있으면 `LSTMActionClassifier`는 그 값을 유지해 호환성을 보존한다. `feature_type="crop"` 및 `crop_feature_size`는 현재 기본 학습 입력이 crop grayscale flatten 기반임을 나타낸다.
 
 ### 3.2 CUDA/cuDNN 진단 로그
 
@@ -456,4 +456,4 @@ python scripts/evaluate_prediction_logs.py \
 - `benchmark/results/lstm_yolo26n_error_augmented_compare_smoke/.../best.pt`는 기본 경로로 설정되어 있지만 현재 로컬에는 없다.
 - `history.json`, `summary.json`, `threshold_audit.csv`, `confusion_matrix.csv`, `eval_predictions.csv`, `preprocess_summary_train.json`, `preprocess_summary_val.json` 실제 결과 파일은 현재 로컬에 없다.
 - FP/FN을 자동으로 dataset CSV에 병합하는 스크립트는 현재 root `scripts/`에서 확인하지 못했다.
-- `ai/action/train_lstm.py`의 저장 class가 `["Normal", "Fall"]`인 점과 운영 threshold 로직이 `Faint`를 기대하는 점은 정합성 확인이 필요하다.
+- 기존 checkpoint가 `["Normal", "Fall"]` class metadata를 포함할 수 있으므로, 운영 적용 전 checkpoint별 class metadata 확인이 필요하다.

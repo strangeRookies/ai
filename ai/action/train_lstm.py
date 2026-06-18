@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 
-from ai.action.classifier import LSTMActionModel, crops_to_features
+from ai.action.classifier import DEFAULT_CLASSES, LSTMActionModel, crops_to_features
 from ai.action.sequence_buffer import CropSequenceBuffer
 from ai.detection.yolo_person_detector import MockPersonDetector, YoloPersonDetector
 from ai.labels.event_label_loader import load_event_label
@@ -17,6 +17,7 @@ torch = None
 nn = None
 DataLoader = None
 TensorDataset = None
+LABEL_MAPPING = {"Normal": 0, "Faint": 1}
 
 
 def print_cuda_diagnostics():
@@ -190,6 +191,25 @@ def write_preprocess_outputs(output_dir, split_name, sequence_metadata, clip_sum
         metadata_path.write_text("", encoding="utf-8")
     (output_dir / f"preprocess_clips_{split_name}.json").write_text(json.dumps(clip_summaries, indent=2), encoding="utf-8")
     (output_dir / f"preprocess_summary_{split_name}.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+
+
+def build_checkpoint_payload(model_state, model_config, args, best_acc, train_summary, val_summary):
+    input_size = int(model_config["input_size"])
+    crop_feature_size = int(args.feature_size)
+    return {
+        "model_state": model_state,
+        "model_config": model_config,
+        "classes": list(DEFAULT_CLASSES),
+        "feature_size": crop_feature_size,
+        "sequence_length": int(args.sequence_length),
+        "sequence_stride": int(args.sequence_stride),
+        "feature_type": "crop",
+        "crop_feature_size": crop_feature_size,
+        "input_size": input_size,
+        "label_mapping": dict(LABEL_MAPPING),
+        "best_val_acc": best_acc,
+        "preprocess_summary": {"train": train_summary, "val": val_summary},
+    }
 
 
 def collect_sequences(rows, args, split_name, output_dir):
@@ -395,15 +415,7 @@ def main():
         if val_acc > best_acc:
             best_acc = val_acc
             torch.save(
-                {
-                    "model_state": model.state_dict(),
-                    "model_config": model_config,
-                    "classes": ["Normal", "Fall"],
-                    "feature_size": args.feature_size,
-                    "sequence_length": args.sequence_length,
-                    "best_val_acc": best_acc,
-                    "preprocess_summary": {"train": train_summary, "val": val_summary},
-                },
+                build_checkpoint_payload(model.state_dict(), model_config, args, best_acc, train_summary, val_summary),
                 output_dir / "best.pt",
             )
     (output_dir / "history.json").write_text(json.dumps(history, indent=2), encoding="utf-8")

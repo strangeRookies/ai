@@ -84,6 +84,7 @@ def run(args):
         "camera_cooldown_seconds": getattr(args, "camera_cooldown_seconds", DEFAULT_CAMERA_COOLDOWN_SECONDS),
         "sequence_length": args.sequence_length,
         "sequence_stride": args.sequence_stride,
+        "sequence_config_note": "runtime CLI/env values override buffer class defaults; stride is sequence start interval, not FPS sampling",
         "latest_faint_probability": None,
         "latest_prediction_label": None,
         "latest_frame_keypoints": 0,
@@ -108,10 +109,26 @@ def run(args):
     }
 
     if getattr(args, "preflight_only", False):
+        print(
+            "[rtsp-inference] sequence config: "
+            f"sequence_length={args.sequence_length} "
+            f"sequence_stride={args.sequence_stride} "
+            "buffer_defaults=PerTrackKeypointSequenceBuffers(8/4),KeypointSequenceBuffer(16/8) "
+            "frame_sampling=disabled",
+            flush=True,
+        )
         return summary
 
     publisher, publisher_mode = create_event_publisher(args)
     summary["alert_delivery_result"] = publisher_mode
+    print(
+        "[rtsp-inference] sequence config: "
+        f"sequence_length={args.sequence_length} "
+        f"sequence_stride={args.sequence_stride} "
+        "buffer_defaults=PerTrackKeypointSequenceBuffers(8/4),KeypointSequenceBuffer(16/8) "
+        "frame_sampling=disabled",
+        flush=True,
+    )
 
     try:
         with VideoReader(args.rtsp_url) as reader:
@@ -218,6 +235,24 @@ def run(args):
                         writer = cv2.VideoWriter(args.overlay_output, cv2.VideoWriter_fourcc(*"mp4v"), packet.fps, (w, h))
                     writer.write(overlay)
                 metrics.add_total_frame_ms((time.perf_counter() - frame_started_at) * 1000.0)
+                every_n = max(0, int(getattr(args, "debug_every_n", 30)))
+                if every_n > 0 and summary["frames_processed"] % every_n == 0:
+                    partial = metrics.summary(
+                        summary["frames_processed"],
+                        summary["bbox_detections"],
+                        summary["keypoints_extracted"],
+                        summary["generated_sequences"],
+                        summary["lstm_predictions"],
+                    )
+                    print(
+                        "[rtsp-inference-status] "
+                        f"frames_read={reader.frame_idx} "
+                        f"frames_processed={summary['frames_processed']} "
+                        f"effective_processing_fps={partial['effective_fps']} "
+                        f"inference_latency_ms={partial['avg_lstm_inference_ms']} "
+                        "queue_drop_count=TODO(VideoReader path has no LatestFrameQueue)",
+                        flush=True,
+                    )
     finally:
         close = getattr(publisher, "close", None) if publisher is not None else None
         if close:

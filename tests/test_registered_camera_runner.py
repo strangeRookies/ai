@@ -86,7 +86,7 @@ class RegisteredCameraRunnerTest(unittest.TestCase):
         self.assertIn("scripts/serve_ai_overlay.py", command)
         self.assertEqual(command[command.index("--camera-id") + 1], "icu_01")
         self.assertEqual(command[command.index("--camera-login-id") + 1], "icu_01")
-        self.assertEqual(command[command.index("--rtsp-url") + 1], "rtsp://cctv/icu")
+        self.assertNotIn("--rtsp-url", command)
 
     def test_load_active_cameras_reads_backend_success_data_envelope(self):
         response = FakeHttpResponse(

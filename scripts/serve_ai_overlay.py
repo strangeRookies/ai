@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 import signal
 import sys
 import threading
@@ -9,37 +10,18 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from ai.action.per_track_sequence_buffer import PerTrackCropSequenceBuffers, PerTrackKeypointSequenceBuffers
-from ai.inference.rtsp_runtime import (
-    build_inference_event_payload,
-    create_detection_postprocessor,
-    ensure_mock_keypoints,
-    maybe_log_debug,
-    normalize_detections,
-    update_prediction_counts,
-    update_tracking_summary,
-    update_detections_with_postprocessor,
-)
+from ai.inference.rtsp_runtime import build_inference_event_payload, create_detection_postprocessor, ensure_mock_keypoints
+from ai.inference.rtsp_runtime import maybe_log_debug, normalize_detections, update_detections_with_postprocessor
+from ai.inference.rtsp_runtime import update_prediction_counts, update_tracking_summary
 from ai.overlay_http import OverlayState, create_overlay_server
 from ai.streams.video_reader import VideoReader
-from ai.visualization.action_overlay import (
-    annotate_boxes_with_action,
-    annotate_boxes_with_track_actions,
-    draw_metrics_panel,
-    faint_probability,
-    format_action_overlay_text,
-    initial_overlay_summary,
-    update_overlay_runtime,
-)
+from ai.visualization.action_overlay import annotate_boxes_with_action, annotate_boxes_with_track_actions
+from ai.visualization.action_overlay import draw_metrics_panel, faint_probability, format_action_overlay_text
+from ai.visualization.action_overlay import initial_overlay_summary, update_overlay_runtime
 from ai.visualization.draw import draw_overlay
-from scripts.run_rtsp_inference import (
-    DEFAULT_CAMERA_COOLDOWN_SECONDS,
-    DEFAULT_ACTION_MODEL,
-    DEFAULT_FAINT_THRESHOLD,
-    DEFAULT_MIN_CONSECUTIVE_FAINT,
-    FaintEventPostProcessor,
-    create_classifier,
-    create_detector,
-)
+from scripts.run_rtsp_inference import DEFAULT_ACTION_MODEL, DEFAULT_CAMERA_COOLDOWN_SECONDS, DEFAULT_FAINT_THRESHOLD
+from scripts.run_rtsp_inference import DEFAULT_MIN_CONSECUTIVE_FAINT, FaintEventPostProcessor, create_classifier
+from scripts.run_rtsp_inference import create_detector
 from stream.rtsp_reader import redact_url
 from tracking.display_id_mapper import DisplayIdMapper
 from ai.publishers.event_publisher import create_event_publisher
@@ -122,9 +104,6 @@ def process_frame(packet, detector, classifier, sequence_buffer, summary, args, 
         track_prediction = predictions_by_track[track_id]
         sequence = sequences_by_track[track_id]
         payload = build_inference_event_payload(args, packet, track_prediction, boxes, sequence)
-        # Enrich payload with display_id for frontend
-        if display_id_mapper is not None:
-            payload["display_id"] = display_id_mapper.display_id(int(track_id))
         summary["events_generated"] += 1
         if summary["sample_event"] is None:
             summary["sample_event"] = payload
@@ -227,7 +206,7 @@ class OverlayWorker:
 
 def main():
     parser = argparse.ArgumentParser(description="Serve a local MJPEG stream with AI bbox/keypoint/action overlays.")
-    parser.add_argument("--rtsp-url", default="rtsp://localhost:8554/cam1")
+    parser.add_argument("--rtsp-url", default=os.getenv("RTSP_URL", "rtsp://localhost:8554/cam_01"))
     parser.add_argument("--camera-id", default="cam_01")
     parser.add_argument("--camera-login-id", default=None,
                         help="DB cameras.camera_login_id 와 일치하는 식별자. 미지정 시 --camera-id 값 사용")
@@ -272,6 +251,7 @@ def main():
     parser.add_argument("--mqtt-password", help="MQTT password")
     
     args = parser.parse_args()
+    args.camera_login_id = args.camera_login_id or args.camera_id
 
     state = OverlayState()
     worker = OverlayWorker(args, state)

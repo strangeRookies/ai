@@ -1,0 +1,57 @@
+name: strange-ai
+
+services:
+  strange-ai:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: strange-ai:local
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      BACKEND_BASE_URL: ${BACKEND_BASE_URL:-http://host.docker.internal:8080}
+      MQTT_HOST: ${MQTT_HOST:-host.docker.internal}
+      MQTT_PORT: ${MQTT_PORT:-1883}
+      MQTT_TOPIC: ${MQTT_TOPIC:-safety/events}
+      MQTT_USERNAME: ${MQTT_USERNAME:-}
+      MQTT_PASSWORD: ${MQTT_PASSWORD:-}
+      MEDIAMTX_RTSP_BASE_URL: ${MEDIAMTX_RTSP_BASE_URL:-rtsp://host.docker.internal:8554}
+      YOLO_MODEL_PATH: ${YOLO_MODEL_PATH:-/models/yolo26n-pose.pt}
+      MODEL_CHECKPOINT_PATH: ${MODEL_CHECKPOINT_PATH:-/models/lstm.pt}
+      VIDEO_POOL_DIR: ${VIDEO_POOL_DIR:-/data/videos}
+      EVENT_CLIP_OUTPUT_DIR: ${EVENT_CLIP_OUTPUT_DIR:-/app/runs/clips}
+      SEQUENCE_LENGTH: ${SEQUENCE_LENGTH:-8}
+      SEQUENCE_STRIDE: ${SEQUENCE_STRIDE:-4}
+      CAMERA_POLL_INTERVAL_SECONDS: ${CAMERA_POLL_INTERVAL_SECONDS:-30}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DEVICE: ${DEVICE:-auto}
+      ACTION_DEVICE: ${ACTION_DEVICE:-auto}
+      DETECTOR_MODE: ${DETECTOR_MODE:-real}
+      TRACKING_MODE: ${TRACKING_MODE:-supervision}
+    volumes:
+      - type: bind
+        source: ./models
+        target: /models
+        read_only: true
+      - type: bind
+        source: ./sample_videos
+        target: /data/videos
+        read_only: true
+      - type: volume
+        source: strange_ai_runs
+        target: /app/runs
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command:
+      - python
+      - scripts/run_registered_cameras.py
+    restart: unless-stopped
+    # GPU example:
+    # gpus: all
+    # environment:
+    #   DEVICE: "0"
+    #   ACTION_DEVICE: "0"
+
+volumes:
+  strange_ai_runs:

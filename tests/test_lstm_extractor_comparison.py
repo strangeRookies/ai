@@ -20,6 +20,7 @@ from benchmark.compare_lstm_extractors import (
     prediction_audit_rows,
     prediction_counts,
     sequence_class_counts,
+    sequence_to_features,
     summarize_split,
     threshold_audit_metrics,
     write_final_summary,
@@ -56,6 +57,23 @@ class LstmExtractorComparisonTest(unittest.TestCase):
         self.assertAlmostEqual(float(features[1]), 0.25)
         self.assertEqual(missing, 16)
         self.assertEqual(total, 17)
+
+    def test_sequence_to_features_uses_runtime_sequence_length_and_51_features(self):
+        detections = [
+            {"keypoints": [{"x": 10.0, "y": 20.0, "confidence": 0.9} for _ in range(17)]},
+            {"keypoints": [{"x": 20.0, "y": 40.0, "confidence": 0.8} for _ in range(17)]},
+            {"keypoints": [{"x": 30.0, "y": 60.0, "confidence": 0.7} for _ in range(17)]},
+        ]
+
+        features, missing, total = sequence_to_features(
+            {"detections": detections},
+            [(100, 200, 3), (100, 200, 3), (100, 200, 3)],
+            0.3,
+        )
+
+        self.assertEqual(features.shape, (3, 51))
+        self.assertEqual(missing, 0)
+        self.assertEqual(total, 51)
 
     def test_classification_metrics_treats_faint_as_positive_class(self):
         metrics = classification_metrics([0, 1, 1, 0], [0, 1, 0, 1])

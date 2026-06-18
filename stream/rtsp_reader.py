@@ -27,6 +27,7 @@ class RtspFrameReader:
         self.reconnect_delay_seconds = reconnect_delay_seconds
         self._stop_event = threading.Event()
         self._thread = None
+        self.frames_read = 0
 
     def start(self):
         if self._thread and self._thread.is_alive():
@@ -41,6 +42,10 @@ class RtspFrameReader:
 
     def read_latest(self, timeout=1):
         return self.frames.get(timeout=timeout)
+
+    @property
+    def drop_count(self):
+        return self.frames.drop_count
 
     def _run(self):
         try:
@@ -71,6 +76,7 @@ class RtspFrameReader:
                             file=sys.stderr,
                         )
                         break
+                    self.frames_read += 1
                     self.frames.put_latest(frame)
             finally:
                 cap.release()

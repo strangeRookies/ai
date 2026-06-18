@@ -14,4 +14,4 @@ ssh welabs@58.127.241.84 "cd /home/welabs/yolo_training/strange_ai_lstm && ( noh
 echo.
 echo [3/3] Starting SSH Port Forwarding tunnel...
 echo Keep this window open to access HLS streams and AI overlays on localhost.
-ssh -N -L 8888:127.0.0.1:8888 -L 8010:127.0.0.1:8010 -L 8011:127.0.0.1:8011 -L 8012:127.0.0.1:8012 -L 8013:127.0.0.1:8013 -R 8080:127.0.0.1:8080 welabs@58.127.241.84
+ssh -N -L 8888:127.0.0.1:8888 -L 8889:127.0.0.1:8889 -L 8189:127.0.0.1:8189 -L 8010:127.0.0.1:8010 -L 8011:127.0.0.1:8011 -L 8012:127.0.0.1:8012 -L 8013:127.0.0.1:8013 -R 8080:127.0.0.1:8080 welabs@58.127.241.84

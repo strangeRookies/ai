@@ -1,4 +1,17 @@
 class KeypointSequenceBuffer:
+    """Build overlapping keypoint sequences without changing input FPS.
+
+    sequence_length is the number of frames in one emitted sequence. stride is
+    the next sequence start interval in frames, not FPS sampling. For example,
+    8/4 emits 8-frame sequences and permits the next sequence 4 frames later.
+
+    Keypoint detections are preserved as supplied by the detector. Downstream
+    LSTM feature conversion represents them as (sequence_length, 51), where
+    51 = 17 keypoints x (x, y, confidence).
+    TODO: evaluate bbox-relative normalized keypoints + confidence as a future
+    model-improvement candidate.
+    """
+
     def __init__(self, sequence_length=16, stride=8):
         self.sequence_length = sequence_length
         self.stride = stride

@@ -1,6 +1,10 @@
 from pathlib import Path
 
 
+DEFAULT_CLASSES = ("Normal", "Faint")
+KEYPOINT_FEATURE_DIM = 51
+
+
 class ActionClassifier:
     def predict(self, sequence):
         raise NotImplementedError
@@ -49,19 +53,20 @@ class LSTMActionClassifier(ActionClassifier):
         self.device = torch.device(normalize_torch_device(device, torch))
         self.faint_threshold = float(faint_threshold)
         checkpoint = torch.load(checkpoint, map_location="cpu")
-        self.classes = checkpoint.get("classes", ["Normal", "Fall"])
+        self.classes = classes_from_checkpoint(checkpoint)
         model_cfg = checkpoint["model_config"]
         wrapper = LSTMActionModel(**model_cfg)
         wrapper.model.load_state_dict(checkpoint["model_state"])
         self.model = wrapper.model.to(self.device)
         self.model.eval()
         self.input_size = int(model_cfg.get("input_size", checkpoint.get("feature_size", 32)))
-        self.feature_size = int(checkpoint.get("feature_size", 32))
+        self.crop_feature_size = int(checkpoint.get("crop_feature_size", checkpoint.get("feature_size", 32)))
+        self.feature_size = self.crop_feature_size
 
     def predict(self, sequence):
         if not sequence:
             return None
-        features = sequence_to_lstm_features(sequence, self.input_size, self.feature_size)
+        features = sequence_to_lstm_features(sequence, self.input_size, self.crop_feature_size)
         x = self.torch.from_numpy(features).unsqueeze(0).to(self.device)
         with self.torch.no_grad():
             logits = self.model(x)
@@ -105,8 +110,18 @@ def crops_to_features(crops, feature_size=32):
     return np.stack(features, axis=0).astype(np.float32)
 
 
-def sequence_to_lstm_features(sequence, input_size=51, crop_feature_size=32):
-    if "detections" in sequence and int(input_size) == 51:
+def classes_from_checkpoint(checkpoint):
+    return list(checkpoint.get("classes", DEFAULT_CLASSES))
+
+
+def sequence_to_lstm_features(sequence, input_size=KEYPOINT_FEATURE_DIM, crop_feature_size=32):
+    """Select features that match the loaded checkpoint input size.
+
+    `input_size=51` means keypoint features: 17 keypoints times x, y, and confidence.
+    If a non-keypoint checkpoint receives crops, crop features are used instead.
+    Crop feature dim is `crop_feature_size * crop_feature_size`.
+    """
+    if "detections" in sequence and int(input_size) == KEYPOINT_FEATURE_DIM:
         return keypoint_sequence_to_features(sequence)
     if "crops" in sequence:
         return crops_to_features(sequence["crops"], crop_feature_size)

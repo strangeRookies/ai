@@ -55,6 +55,12 @@ class RtspInferenceConfigTest(unittest.TestCase):
 
         self.assertEqual(args.tracking_mode, "supervision")
 
+    def test_parse_args_accepts_camera_login_id_alias(self):
+        args = parse_args(["--camera-id", "legacy_cam", "--camera-login-id", "lobby_01"])
+
+        self.assertEqual(args.camera_id, "legacy_cam")
+        self.assertEqual(args.camera_login_id, "lobby_01")
+
     def test_preflight_reports_model_paths_and_post_processing_without_rtsp_or_mqtt(self):
         args = fake_run_args()
         args.preflight_only = True
@@ -91,6 +97,7 @@ def fake_run_args():
     return Namespace(
         rtsp_url="fake://cam1",
         camera_id="cam_01",
+        camera_login_id=None,
         max_frames=4,
         detector_mode="mock",
         dry_run=True,

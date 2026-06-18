@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from .prompts import IM_NOT_AI_SYSTEM_PROMPT
+from .prompts import TISTORY_SEO_SYSTEM_PROMPT
 
 
 class LLMClient:
@@ -45,7 +45,7 @@ class LLMClient:
     def is_enabled(self) -> bool:
         return self.client is not None
 
-    def humanize(self, text: str) -> str:
+    def generate_full_post(self, text: str) -> str:
         if not self.is_enabled():
             return text
 
@@ -55,24 +55,37 @@ class LLMClient:
 
         try:
             if self.provider == "gemini":
-                # For google-genai SDK, use gemini-2.5-flash (default recommendation)
-                response = self.client.models.generate_content(
-                    model="gemini-2.5-flash",
-                    contents=text_strip,
-                    config=dict(
-                        system_instruction=IM_NOT_AI_SYSTEM_PROMPT,
-                        temperature=0.3,
-                    ),
-                )
-                return response.text.strip()
+                # For google-genai SDK, use gemini-2.5-flash
+                # Added retry logic for 5 RPM free tier limit
+                import time
+                from google.genai.errors import APIError
+                
+                max_retries = 3
+                for attempt in range(max_retries):
+                    try:
+                        response = self.client.models.generate_content(
+                            model="gemini-2.5-flash",
+                            contents=text_strip,
+                            config=dict(
+                                system_instruction=TISTORY_SEO_SYSTEM_PROMPT,
+                                temperature=0.7,
+                            ),
+                        )
+                        return response.text.strip()
+                    except APIError as e:
+                        if e.code == 429 and attempt < max_retries - 1:
+                            print(f"[LLMClient] Rate limit hit (429). Sleeping 15s before retry {attempt+1}/{max_retries}...", flush=True)
+                            time.sleep(15)
+                        else:
+                            raise e
             elif self.provider == "openai":
                 response = self.client.chat.completions.create(
                     model="gpt-4o-mini",
                     messages=[
-                        {"role": "system", "content": IM_NOT_AI_SYSTEM_PROMPT},
+                        {"role": "system", "content": TISTORY_SEO_SYSTEM_PROMPT},
                         {"role": "user", "content": text_strip},
                     ],
-                    temperature=0.3,
+                    temperature=0.7,
                 )
                 return response.choices[0].message.content.strip()
         except Exception as e:
