@@ -1,21 +1,0 @@
-<!doctype html>
-<html lang="ko">
-<head>
-  <meta charset="utf-8">
-  <title>Naver Blog Preview</title>
-</head>
-<body>
-<p>모든 모듈은 250LOC 를 지켜 복잡도를 줄였다</p>
-<p>&nbsp;</p>
-<p>hls vs webrtc해야함. gpt 최신 명령어 ㄱㄱ (해결완료)</p>
-<p>&nbsp;</p>
-<p>다음으로는 lstm 데이터 어떻게 할건지 8,16,30 이거 프레임 나눠서 하는거 분석<br>추가 필터들 적용 ( 내용은 이따 )</p>
-<p class="se-text-paragraph se-text-paragraph-align-left" style="line-height: 1.8;"><span class="se-ff-nanumgothic se-fs15 __se-node" style="color: rgb(0, 0, 0);">• 오탐 및 미탐 내용들을 fall back 해서 추가학습 데이터에 넣는 기능 재확이인<strong style="font-weight: bold;"></strong>*</span></p>
-<p>&nbsp;</p>
-<p>영상송출 : ai 에서 바로 프론트로 쏴줌 db를 읽고 카메라 갯수와 동기화되어 갯수에 맞게 영상 송출(rtsp 채널)<br>두번째 ai 모듈에서 rtsp 채널을 보고 영상 분석 후 mqtt -&gt; 백엔드에 보내줌 -&gt; (WEBSOCKET) db와 프론트(STOMP)에 보내줌<br>추후 스냅샷은 ai 모듈에서 S3로 300프레임영상 보내주고 mqtt로는 url를 담은 메시지를 mqtt -&gt; db, front</p>
-<p>&nbsp;</p>
-<p>기업용 카메라 등록 엑셀 템플릿을 기업용 코드에 넣어야함. 그래야 인식함.<br>테스트모드는 통합으로 묶어서 개인+ 기업용 묶어서 영상분석 및 데이터 흐름 확인용으로 .ㄷㄱ</p>
-<p>&nbsp;</p>
-<p>로그인: 정보들 받고 sms 인증번호 ( 아직 개발안됨-기존엔 postgre 썼는데 앞으로는 redis에서 일시적인 이벤트알림등등 연속시도 중복방지 기능 추가계획)<br>회원가입시 주소 입력시 주변 가까운 관할 119 자동 매칭되도록( 같은 동으로 행정구역을 포함시켜서 매칭 시키도록 )<br>개발자 모드면 localstorage-- xss 보완했는데 기존에는 프론트에서 개발자모드를 누르면 보였는데 httponly 백엔드에서 관리할 수 있게 바꿈 xss, sql injection 방어. 최소한의 보안은 완료, CORS는 프론트 도메인이 나오면 변경 예정<br>REDIS를 쓴 이유 : TTL(만료시간동안만 유효하게) == elastic cache<br>앞으로는 ai 모델</p>
-</body>
-</html>
