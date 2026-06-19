@@ -10,6 +10,7 @@ from benchmark.compare_lstm_extractors import (
     CpuFallbackDisabledError,
     choose_best_model,
     classification_metrics,
+    collect_split_sequences,
     dataset_class_counts,
     keypoints_to_feature,
     limit_rows_by_split_and_class,
@@ -39,6 +40,16 @@ class FakeCuda:
 class FakeTorch:
     def __init__(self, cuda_available):
         self.cuda = FakeCuda(cuda_available)
+
+
+class CacheArgs:
+    def __init__(self, cache_dir, sequence_length=4, sequence_stride=2):
+        self.detector_mode = "cache"
+        self.keypoint_cache_dir = cache_dir
+        self.sequence_length = sequence_length
+        self.sequence_stride = sequence_stride
+        self.keypoint_conf_threshold = 0.3
+        self.max_frames = 0
 
 
 class LstmExtractorComparisonTest(unittest.TestCase):
@@ -74,6 +85,33 @@ class LstmExtractorComparisonTest(unittest.TestCase):
         self.assertEqual(features.shape, (3, 51))
         self.assertEqual(missing, 0)
         self.assertEqual(total, 51)
+
+    def test_collect_split_sequences_reuses_npz_keypoint_cache_without_detector(self):
+        with TemporaryDirectory() as tmp:
+            cache_path = Path(tmp) / "indoor_background" / "clip_a.npz"
+            cache_path.parent.mkdir()
+            keypoints = np.ones((6, 17, 3), dtype=np.float32)
+            keypoints[:, :, 0] = 0.25
+            keypoints[:, :, 1] = 0.5
+            keypoints[:, :, 2] = 0.9
+            np.savez_compressed(cache_path, data=keypoints)
+            rows = [{"split": "train", "label": "1", "clip_id": "clip_a", "domain": "indoor_background"}]
+
+            x_rows, y_rows, clip_summaries, sequence_rows, totals = collect_split_sequences(
+                rows,
+                "train",
+                detector=None,
+                args=CacheArgs(tmp),
+            )
+
+            self.assertEqual(len(x_rows), 2)
+            self.assertEqual(y_rows, [1, 1])
+            self.assertEqual(x_rows[0].shape, (4, 51))
+            self.assertEqual(clip_summaries[0]["frames_processed"], 6)
+            self.assertEqual(clip_summaries[0]["generated_sequences"], 2)
+            self.assertEqual(sequence_rows[0]["frame_start"], 0)
+            self.assertEqual(sequence_rows[1]["frame_end"], 5)
+            self.assertEqual(totals["keypoints_extracted"], 6)
 
     def test_classification_metrics_treats_faint_as_positive_class(self):
         metrics = classification_metrics([0, 1, 1, 0], [0, 1, 0, 1])

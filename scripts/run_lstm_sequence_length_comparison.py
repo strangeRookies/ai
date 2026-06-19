@@ -16,7 +16,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run YOLO26n-pose LSTM sequence-length comparison.")
     parser.add_argument("--metadata-csv", default="../ai_fall_experiments/data/metadata/metadata.csv")
     parser.add_argument("--output-dir", default="benchmark/results/lstm_sequence_length_8_16_30")
-    parser.add_argument("--detector-mode", choices=["real", "mock"], default="real")
+    parser.add_argument("--detector-mode", choices=["real", "mock", "cache"], default="real")
+    parser.add_argument("--keypoint-cache-dir", default="../ai_fall_experiments/data/keypoints/yolo26n-pose")
     parser.add_argument("--device", default="auto")
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--sequence-stride", type=int, default=4)
@@ -49,6 +50,8 @@ def build_command(args: argparse.Namespace, sequence_length: int, run_dir: Path)
         "YOLO26n-pose:yolo26n-pose.pt",
         "--detector-mode",
         args.detector_mode,
+        "--keypoint-cache-dir",
+        args.keypoint_cache_dir,
         "--device",
         args.device,
         "--imgsz",
