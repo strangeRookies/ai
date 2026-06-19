@@ -48,9 +48,27 @@ Windows PowerShell에서 실행합니다.
 ```powershell
 cd "C:\Users\user\Documents\최종 쉴더스"
 
+# 1. 안전하게 백그라운드로 도커 서비스 빌드 및 실행
 docker compose -f strange_infra/docker-compose.yml up -d --build
 docker compose -f strange_infra/docker-compose.yml ps
 ```
+
+> [!CAUTION]
+> **DB 데이터 영구 삭제 방지 (중요!)**
+> * 단순히 서비스를 껐다 켜거나 재부팅하고 싶을 때는 반드시 **`docker compose -f strange_infra/docker-compose.yml down`** (옵션 없음)을 사용하세요.
+> * **`docker compose down -v`** 명령어의 **`-v` (Volume 삭제) 옵션**은 컨테이너 데이터 저장소(named volume인 `postgres-data`)를 영구적으로 완전히 삭제합니다. 이로 인해 가입한 계정 정보와 Seeding된 데이터가 전부 지워지므로, 초기화 목적이 아닌 경우 **절대 `-v`를 사용하지 마십시오.**
+> * **안전한 재시작 방법**:
+>   ```powershell
+>   # 데이터는 그대로 유지한 채 안전하게 껐다 켜기
+>   docker compose -f strange_infra/docker-compose.yml down
+>   docker compose -f strange_infra/docker-compose.yml up -d
+>   ```
+
+> [!NOTE]
+> **DB 환경 프로필 주의 사항**
+> * **Docker Compose 환경**: `strange_infra/docker-compose.yml`을 통해 백엔드를 실행하면, Docker 내부의 독립적인 **로컬 PostgreSQL 컨테이너**(`postgres:5432/strange_safety`)에 데이터를 저장합니다.
+> * **로컬 IDE/Gradle 환경**: `strange_back/.env`를 주입받아 호스트 OS에서 백엔드를 직접 실행하면, 터널링(`localhost:15432`)을 통해 **외부 AWS RDS DB**를 바라봅니다.
+> * 서로 다른 DB를 보고 있기 때문에, 로컬 Gradle을 쓸 때 가입한 계정은 Docker Compose 환경에서 로그인할 수 없습니다. 본인이 현재 어느 DB 환경을 바라보며 연동 테스트를 하고 있는지 명확히 구분하세요.
 
 이 compose가 올리는 주요 서비스:
 
@@ -430,6 +448,18 @@ ss -lntup | grep -E "8554|8888|8889|8189"
 docker logs strange-backend
 docker exec -it strange-mosquitto mosquitto_sub -h localhost -p 1883 -t safety/events
 ```
+
+### 6. Docker로 켰을 때 로그인 실패 / 계정이 없는 경우
+
+원인:
+
+- **환경 간 DB 불일치**: 로컬 IDE/Gradle 환경에서 외부 AWS RDS DB(`localhost:15432`)에 회원가입을 한 계정인데, Docker Compose 환경의 로컬 PostgreSQL 컨테이너(`postgres:5432`)로 로그인하려는 경우입니다.
+- **DB 볼륨 초기화**: 이전에 `docker compose down -v`를 실행하여 Docker 로컬 DB 볼륨(`postgres-data`)이 완전 삭제된 경우입니다.
+
+해결:
+
+* **해결 A (로컬 가입)**: Docker Compose가 기동된 상태에서 프론트엔드(`http://localhost:5173`)의 **회원가입(Sign Up)** 페이지로 가 신규 가입을 마칩니다. 6자리 인증번호는 Windows 터미널에서 `docker logs strange-backend --tail 30`을 쳐서 로그에 출력된 `[MOCK-SMS]` 번호를 기입해 통과합니다.
+* **해결 B (AWS DB 직접 연동)**: Docker 환경에서도 외부 AWS DB를 바라보아야 할 경우, `strange_infra/docker-compose.yml` 내부의 `backend.environment`에 주입되는 `DB_URL` 값을 로컬 호스트 터널링 주소인 `jdbc:postgresql://host.docker.internal:15432/postgres?sslmode=require`로 주입하고, DB ID/PW도 실제 AWS RDS 자격 증명에 맞추어 구성해야 합니다. (단, 로컬에 15432 터널이 유지되고 있어야 함)
 
 ---
 
