@@ -105,7 +105,7 @@ def build_ffmpeg_cmd(video_path: Path, rtsp_url: str, loop: bool, ffmpeg_mode: s
             "-tune", "zerolatency"
         ])
         
-    cmd.extend(["-f", "rtsp", rtsp_url])
+    cmd.extend(["-f", "rtsp", "-rtsp_transport", "tcp", rtsp_url])
     return cmd
 
 
