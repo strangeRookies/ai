@@ -24,6 +24,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--input", required=True, type=Path, help="Source Markdown file.")
     parser.add_argument("--output", required=True, type=Path, help="Blog draft Markdown path.")
     
+    humanize_group = parser.add_mutually_exclusive_group()
+    humanize_group.add_argument(
+        "--humanize",
+        action="store_true",
+        default=True,
+        help="Apply im-not-ai humanization rules (default).",
+    )
+    humanize_group.add_argument(
+        "--no-humanize",
+        action="store_false",
+        dest="humanize",
+        help="Disable humanization entirely.",
+    )
+    
     llm_group = parser.add_mutually_exclusive_group()
     llm_group.add_argument(
         "--use-llm",
@@ -67,7 +81,12 @@ def main() -> int:
     else:
         print("[convert_to_blog] Running in regex-based fallback mode (no LLM).", flush=True)
 
-    draft = write_blog_draft(args.input, args.output, llm_client=llm_client)
+    if args.humanize:
+        print("[convert_to_blog] Humanize mode enabled. (im-not-ai rules or LLM will be applied)", flush=True)
+    else:
+        print("[convert_to_blog] Humanize mode disabled.", flush=True)
+
+    draft = write_blog_draft(args.input, args.output, llm_client=llm_client, humanize=args.humanize)
     print(f"wrote: {args.output}")
     print(f"title: {draft.title}")
     print(f"sections: {len(draft.sections)}")

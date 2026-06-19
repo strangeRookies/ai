@@ -1,2 +1,10 @@
 __pycache__/
 *.py[cod]
+
+# Benchmark results
+benchmark/results/
+
+# Environment files
+.env
+.env.*
+*.log

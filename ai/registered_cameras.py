@@ -1,12 +1,21 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Literal, TypedDict, assert_never
+
+from ai.camera_input_safety import (
+    assigned_video_candidates,
+    is_path_under,
+    is_safe_camera_login_id,
+    resolved_video_pool,
+)
+from ai.ffmpeg_command import build_ffmpeg_command
 
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[1]
@@ -74,10 +83,22 @@ class RunnerConfig:
     rtsp_probe_enabled: bool
     refresh_interval_seconds: float
     skip_ffmpeg_spawn: bool = False
+    overlay_public_base_url: str | None = None
+    overlay_report_enabled: bool = False
+
+
+def normalize_camera_login_id(login_id: str) -> str:
+    # Normalize cam1 -> cam_01, cam_1 -> cam_01, cam01 -> cam_01
+    match = re.match(r'^cam_?(\d+)$', login_id, re.IGNORECASE)
+    if match:
+        num = int(match.group(1))
+        return f"cam_{num:02d}"
+    return login_id
 
 
 def camera_rtsp_url(rtsp_base_url: str, camera_login_id: str) -> str:
-    return f"{rtsp_base_url.rstrip('/')}/{camera_login_id}"
+    normalized_id = normalize_camera_login_id(camera_login_id)
+    return f"{rtsp_base_url.rstrip('/')}/{normalized_id}"
 
 
 def parse_camera(raw: RawCamera) -> RegisteredCamera | None:
@@ -88,6 +109,17 @@ def parse_camera(raw: RawCamera) -> RegisteredCamera | None:
 
     login_id = str(raw.get("cameraLoginId") or "").strip()
     if not login_id:
+        return None
+    
+    # Normalize path to prevent conflicts and ensure cam_01 format
+    login_id = normalize_camera_login_id(login_id)
+    
+    if not is_safe_camera_login_id(login_id):
+        print(
+            f"[registered-cameras][warning] unsafe cameraLoginId={login_id!r}; skipping",
+            file=sys.stderr,
+            flush=True,
+        )
         return None
 
     raw_source_type = raw.get("sourceType") or "REAL_RTSP"
@@ -156,12 +188,14 @@ def first_video_from_pool(video_pool: Path) -> Path | None:
 
 def resolve_simulated_video(camera: RegisteredCamera, video_pool: Path) -> Path:
     if camera.assigned_video_path:
-        assigned = Path(camera.assigned_video_path)
-        if assigned.exists():
-            return assigned
-        repo_relative = REPO_ROOT / assigned
-        if repo_relative.exists():
-            return repo_relative
+        pool_root = resolved_video_pool(video_pool, REPO_ROOT)
+        for candidate in assigned_video_candidates(camera.assigned_video_path, video_pool, REPO_ROOT):
+            if candidate.exists() and candidate.is_file():
+                if is_path_under(candidate, pool_root):
+                    return candidate
+                raise RuntimeError(
+                    f"assignedVideoPath must stay under video_pool for camera_login_id={camera.camera_login_id}"
+                )
 
     fallback = first_video_from_pool(video_pool)
     if fallback is not None:
@@ -170,27 +204,6 @@ def resolve_simulated_video(camera: RegisteredCamera, video_pool: Path) -> Path:
     raise RuntimeError(
         f"no assignedVideoPath or fallback mp4 found for camera_login_id={camera.camera_login_id}"
     )
-
-
-def build_ffmpeg_command(video_path: Path, rtsp_url: str) -> list[str]:
-    return [
-        "ffmpeg",
-        "-re",
-        "-stream_loop",
-        "-1",
-        "-i",
-        str(video_path),
-        "-an",
-        "-c:v",
-        "libx264",
-        "-preset",
-        "ultrafast",
-        "-tune",
-        "zerolatency",
-        "-f",
-        "rtsp",
-        rtsp_url,
-    ]
 
 
 def build_overlay_command(
@@ -202,8 +215,6 @@ def build_overlay_command(
     command = [
         config.python_executable,
         "scripts/serve_ai_overlay.py",
-        "--rtsp-url",
-        rtsp_url,
         "--camera-id",
         camera.camera_login_id,
         "--camera-login-id",
@@ -237,7 +248,6 @@ def build_overlay_command(
         ("--mqtt-topic", config.mqtt_topic),
         ("--mqtt-client-id", f"{config.mqtt_client_id_prefix}-{camera.camera_login_id}"),
         ("--mqtt-username", config.mqtt_username),
-        ("--mqtt-password", config.mqtt_password),
         ("--action-model", config.action_model),
         ("--action-threshold", str(config.action_threshold) if config.action_threshold is not None else None),
     ]

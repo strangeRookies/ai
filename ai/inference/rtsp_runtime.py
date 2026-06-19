@@ -5,6 +5,7 @@ import time as _time
 from pathlib import Path
 
 from ai.action.classifier import LSTMActionClassifier, MockActionClassifier
+from ai.action.cheap_filter import CheapFilterConfig
 from ai.action.faint_post_processing import (
     DEFAULT_ACTION_MODEL,
     DEFAULT_CAMERA_COOLDOWN_SECONDS,
@@ -54,6 +55,18 @@ def create_classifier(action_model=DEFAULT_ACTION_MODEL, device="auto", action_t
     if action_model:
         return LSTMActionClassifier(action_model, device=device, faint_threshold=action_threshold), "lstm_checkpoint"
     return MockActionClassifier(default_label="Faint", score=0.80), "mock_lstm"
+
+
+def cheap_filter_config_from_args(args):
+    return CheapFilterConfig(
+        enabled=bool(getattr(args, "cheap_filter_enabled", True)),
+        slope_ratio_threshold=float(getattr(args, "cheap_filter_slope_ratio", 1.3)),
+        min_avg_keypoint_confidence=float(getattr(args, "cheap_filter_min_keypoint_conf", 0.25)),
+        min_bbox_area_ratio=float(getattr(args, "cheap_filter_min_bbox_area_ratio", 0.005)),
+        min_center_drop_ratio=float(getattr(args, "cheap_filter_min_center_drop_ratio", 0.03)),
+        min_aspect_ratio_growth=float(getattr(args, "cheap_filter_min_aspect_ratio_growth", 0.20)),
+        min_risk_score=float(getattr(args, "cheap_filter_min_risk_score", 1.0)),
+    )
 
 
 def env_flag(name, default=False):
@@ -136,57 +149,37 @@ def maybe_log_debug(packet, boxes, summary, prediction, args, prefix="[rtsp-infe
 
 
 def build_inference_event_payload(args, packet, prediction, boxes, sequence):
-    """
-    MQTT safety/events 토픽 페이로드 빌더.
-    백엔드 SafetyEventDto 스펙과 정확히 일치하도록 필드명을 맞춘다.
-
-    백엔드 SafetyEventDto 매핑:
-        type / event_type  ← prediction["label"]
-        camera_id          ← args.camera_id
-        timestamp          ← ISO-8601 UTC 문자열 (백엔드 Instant 파싱 호환)
-        severity           ← args.event_severity
-        confidence / score ← prediction["score"]
-        bbox               ← sequence bbox (List<Number>)
-        track_id           ← sequence track_id (optional)
-    """
     bbox = sequence.get("bbox") if sequence else None
     track_id = sequence.get("track_id") if sequence else None
     faint_prob = faint_probability(prediction)
 
     # ISO-8601 UTC 문자열 (백엔드 SafetyEventDto.rawTimestamp → resolvedTimestamp() 호환)
     detected_at = _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime())
+    camera_login_id = getattr(args, "camera_login_id", None) or args.camera_id
+    score = float(prediction["score"])
+    rule_score = float(faint_prob) if faint_prob is not None else score
+    model_name = Path(str(getattr(args, "yolo_model", "yolo26n-pose"))).name
+    if model_name.endswith(".pt"):
+        model_name = model_name[:-3]
 
     payload = {
-        # 백엔드 @JsonAlias({"type", "event_type"}) 에 맞게 두 키 모두 포함
-        "event_type": prediction["label"],
-        "type": prediction["label"],
-        # 백엔드 @JsonProperty("camera_id")
-        "camera_id": args.camera_id,
-        # camera_login_id: DB cameras.camera_login_id 와 일치해야 백엔드가 Camera를 조회할 수 있음
-        # --camera-login-id 인수가 없으면 camera_id를 그대로 사용
-        "camera_login_id": getattr(args, "camera_login_id", args.camera_id),
-        # ISO-8601 UTC 문자열 (백엔드 rawTimestamp)
+        "type": "fall_detected",
+        "camera_id": camera_login_id,
+        "camera_login_id": camera_login_id,
         "timestamp": detected_at,
-        "detected_at": detected_at,
-        # 백엔드 severity
         "severity": getattr(args, "event_severity", "HIGH"),
-        # 백엔드 confidence (@JsonAlias({"confidence", "score"}))
-        "confidence": float(prediction["score"]),
-        "faint_prob": faint_prob,
-        "score": float(prediction["score"]),
-        # 백엔드 bbox: List<Number>
-        "bbox": bbox,
-        # 메시지 유형 식별자
-        "message_type": "AI_EVENT",
+        "message": "쓰러짐 의심 상황이 감지되었습니다.",
+        "source": "edge-ai",
+        "metadata": {
+            "bbox": bbox,
+            "confidence": score,
+            "rule_score": rule_score,
+            "pose_state": "LYING",
+            "model_name": model_name,
+        },
     }
     if track_id is not None:
         payload["track_id"] = track_id
-    clip_path = sequence.get("clip_path") if sequence else None
-    clip_url = sequence.get("clip_url") if sequence else None
-    if clip_path:
-        payload["clip_path"] = clip_path
-    if clip_url:
-        payload["clip_url"] = clip_url
     return payload
 
 

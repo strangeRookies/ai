@@ -17,22 +17,22 @@ DEFAULT_CAMERAS = {
     "camera-1": {
         "name": "CCTV-01",
         "location": "1F Room 1",
-        "rtsp_url": "rtsp://localhost:8554/cam1",
+        "rtsp_url": "rtsp://localhost:8554/cam_01",
     },
     "camera-2": {
         "name": "CCTV-02",
         "location": "1F Corridor A",
-        "rtsp_url": "rtsp://localhost:8554/cam2",
+        "rtsp_url": "rtsp://localhost:8554/cam_02",
     },
     "camera-3": {
         "name": "CCTV-03",
         "location": "Remote Webcam 1",
-        "rtsp_url": "rtsp://192.168.0.10:8554/cam3",
+        "rtsp_url": "rtsp://192.168.0.10:8554/cam_03",
     },
     "camera-4": {
         "name": "CCTV-04",
         "location": "Remote Webcam 2",
-        "rtsp_url": "rtsp://192.168.0.11:8554/cam4",
+        "rtsp_url": "rtsp://192.168.0.11:8554/cam_04",
     },
 }
 

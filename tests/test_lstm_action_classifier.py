@@ -4,13 +4,16 @@ from pathlib import Path
 import numpy as np
 
 from ai.action.classifier import (
+    DEFAULT_CLASSES,
     LSTMActionClassifier,
+    classes_from_checkpoint,
     crops_to_features,
     keypoint_sequence_to_features,
     normalize_torch_device,
+    sequence_to_lstm_features,
     threshold_prediction,
 )
-from ai.action.train_lstm import load_training_rows, summarize_metadata, target_ranges_for_row
+from ai.action.train_lstm import build_checkpoint_payload, load_training_rows, summarize_metadata, target_ranges_for_row
 
 try:
     import cv2  # noqa: F401
@@ -53,6 +56,46 @@ class LSTMActionClassifierTest(unittest.TestCase):
         self.assertAlmostEqual(float(features[0][0]), 0.25)
         self.assertAlmostEqual(float(features[0][1]), 0.25)
         self.assertAlmostEqual(float(features[0][2]), 0.9)
+
+    @unittest.skipIf(not CV2_AVAILABLE, "cv2 is required for crop feature tests")
+    def test_sequence_to_lstm_features_uses_crop_size_for_crop_checkpoint(self):
+        crops = [
+            np.zeros((20, 30, 3), dtype=np.uint8),
+            np.full((20, 30, 3), 255, dtype=np.uint8),
+        ]
+
+        features = sequence_to_lstm_features({"crops": crops}, input_size=64, crop_feature_size=8)
+
+        self.assertEqual(features.shape, (2, 64))
+
+    def test_classes_fallback_uses_normal_faint_and_preserves_checkpoint_classes(self):
+        self.assertEqual(DEFAULT_CLASSES, ("Normal", "Faint"))
+        self.assertEqual(classes_from_checkpoint({}), ["Normal", "Faint"])
+        self.assertEqual(classes_from_checkpoint({"classes": ["Normal", "Fall"]}), ["Normal", "Fall"])
+
+    def test_train_lstm_checkpoint_payload_records_crop_metadata(self):
+        class Args:
+            feature_size = 32
+            sequence_length = 16
+            sequence_stride = 8
+
+        model_config = {
+            "input_size": 1024,
+            "hidden_size": 128,
+            "num_layers": 1,
+            "num_classes": 2,
+            "dropout": 0.0,
+        }
+
+        payload = build_checkpoint_payload({"weight": "state"}, model_config, Args(), 0.75, {"train": 1}, {"val": 1})
+
+        self.assertEqual(payload["classes"], ["Normal", "Faint"])
+        self.assertEqual(payload["sequence_stride"], 8)
+        self.assertEqual(payload["feature_type"], "crop")
+        self.assertEqual(payload["crop_feature_size"], 32)
+        self.assertEqual(payload["feature_size"], 32)
+        self.assertEqual(payload["input_size"], 1024)
+        self.assertEqual(payload["label_mapping"], {"Normal": 0, "Faint": 1})
 
     def test_numeric_torch_device_is_normalized_for_lstm_classifier(self):
         class FakeCuda:

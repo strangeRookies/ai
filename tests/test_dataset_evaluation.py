@@ -6,11 +6,17 @@ from pathlib import Path
 
 import numpy as np
 
-from scripts.run_dataset_evaluation import aggregate, process_row, read_dataset_rows
+from scripts.run_dataset_evaluation import aggregate, parse_args, process_row, read_dataset_rows
 from scripts.run_rtsp_inference import create_detector
 
 
 class DatasetEvaluationTest(unittest.TestCase):
+    def test_parse_args_defaults_to_sequence_8_stride_4(self):
+        args = parse_args([])
+
+        self.assertEqual(args.sequence_length, 8)
+        self.assertEqual(args.sequence_stride, 4)
+
     def test_reads_dataset_rows_and_resolves_video_path(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

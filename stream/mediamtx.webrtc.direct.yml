@@ -1,0 +1,13 @@
+logLevel: info
+
+rtspAddress: :8554
+rtmp: no
+hls: yes
+webrtc: yes
+webrtcAddress: :8889
+webrtcICETCPMuxAddress: :8189
+srt: no
+
+paths:
+  all_others:
+    source: publisher

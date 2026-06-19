@@ -179,6 +179,14 @@ def dataset_class_counts(rows):
 
 
 def keypoints_to_feature(detection, frame_shape, keypoint_conf_threshold):
+    """Return one image-normalized 51-dim keypoint feature vector.
+
+    LSTM batches use (Batch, sequence_length, feature_dim), where feature_dim
+    is 51 = 17 keypoints x (x, y, confidence). x/y are normalized by image
+    width/height here, not pixel or bbox-relative coordinates.
+    TODO: evaluate bbox-relative normalized keypoints + confidence.
+    """
+
     height, width = frame_shape[:2]
     keypoints = detection.get("keypoints") or []
     features = []
@@ -1034,6 +1042,13 @@ def write_markdown_report(path, final, rows):
 def main():
     args = parse_args()
     output_dir = Path(args.output_dir)
+    print(
+        "[lstm-extractor-compare] sequence config: "
+        f"sequence_length={args.sequence_length} "
+        f"sequence_stride={args.sequence_stride} "
+        "defaults=16/8 frame_sampling=disabled keypoint_feature=(sequence_length,51)",
+        flush=True,
+    )
     specs = parse_model_specs(args.models)
     rows = read_dataset_rows(args.metadata_csv)
     rows = prefilter_normal_rows(rows, args, specs, output_dir)

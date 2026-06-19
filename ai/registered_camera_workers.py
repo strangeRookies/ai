@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import signal
 import subprocess
 import sys
@@ -9,6 +10,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Literal, NoReturn
 
+from ai.command_logging import safe_command_text
+from ai.overlay_ports import next_overlay_port
+from ai.overlay_registry_client import report_overlay_status, report_overlay_stopped
 from ai.publishers.camera_status_publisher import CameraStatusPublisher
 from ai.publishers.event_publisher import create_event_publisher
 from ai.registered_cameras import (
@@ -31,15 +35,18 @@ class CameraWorker:
     processes: list[subprocess.Popen[str]]
     overlay_port: int
     source_signature: str
+    camera_login_id: str | None = None
+    rtsp_url: str | None = None
 
 
-def spawn_process(command: list[str], log_path: Path) -> subprocess.Popen[str]:
+def spawn_process(command: list[str], log_path: Path, env: dict[str, str] | None = None) -> subprocess.Popen[str]:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_file = log_path.open("a", encoding="utf-8")
     try:
         return subprocess.Popen(
             command,
             cwd=REPO_ROOT,
+            env=env,
             stdout=log_file,
             stderr=subprocess.STDOUT,
             text=True,
@@ -60,14 +67,6 @@ def stop_processes(processes: list[subprocess.Popen[str]]) -> None:
 
 def worker_has_exited(worker: CameraWorker) -> bool:
     return any(process.poll() is not None for process in worker.processes)
-
-
-def next_overlay_port(workers: dict[str, CameraWorker], config: RunnerConfig) -> int:
-    used_ports = {worker.overlay_port for worker in workers.values()}
-    port = config.overlay_base_port
-    while port in used_ports:
-        port += 1
-    return port
 
 
 def camera_source_signature(camera: RegisteredCamera, config: RunnerConfig) -> str:
@@ -150,13 +149,19 @@ def start_camera_worker(camera: RegisteredCamera, config: RunnerConfig, port: in
             )
             return None
     overlay_command = build_overlay_command(camera, rtsp_url, port, config)
-    print(f"[registered-cameras] {camera.camera_login_id} input={rtsp_url}", flush=True)
+    print(f"[registered-cameras] {camera.camera_login_id} input={redact_url(rtsp_url)}", flush=True)
     if ffmpeg_command is not None:
-        print(f"[registered-cameras] ffmpeg: {' '.join(ffmpeg_command)}", flush=True)
-    print(f"[registered-cameras] overlay: {' '.join(overlay_command)}", flush=True)
+        print(f"[registered-cameras] ffmpeg: {safe_command_text(ffmpeg_command)}", flush=True)
+    print(f"[registered-cameras] overlay: {safe_command_text(overlay_command)}", flush=True)
 
     if config.dry_run:
-        return CameraWorker(processes=[], overlay_port=port, source_signature=camera_source_signature(camera, config))
+        return CameraWorker(
+            processes=[],
+            overlay_port=port,
+            source_signature=camera_source_signature(camera, config),
+            camera_login_id=camera.camera_login_id,
+            rtsp_url=rtsp_url,
+        )
     if ffmpeg_command is not None:
         processes.append(
             spawn_process(
@@ -165,13 +170,25 @@ def start_camera_worker(camera: RegisteredCamera, config: RunnerConfig, port: in
             )
         )
         time.sleep(1)
+    overlay_env = os.environ.copy()
+    overlay_env["RTSP_URL"] = rtsp_url
+    if config.mqtt_password:
+        overlay_env["MQTT_PASSWORD"] = config.mqtt_password
     processes.append(
         spawn_process(
             overlay_command,
             REPO_ROOT / "runs" / "registered_cameras" / f"{camera.camera_login_id}-overlay.log",
+            env=overlay_env,
         )
     )
-    return CameraWorker(processes=processes, overlay_port=port, source_signature=camera_source_signature(camera, config))
+    report_overlay_status(camera, rtsp_url, port, config, "RUNNING", getattr(processes[-1], "pid", None))
+    return CameraWorker(
+        processes=processes,
+        overlay_port=port,
+        source_signature=camera_source_signature(camera, config),
+        camera_login_id=camera.camera_login_id,
+        rtsp_url=rtsp_url,
+    )
 
 
 def sync_camera_workers(
@@ -184,6 +201,7 @@ def sync_camera_workers(
         if camera_login_id not in active_cameras:
             print(f"[registered-cameras] stopping inactive camera={camera_login_id}", flush=True)
             stop_processes(workers[camera_login_id].processes)
+            report_overlay_stopped(camera_login_id, workers[camera_login_id].rtsp_url, workers[camera_login_id].overlay_port, config)
             del workers[camera_login_id]
 
     for camera in active_cameras.values():
@@ -192,16 +210,21 @@ def sync_camera_workers(
             continue
         if existing_worker is not None:
             print(f"[registered-cameras] restarting updated camera={camera.camera_login_id}", flush=True)
+            preferred_port = existing_worker.overlay_port
             stop_processes(existing_worker.processes)
+            report_overlay_stopped(camera.camera_login_id, existing_worker.rtsp_url, existing_worker.overlay_port, config)
             del workers[camera.camera_login_id]
-        worker = start_camera_worker(camera, config, next_overlay_port(workers, config))
+        else:
+            preferred_port = None
+        worker = start_camera_worker(camera, config, next_overlay_port(workers, config, preferred_port=preferred_port))
         if worker is not None:
             workers[camera.camera_login_id] = worker
 
 
-def stop_all_workers(workers: dict[str, CameraWorker]) -> None:
-    for worker in workers.values():
+def stop_all_workers(workers: dict[str, CameraWorker], config: RunnerConfig) -> None:
+    for camera_login_id, worker in workers.items():
         stop_processes(worker.processes)
+        report_overlay_stopped(camera_login_id, worker.rtsp_url, worker.overlay_port, config)
     workers.clear()
 
 
@@ -212,7 +235,7 @@ def run_camera_sync_loop(cameras: list[RegisteredCamera], config: RunnerConfig) 
         return
 
     def shutdown(_signum: int, _frame: object) -> NoReturn:
-        stop_all_workers(workers)
+        stop_all_workers(workers, config)
         raise SystemExit(0)
 
     signal.signal(signal.SIGINT, shutdown)
@@ -228,6 +251,7 @@ def run_camera_sync_loop(cameras: list[RegisteredCamera], config: RunnerConfig) 
                     flush=True,
                 )
                 stop_processes(worker.processes)
+                report_overlay_stopped(camera_login_id, worker.rtsp_url, worker.overlay_port, config)
                 del workers[camera_login_id]
         if time.monotonic() < next_refresh_at:
             continue

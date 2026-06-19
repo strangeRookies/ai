@@ -20,7 +20,7 @@ from scripts.run_rtsp_inference import (
 
 class RtspEventPayloadTest(unittest.TestCase):
     def test_inference_event_payload_contains_only_operational_fields(self):
-        args = Namespace(camera_id="cam_01", event_severity="HIGH")
+        args = Namespace(camera_id="legacy_cam", camera_login_id="cam_01", event_severity="HIGH", yolo_model="yolo26n-pose.pt")
         packet = Namespace(frame_idx=12, timestamp=123.5)
         prediction = {"label": "Faint", "score": 0.81, "probabilities": {"Normal": 0.19, "Faint": 0.81}}
         sequence = {"bbox": [1, 2, 3, 4], "track_id": 9, "start_frame": 4, "end_frame": 12}
@@ -28,22 +28,29 @@ class RtspEventPayloadTest(unittest.TestCase):
         payload = build_inference_event_payload(args, packet, prediction, boxes=[], sequence=sequence)
 
         self.assertEqual(set(payload), {
-            "camera_id", "camera_login_id", "timestamp", "detected_at",
-            "event_type", "type", "severity", "confidence", "faint_prob", "score", "bbox",
-            "message_type", "track_id"
+            "type", "camera_id", "camera_login_id", "timestamp", "severity",
+            "message", "source", "track_id", "metadata",
         })
         self.assertEqual(payload["camera_id"], "cam_01")
         self.assertEqual(payload["camera_login_id"], "cam_01")
-        self.assertEqual(payload["event_type"], "Faint")
-        self.assertEqual(payload["type"], "Faint")
+        self.assertEqual(payload["type"], "fall_detected")
         self.assertEqual(payload["severity"], "HIGH")
-        self.assertEqual(payload["confidence"], 0.81)
-        self.assertEqual(payload["faint_prob"], 0.81)
-        self.assertEqual(payload["score"], 0.81)
+        self.assertEqual(payload["message"], "쓰러짐 의심 상황이 감지되었습니다.")
+        self.assertEqual(payload["source"], "edge-ai")
         self.assertEqual(payload["track_id"], 9)
         self.assertTrue(isinstance(payload["timestamp"], str) and payload["timestamp"].endswith("Z"))
-        self.assertEqual(payload["bbox"], [1, 2, 3, 4])
-        self.assertEqual(payload["message_type"], "AI_EVENT")
+        self.assertEqual(
+            payload["metadata"],
+            {
+                "bbox": [1, 2, 3, 4],
+                "confidence": 0.81,
+                "rule_score": 0.81,
+                "pose_state": "LYING",
+                "model_name": "yolo26n-pose",
+            },
+        )
+        self.assertNotIn("event_type", payload)
+        self.assertNotIn("detected_at", payload)
         self.assertNotIn("probabilities", payload)
         self.assertNotIn("threshold", payload)
         self.assertNotIn("post_processing", payload)
@@ -57,9 +64,9 @@ class RtspEventPayloadTest(unittest.TestCase):
         payload = build_inference_event_payload(args, packet, prediction, boxes=[], sequence=sequence)
 
         self.assertNotIn("track_id", payload)
-        self.assertEqual(payload["bbox"], [1, 2, 3, 4])
+        self.assertEqual(payload["metadata"]["bbox"], [1, 2, 3, 4])
 
-    def test_inference_event_payload_includes_clip_reference_when_available(self):
+    def test_inference_event_payload_keeps_clip_reference_out_of_mqtt_contract(self):
         args = Namespace(camera_id="cam_01", event_severity="HIGH")
         packet = Namespace(frame_idx=12, timestamp=123.5)
         prediction = {"label": "Faint", "score": 0.81}
@@ -74,8 +81,8 @@ class RtspEventPayloadTest(unittest.TestCase):
 
         payload = build_inference_event_payload(args, packet, prediction, boxes=[], sequence=sequence)
 
-        self.assertEqual(payload["clip_path"], "clips/faint_cam_01.mp4")
-        self.assertEqual(payload["clip_url"], "https://example.invalid/clips/faint_cam_01.mp4")
+        self.assertNotIn("clip_path", payload)
+        self.assertNotIn("clip_url", payload)
 
     def test_inference_event_log_contains_debug_fields(self):
         args = Namespace(camera_id="cam_01", action_threshold=0.3, min_consecutive_faint=3, camera_cooldown_seconds=10)
@@ -156,12 +163,22 @@ class RtspEventPayloadTest(unittest.TestCase):
         self.assertEqual(summary["events_generated"], 1)
         self.assertEqual(len(published), 1)
         self.assertNotIn("probabilities", published[0])
+        self.assertEqual(published[0]["type"], "fall_detected")
+        self.assertIn("metadata", published[0])
+
+    def test_cheap_filter_reduces_lstm_calls_for_low_risk_sequences(self):
+        summary = run_with_fake_rtsp(fake_run_args(event_log_dir=None, cheap_filter_enabled=True))
+
+        self.assertEqual(summary["cheap_filter_sequences_skipped"], 3)
+        self.assertEqual(summary["lstm_predictions"], 0)
+        self.assertEqual(summary["events_generated"], 0)
 
 
-def fake_run_args(event_log_dir, dry_run=True):
+def fake_run_args(event_log_dir, dry_run=True, cheap_filter_enabled=False):
     return Namespace(
         rtsp_url="fake://cam1",
         camera_id="cam_01",
+        camera_login_id=None,
         max_frames=4,
         detector_mode="mock",
         dry_run=dry_run,
@@ -178,6 +195,7 @@ def fake_run_args(event_log_dir, dry_run=True):
         classifier_input="keypoints",
         sequence_length=2,
         sequence_stride=1,
+        cheap_filter_enabled=cheap_filter_enabled,
         resize_size=32,
         tracker_iou_threshold=0.3,
         track_max_missing_seconds=2.0,

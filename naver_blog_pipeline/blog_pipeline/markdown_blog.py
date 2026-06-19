@@ -34,8 +34,21 @@ def build_blog_draft(
     source_markdown: str,
     source_name: str = "note.md",
     llm_client: LLMClient | None = None,
+    humanize: bool = True,
 ) -> BlogDraft:
     body = _strip_frontmatter(source_markdown)
+    
+    # Path A: Full Document generation via LLM
+    if humanize and llm_client is not None and llm_client.is_enabled():
+        full_post_markdown = _protect_and_generate_full(body, llm_client)
+        return BlogDraft(
+            title=source_name,
+            markdown=full_post_markdown + "\n",
+            sections=(),
+            summary_items=(),
+        )
+
+    # Path B: Fallback programmatic layout
     blocks = _split_blocks(body)
     title = _extract_title(blocks, source_name)
     content_blocks = _remove_first_h1(blocks)
@@ -53,7 +66,7 @@ def build_blog_draft(
         "",
         "## 도입부",
         "",
-        _protect_and_humanize(_intro_for(title, sections), llm_client),
+        _protect_and_humanize(_intro_for(title, sections), llm_client, humanize),
         "",
     ]
 
@@ -63,7 +76,7 @@ def build_blog_draft(
         lines.append("")
 
     lines.extend(["## 본문", ""])
-    lines.extend(_render_content_blocks(content_blocks, llm_client))
+    lines.extend(_render_content_blocks(content_blocks, llm_client, humanize))
     lines.extend(["", "## 핵심 정리", ""])
     lines.extend(f"- {item}" for item in summary_items)
     lines.extend(
@@ -71,7 +84,7 @@ def build_blog_draft(
             "",
             "## 마무리",
             "",
-            _protect_and_humanize(_closing_for(title), llm_client),
+            _protect_and_humanize(_closing_for(title), llm_client, humanize),
             "",
         ],
     )
@@ -88,9 +101,10 @@ def write_blog_draft(
     input_path: Path,
     output_path: Path,
     llm_client: LLMClient | None = None,
+    humanize: bool = True,
 ) -> BlogDraft:
     source = input_path.read_text(encoding="utf-8")
-    draft = build_blog_draft(source, source_name=input_path.name, llm_client=llm_client)
+    draft = build_blog_draft(source, source_name=input_path.name, llm_client=llm_client, humanize=humanize)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(draft.markdown, encoding="utf-8")
     return draft
@@ -218,22 +232,26 @@ def _summary_items(
 def _render_content_blocks(
     blocks: tuple[MarkdownBlock, ...],
     llm_client: LLMClient | None = None,
+    humanize: bool = True,
 ) -> list[str]:
     rendered: list[str] = []
     for block in blocks:
         if block.kind == "heading":
             rendered.append(_shift_heading(block.text))
         elif block.kind == "paragraph":
-            rendered.append(_protect_and_humanize(block.text, llm_client))
+            rendered.append(_protect_and_humanize(block.text, llm_client, humanize))
         else:
             rendered.append(block.text)
         rendered.append("")
     return rendered
 
 
-def _protect_and_humanize(text: str, llm_client: LLMClient | None = None) -> str:
+def _protect_and_humanize(text: str, llm_client: LLMClient | None = None, humanize: bool = True) -> str:
+    if not humanize:
+        return text
+
     if llm_client is None or not llm_client.is_enabled():
-        return _soften_paragraph(text)
+        return humanize_paragraph(text)
 
     placeholders: list[tuple[str, str]] = []
 
@@ -275,14 +293,37 @@ def _protect_and_humanize(text: str, llm_client: LLMClient | None = None) -> str
             "Falling back to regex softening for this paragraph.",
             flush=True,
         )
-        return _soften_paragraph(text)
+        return humanize_paragraph(text)
 
     # Restore placeholders
     for token, original in placeholders:
-        token_re = re.compile(re.escape(token), re.IGNORECASE)
-        humanized = token_re.sub(original, humanized)
+        humanized = humanized.replace(token, original)
 
     return humanized
+
+
+def _protect_and_generate_full(text: str, llm_client: LLMClient) -> str:
+    placeholders: list[tuple[str, str]] = []
+
+    def repl(match: re.Match[str], prefix: str) -> str:
+        token = f"__{prefix}_{len(placeholders)}__"
+        placeholders.append((token, match.group(0)))
+        return token
+
+    # Protect code fences
+    processed = re.sub(r"(```.*?```|~~~.*?~~~)", lambda m: repl(m, "FENCE"), text, flags=re.DOTALL)
+    processed = IMAGE_RE.sub(lambda m: repl(m, "IMG"), processed)
+    processed = LINK_RE.sub(lambda m: repl(m, "LINK"), processed)
+    processed = INLINE_CODE_RE.sub(lambda m: repl(m, "CODE"), processed)
+
+    # Call LLM
+    full_post = llm_client.generate_full_post(processed)
+
+    # Restore placeholders
+    for token, original in placeholders:
+        full_post = full_post.replace(token, original)
+
+    return full_post
 
 
 def _shift_heading(text: str) -> str:
@@ -293,18 +334,42 @@ def _shift_heading(text: str) -> str:
     return f"{'#' * level} {_clean_heading(match.group(2))}"
 
 
-def _soften_paragraph(text: str) -> str:
+def humanize_paragraph(text: str) -> str:
     lines = [line.strip() for line in text.splitlines()]
     normalized = " ".join(line for line in lines if line)
     normalized = re.sub(r"\s+", " ", normalized).strip()
+    
+    # 1. AI 관용구 제거
+    ai_phrases = [
+        r"결론적으로,?\s*",
+        r"시사하는 바가 크다\.?\s*",
+        r"이에 대해 알아봅시다\.?\s*",
+        r"요약하자면,?\s*",
+        r"마지막으로,?\s*",
+        r"첫째,?\s*",
+        r"둘째,?\s*",
+        r"셋째,?\s*",
+    ]
+    for phrase in ai_phrases:
+        normalized = re.sub(phrase, "", normalized)
+        
+    # 2. 번역투 및 피동 표현 제거
+    normalized = re.sub(r"(\S+)에 있어서\s+", r"\1에서 ", normalized)
+    normalized = re.sub(r"(\S+)[을를] 통해\s+", r"\1(으)로 ", normalized)
+    normalized = re.sub(r"(\S+)에 의해\s+", r"\1(으)로 ", normalized)
+    normalized = re.sub(r"(\S+)되어지다", r"\1되다", normalized)
+    normalized = re.sub(r"(\S+)되어집니다", r"\1됩니다", normalized)
+
+    # 3. 어미 자연화
     replacements = {
-        "합니다.": "합니다.",
+        "한다.": "합니다.",
         "이다.": "입니다.",
         "된다.": "됩니다.",
     }
     for source, target in replacements.items():
         normalized = normalized.replace(source, target)
-    return normalized
+        
+    return normalized.strip()
 
 
 def _intro_for(title: str, sections: tuple[str, ...]) -> str:

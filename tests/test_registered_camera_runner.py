@@ -13,7 +13,7 @@ from ai.registered_cameras import (
     load_active_cameras,
     parse_camera,
 )
-from ai.registered_camera_workers import CameraWorker, publish_unavailable_camera_status, sync_camera_workers
+from ai.registered_camera_workers import CameraWorker, next_overlay_port, publish_unavailable_camera_status, sync_camera_workers
 
 
 class RegisteredCameraRunnerTest(unittest.TestCase):
@@ -86,7 +86,7 @@ class RegisteredCameraRunnerTest(unittest.TestCase):
         self.assertIn("scripts/serve_ai_overlay.py", command)
         self.assertEqual(command[command.index("--camera-id") + 1], "icu_01")
         self.assertEqual(command[command.index("--camera-login-id") + 1], "icu_01")
-        self.assertEqual(command[command.index("--rtsp-url") + 1], "rtsp://cctv/icu")
+        self.assertNotIn("--rtsp-url", command)
 
     def test_load_active_cameras_reads_backend_success_data_envelope(self):
         response = FakeHttpResponse(
@@ -194,6 +194,29 @@ class RegisteredCameraRunnerTest(unittest.TestCase):
         stop_processes.assert_called_once_with(old_worker.processes)
         start_worker.assert_called_once()
         self.assertIs(workers["cam8"], new_worker)
+
+    def test_next_overlay_port_reuses_preferred_port_when_free(self):
+        workers = {
+            "cam_02": CameraWorker(processes=[], overlay_port=8011, source_signature="REAL_RTSP:rtsp://cctv/cam_02")
+        }
+
+        port = next_overlay_port(workers, fake_config(Path("video_pool")), preferred_port=8010)
+
+        self.assertEqual(port, 8010)
+
+    def test_next_overlay_port_skips_orphan_bound_port(self):
+        import socket
+
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
+            server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            server.bind(("127.0.0.1", 0))
+            server.listen(1)
+            occupied_port = server.getsockname()[1]
+            config = replace(fake_config(Path("video_pool")), overlay_base_port=occupied_port)
+
+            port = next_overlay_port({}, config)
+
+        self.assertEqual(port, occupied_port + 1)
 
 
 class FakeHttpResponse:

@@ -1,0 +1,25 @@
+name: strange-ai-tunnel
+
+services:
+  ai-tunnel:
+    build:
+      context: ./infra/ai-tunnel
+      dockerfile: Dockerfile
+    container_name: strange-ai-tunnel
+    stdin_open: true
+    tty: true
+    volumes:
+      # 호스트의 SSH 디렉토리를 읽기 전용으로 마운트하여 SSH 키 공유
+      - ${USERPROFILE:-~}/.ssh:/root/.ssh:ro
+    ports:
+      # 포트 포워딩된 포트들을 호스트(개발 PC)에 노출
+      - "8888:8888"
+      - "8889:8889"
+      - "8189:8189"
+      - "8010:8010"
+      - "8011:8011"
+      - "8012:8012"
+      - "8013:8013"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: "no"
