@@ -1,10 +1,57 @@
+# Python cache
 __pycache__/
 *.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
-# Benchmark results
-benchmark/results/
+# Virtual environments
+.venv/
+venv/
+env/
 
-# Environment files
+# Local environment files
 .env
 .env.*
+!.env.example
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Temporary workspace files
+.tmp/
+tmp/
+temp/
+
+# Runtime outputs and logs
+runs/
 *.log
+*.jsonl
+
+# Generated benchmark/model outputs
+benchmark/results/*
+!benchmark/results/.gitkeep
+*.pt
+*.pth
+*.onnx
+*.engine
+
+# Local sample media
+sample_videos/*
+!sample_videos/.gitkeep
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.webm
+
+# Generated archives and office exports
+*.zip
+*.tar
+*.tar.gz
+*.7z
+*.docx
