@@ -18,6 +18,7 @@ from ai.action.per_track_sequence_buffer import PerTrackCropSequenceBuffers, Per
 from ai.inference.rtsp_runtime import (
     build_inference_event_log,
     build_inference_event_payload,
+    cheap_filter_config_from_args,
     create_classifier,
     create_detection_postprocessor,
     create_detector,
@@ -42,10 +43,12 @@ def run(args):
     classifier, classifier_mode = create_classifier(args.action_model, args.action_device, getattr(args, "action_threshold", DEFAULT_FAINT_THRESHOLD))
     classifier_input = getattr(args, "classifier_input", "keypoints")
     detection_postprocessor, postprocessing_mode = create_detection_postprocessor(args)
+    cheap_filter_config = cheap_filter_config_from_args(args)
     keypoint_buffers = PerTrackKeypointSequenceBuffers(
         args.sequence_length,
         args.sequence_stride,
         max_track_age_seconds=getattr(args, "track_max_missing_seconds", 4.0),
+        cheap_filter_config=cheap_filter_config,
     )
     crop_buffers = (
         PerTrackCropSequenceBuffers(
@@ -85,6 +88,10 @@ def run(args):
         "sequence_length": args.sequence_length,
         "sequence_stride": args.sequence_stride,
         "sequence_config_note": "runtime CLI/env values override buffer class defaults; stride is sequence start interval, not FPS sampling",
+        "cheap_filter_enabled": cheap_filter_config.enabled,
+        "cheap_filter_sequences_kept": 0,
+        "cheap_filter_sequences_skipped": 0,
+        "cheap_filter_reasons": {},
         "latest_faint_probability": None,
         "latest_prediction_label": None,
         "latest_frame_keypoints": 0,
@@ -163,6 +170,9 @@ def run(args):
                 summary["latest_frame_keypoints"] = frame_keypoint_count
 
                 keypoint_sequences = keypoint_buffers.add(packet.frame_idx, detections, packet.frame.shape, now=packet.timestamp)
+                summary["cheap_filter_sequences_kept"] = keypoint_buffers.sequences_kept_by_filter
+                summary["cheap_filter_sequences_skipped"] = keypoint_buffers.sequences_skipped_by_filter
+                summary["cheap_filter_reasons"] = dict(keypoint_buffers.cheap_filter_reasons)
                 crop_sequences = crop_buffers.add(packet.frame_idx, packet.frame, boxes, now=packet.timestamp) if crop_buffers else []
                 classifier_sequences = crop_sequences if crop_sequences else keypoint_sequences
                 prediction = None

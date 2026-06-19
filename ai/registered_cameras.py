@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import sys
 import urllib.error
@@ -16,6 +15,7 @@ from ai.camera_input_safety import (
     is_safe_camera_login_id,
     resolved_video_pool,
 )
+from ai.ffmpeg_command import build_ffmpeg_command
 
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[1]
@@ -83,6 +83,8 @@ class RunnerConfig:
     rtsp_probe_enabled: bool
     refresh_interval_seconds: float
     skip_ffmpeg_spawn: bool = False
+    overlay_public_base_url: str | None = None
+    overlay_report_enabled: bool = False
 
 
 def normalize_camera_login_id(login_id: str) -> str:
@@ -202,30 +204,6 @@ def resolve_simulated_video(camera: RegisteredCamera, video_pool: Path) -> Path:
     raise RuntimeError(
         f"no assignedVideoPath or fallback mp4 found for camera_login_id={camera.camera_login_id}"
     )
-
-
-def build_ffmpeg_command(video_path: Path, rtsp_url: str) -> list[str]:
-    ffmpeg_mode = os.environ.get("FFMPEG_MODE", "cpu").lower()
-    
-    cmd = ["ffmpeg", "-re", "-stream_loop", "-1", "-i", str(video_path), "-an"]
-    
-    if ffmpeg_mode == "copy":
-        cmd.extend(["-c:v", "copy"])
-    elif ffmpeg_mode == "nvenc":
-        cmd.extend([
-            "-c:v", "h264_nvenc",
-            "-preset", "p1",
-            "-tune", "zerolatency"
-        ])
-    else: # cpu mode (default)
-        cmd.extend([
-            "-c:v", "libx264",
-            "-preset", "ultrafast",
-            "-tune", "zerolatency"
-        ])
-        
-    cmd.extend(["-f", "rtsp", rtsp_url])
-    return cmd
 
 
 def build_overlay_command(

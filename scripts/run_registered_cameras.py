@@ -19,6 +19,13 @@ from ai.registered_cameras import (
 from ai.registered_camera_workers import run_camera_sync_loop
 
 
+def env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def run_cameras(cameras: list[RegisteredCamera], config: RunnerConfig) -> None:
     run_camera_sync_loop(cameras, config)
 
@@ -32,6 +39,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--video-pool", default=os.getenv("VIDEO_POOL_DIR", DEFAULT_VIDEO_POOL))
     parser.add_argument("--overlay-host", default=os.getenv("OVERLAY_HOST", "0.0.0.0"))
     parser.add_argument("--overlay-base-port", type=int, default=int(os.getenv("OVERLAY_BASE_PORT", "8010")))
+    parser.add_argument("--overlay-public-base-url", default=os.getenv("OVERLAY_PUBLIC_BASE_URL"))
+    parser.add_argument(
+        "--overlay-report-enabled",
+        action=argparse.BooleanOptionalAction,
+        default=env_bool("AI_OVERLAY_REPORT_ENABLED", True),
+    )
     parser.add_argument("--python-executable", default=sys.executable)
     parser.add_argument("--publisher", choices=["mqtt", "console"], default=os.getenv("EVENT_PUBLISHER", "mqtt"))
     parser.add_argument("--mqtt-host", default=os.getenv("MQTT_HOST"))
@@ -90,6 +103,8 @@ def config_from_args(args: argparse.Namespace) -> RunnerConfig:
         rtsp_probe_enabled=not args.skip_rtsp_probe,
         refresh_interval_seconds=args.refresh_interval_seconds,
         skip_ffmpeg_spawn=args.skip_simulated_ffmpeg,
+        overlay_public_base_url=args.overlay_public_base_url,
+        overlay_report_enabled=args.overlay_report_enabled,
     )
 
 

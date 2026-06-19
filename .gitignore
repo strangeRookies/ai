@@ -3,3 +3,8 @@ __pycache__/
 
 # Benchmark results
 benchmark/results/
+
+# Environment files
+.env
+.env.*
+*.log

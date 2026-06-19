@@ -10,18 +10,15 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from ai.action.per_track_sequence_buffer import PerTrackCropSequenceBuffers, PerTrackKeypointSequenceBuffers
-from ai.inference.rtsp_runtime import build_inference_event_payload, create_detection_postprocessor, ensure_mock_keypoints
-from ai.inference.rtsp_runtime import maybe_log_debug, normalize_detections, update_detections_with_postprocessor
-from ai.inference.rtsp_runtime import update_prediction_counts, update_tracking_summary
+from ai.inference.rtsp_runtime import build_inference_event_payload, cheap_filter_config_from_args, create_detection_postprocessor, ensure_mock_keypoints
+from ai.inference.rtsp_runtime import maybe_log_debug, normalize_detections, update_detections_with_postprocessor, update_prediction_counts, update_tracking_summary
 from ai.overlay_http import OverlayState, create_overlay_server
 from ai.streams.video_reader import VideoReader
-from ai.visualization.action_overlay import annotate_boxes_with_action, annotate_boxes_with_track_actions
-from ai.visualization.action_overlay import draw_metrics_panel, faint_probability, format_action_overlay_text
-from ai.visualization.action_overlay import initial_overlay_summary, update_overlay_runtime
+from ai.visualization.action_overlay import annotate_boxes_with_action, annotate_boxes_with_track_actions, draw_metrics_panel, faint_probability
+from ai.visualization.action_overlay import format_action_overlay_text, initial_overlay_summary, update_overlay_runtime
 from ai.visualization.draw import draw_overlay
-from scripts.run_rtsp_inference import DEFAULT_ACTION_MODEL, DEFAULT_CAMERA_COOLDOWN_SECONDS, DEFAULT_FAINT_THRESHOLD
-from scripts.run_rtsp_inference import DEFAULT_MIN_CONSECUTIVE_FAINT, FaintEventPostProcessor, create_classifier
-from scripts.run_rtsp_inference import create_detector
+from scripts.run_rtsp_inference import DEFAULT_ACTION_MODEL, DEFAULT_CAMERA_COOLDOWN_SECONDS, DEFAULT_FAINT_THRESHOLD, DEFAULT_MIN_CONSECUTIVE_FAINT
+from scripts.run_rtsp_inference import FaintEventPostProcessor, create_classifier, create_detector
 from stream.rtsp_reader import redact_url
 from tracking.display_id_mapper import DisplayIdMapper
 from ai.publishers.event_publisher import create_event_publisher
@@ -154,6 +151,7 @@ class OverlayWorker:
             cooldown_seconds=self.args.camera_cooldown_seconds,
         )
         tracker, postprocessing_mode = create_detection_postprocessor(self.args)
+        cheap_filter_config = cheap_filter_config_from_args(self.args)
         print(f"[ai-overlay] tracking postprocessor: {postprocessing_mode}", flush=True)
         display_id_mapper = DisplayIdMapper()
         while not self.stop_event.is_set():
@@ -169,6 +167,7 @@ class OverlayWorker:
                     self.args.sequence_length,
                     self.args.sequence_stride,
                     max_track_age_seconds=self.args.track_max_missing_seconds,
+                    cheap_filter_config=cheap_filter_config,
                 )
             # Reset display ID mapping on each camera reconnect so IDs restart from 1
             display_id_mapper.reset()
@@ -226,6 +225,13 @@ def main():
     parser.add_argument("--classifier-input", choices=["keypoints", "crops"], default="keypoints")
     parser.add_argument("--sequence-length", type=int, default=8)
     parser.add_argument("--sequence-stride", type=int, default=4)
+    parser.add_argument("--cheap-filter-enabled", action=argparse.BooleanOptionalAction, default=os.getenv("CHEAP_FILTER_ENABLED", "true").lower() in {"1", "true", "yes", "on"})
+    parser.add_argument("--cheap-filter-slope-ratio", type=float, default=float(os.getenv("CHEAP_FILTER_SLOPE_RATIO", "1.3")))
+    parser.add_argument("--cheap-filter-min-keypoint-conf", type=float, default=float(os.getenv("CHEAP_FILTER_MIN_KEYPOINT_CONF", "0.25")))
+    parser.add_argument("--cheap-filter-min-bbox-area-ratio", type=float, default=float(os.getenv("CHEAP_FILTER_MIN_BBOX_AREA_RATIO", "0.005")))
+    parser.add_argument("--cheap-filter-min-center-drop-ratio", type=float, default=float(os.getenv("CHEAP_FILTER_MIN_CENTER_DROP_RATIO", "0.03")))
+    parser.add_argument("--cheap-filter-min-aspect-ratio-growth", type=float, default=float(os.getenv("CHEAP_FILTER_MIN_ASPECT_RATIO_GROWTH", "0.20")))
+    parser.add_argument("--cheap-filter-min-risk-score", type=float, default=float(os.getenv("CHEAP_FILTER_MIN_RISK_SCORE", "1.0")))
     parser.add_argument("--resize-size", type=int, default=224)
     parser.add_argument("--tracking-mode", choices=["auto", "simple", "supervision"], default="auto")
     parser.add_argument("--track-thresh", type=float, default=0.10)
