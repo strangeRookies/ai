@@ -1,9 +1,0 @@
-{
-  "name": "naver-blog-pipeline",
-  "private": true,
-  "version": "0.1.0",
-  "type": "module",
-  "dependencies": {
-    "@jjlabsio/md-to-naver-blog": "^2.0.0"
-  }
-}
