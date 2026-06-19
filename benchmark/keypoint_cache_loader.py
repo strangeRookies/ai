@@ -37,6 +37,7 @@ def _get_cache_index(cache_dir):
                     short_name = p.stem.split("__", 1)[-1]
                     _CACHE_INDEX[short_name] = p
         print(f"[DEBUG] Cache index built with {len(_CACHE_INDEX)} keys", flush=True)
+    return _CACHE_INDEX
 
 
 def resolve_keypoint_cache_path(row, cache_dir):
