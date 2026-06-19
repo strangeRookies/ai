@@ -32,10 +32,11 @@ def _get_cache_index(cache_dir):
         for p in Path(cache_dir).rglob("*.np*"):
             if p.is_file():
                 _CACHE_INDEX[p.stem] = p
-        print(f"[DEBUG] Cache index built with {len(_CACHE_INDEX)} files", flush=True)
-        if _CACHE_INDEX:
-            print(f"[DEBUG] Cache stems: {list(_CACHE_INDEX.keys())[:5]}", flush=True)
-    return _CACHE_INDEX
+                if "__" in p.stem:
+                    # e.g., 'indoor_chromakey__clip1' -> 'clip1'
+                    short_name = p.stem.split("__", 1)[-1]
+                    _CACHE_INDEX[short_name] = p
+        print(f"[DEBUG] Cache index built with {len(_CACHE_INDEX)} keys", flush=True)
 
 
 def resolve_keypoint_cache_path(row, cache_dir):
