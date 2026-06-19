@@ -59,6 +59,12 @@ def parse_arguments() -> argparse.Namespace:
         dest="loop",
         help="Do not loop video playback."
     )
+    parser.add_argument(
+        "--ffmpeg-mode",
+        choices=["copy", "cpu", "nvenc"],
+        default=os.environ.get("FFMPEG_MODE", "cpu"),
+        help="FFmpeg encoding mode (copy: direct copy, cpu: libx264 encoding, nvenc: h264_nvenc hardware acceleration)."
+    )
     return parser.parse_args()
 
 
@@ -77,19 +83,29 @@ def scan_video_directory(directory_path: str) -> list[Path]:
     return video_files
 
 
-def build_ffmpeg_cmd(video_path: Path, rtsp_url: str, loop: bool) -> list[str]:
+def build_ffmpeg_cmd(video_path: Path, rtsp_url: str, loop: bool, ffmpeg_mode: str = "cpu") -> list[str]:
     cmd = ["ffmpeg", "-re"]
     if loop:
         cmd.extend(["-stream_loop", "-1"])
-    cmd.extend([
-        "-i", str(video_path),
-        "-an",
-        "-c:v", "libx264",
-        "-preset", "ultrafast",
-        "-tune", "zerolatency",
-        "-f", "rtsp",
-        rtsp_url
-    ])
+    cmd.extend(["-i", str(video_path), "-an"])
+    
+    mode = ffmpeg_mode.lower()
+    if mode == "copy":
+        cmd.extend(["-c:v", "copy"])
+    elif mode == "nvenc":
+        cmd.extend([
+            "-c:v", "h264_nvenc",
+            "-preset", "p1",
+            "-tune", "zerolatency"
+        ])
+    else: # cpu mode
+        cmd.extend([
+            "-c:v", "libx264",
+            "-preset", "ultrafast",
+            "-tune", "zerolatency"
+        ])
+        
+    cmd.extend(["-f", "rtsp", rtsp_url])
     return cmd
 
 
@@ -218,7 +234,7 @@ def main() -> None:
                     
                     if existing is None:
                         # Start new streaming process
-                        cmd = build_ffmpeg_cmd(assigned_video, target_rtsp_url, loop_playback)
+                        cmd = build_ffmpeg_cmd(assigned_video, target_rtsp_url, loop_playback, args.ffmpeg_mode)
                         print(f"[simulated-rtsp] Mapping camera={cid} to video={assigned_video.name}", flush=True)
                         print(f"  CMD: {' '.join(cmd)}", flush=True)
                         
@@ -251,8 +267,8 @@ def main() -> None:
                 p = info['process']
                 exit_code = p.poll()
                 if exit_code is not None:
-                    print(f"[simulated-rtsp][warning] ffmpeg for camera={cid} (pid={p.pid}) exited with code {exit_code}. Restarting.", flush=True)
-                    cmd = build_ffmpeg_cmd(info['video_path'], info['rtsp_url'], loop_playback)
+                    print(f"[simulated-rtsp][warning] ffmpeg for camera={cid} (pid={p.pid}) exited with code {exit_code} in mode '{args.ffmpeg_mode}'. Restarting.", flush=True)
+                    cmd = build_ffmpeg_cmd(info['video_path'], info['rtsp_url'], loop_playback, args.ffmpeg_mode)
                     try:
                         new_p = subprocess.Popen(
                             cmd,
