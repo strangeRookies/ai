@@ -22,7 +22,32 @@ def cache_path_candidates(row, cache_dir):
     return list(dict.fromkeys(candidates))
 
 
+_CACHE_INDEX = None
+
+
+def _get_cache_index(cache_dir):
+    global _CACHE_INDEX
+    if _CACHE_INDEX is None:
+        _CACHE_INDEX = {}
+        for p in Path(cache_dir).rglob("*.np*"):
+            if p.is_file():
+                _CACHE_INDEX[p.stem] = p
+    return _CACHE_INDEX
+
+
 def resolve_keypoint_cache_path(row, cache_dir):
+    index = _get_cache_index(cache_dir)
+    
+    names = []
+    for value in (row.get("clip_id"), row.get("video_path"), row.get("clip_path"), row.get("_resolved_video_path")):
+        if value:
+            names.append(Path(str(value)).stem)
+            
+    for name in dict.fromkeys(names):
+        if name in index:
+            return index[name]
+
+    # Fallback to direct checks (for absolute paths or relative keypoint_path entries)
     for candidate in cache_path_candidates(row, cache_dir):
         if candidate.exists():
             return candidate
