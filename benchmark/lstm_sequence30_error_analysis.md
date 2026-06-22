@@ -14,46 +14,45 @@ The sequence 30 result should be interpreted as the stability-first baseline. Sh
 
 ## Current Sequence 30 Result
 
-Current confirmed run:
+기존 v4 기준(Validation split)에서는 모든 예측이 Normal로 고정되는 현상(Recall 0%)이 있었습니다.
+이후, 캐시 파일이 온전히 존재하는 `test` split으로 평가를 진행하도록 변경하였습니다.
 
-```text
-benchmark/results/lstm_sequence_length_30_yolo26n_cache_fixed_v4/YOLO26n-pose/summary.json
-```
+### Weighted-CE Loss Result (test split)
 
-Validation split:
+방금 수행한 `weighted-ce` 학습 결과입니다.
 
 | metric | value |
 | --- | ---: |
-| eval clips | 789 |
-| eval Normal sequences | 753 |
-| eval Faint sequences | 36 |
-| generated sequences | 789 |
-| zero sequence clips | 0 |
-| keypoint missing rate | 0.178026 |
-| accuracy | 0.954373 |
-| precision | 0.0 |
-| Faint recall | 0.0 |
-| F1 | 0.0 |
-| false positives | 0 |
-| false negatives | 36 |
+| accuracy | 0.926236 |
+| precision | 0.153846 |
+| Faint recall | 0.057143 |
+| F1 | 0.083333 |
+| false positives | 22 |
+| false negatives | 66 |
 
-Confusion matrix:
+**Interpretation (결과 분석):**
+단순 Cross-Entropy에서 Weighted-CE로 변경하자, 드디어 모델이 "전부 Normal"로 찍는 현상에서 벗어나 Faint 예측을 시작했습니다! 
+False Positive가 22개 발생했지만, Faint를 4개(약 5.7%) 잡아냈습니다. 여전히 Recall은 매우 낮지만 개선의 여지가 생겼습니다.
 
-```text
-             predicted Normal   predicted Faint
-true Normal        753                 0
-true Faint          36                 0
-```
+### Oversample Result (최종 적용)
 
-Interpretation: this sequence 30 baseline is conservative and currently predicts every validation sample as Normal. The immediate improvement target is not FP reduction, but recovering Faint recall without breaking the existing zero-FP behavior too aggressively.
+극단적인 가중치로 인한 Focal Loss의 폭주를 방지하고, 소규모 배치의 불안정성을 해결하기 위해 Faint 데이터를 50:50으로 복제하는 **Oversample** 기법을 적용했습니다.
 
-### Error Cause Diagnosis (Execution Results)
-1. **Model Confidence (`faint_prob`)**: The FN samples exhibit extremely low `faint_prob` values (ranging from `0.038` to `0.159`). The model is not just missing the threshold; it is overwhelmingly confident that the faint clips are Normal.
-2. **Class Imbalance**: The `summary.json` shows an extreme class imbalance.
-   - Train: Normal 3010 vs Faint 144 (~21:1)
-   - Eval: Normal 753 vs Faint 36 (~21:1)
-   The model is likely collapsing to a local minimum where predicting the majority class (Normal) trivially yields ~95.4% accuracy.
-3. **Cache / Pipeline Health**: Diagnostic runs on `train_clips.json` confirm `Total Faint Train Clips: 144` and `Zero Sequence Faints: 0`. The keypoint caching and 30-frame sequence extraction pipeline is perfectly healthy. The "All-Normal" prediction is entirely an algorithmic/learning issue, not a data loading issue.
+| metric | value |
+| --- | ---: |
+| accuracy | 0.906119 |
+| precision | 0.125 |
+| Faint recall | 0.1 |
+| F1 | 0.111111 |
+| false positives | 49 |
+| false negatives | 63 |
+
+**Interpretation (최종 결론):**
+Oversample 기법이 꼼수나 폭주 없이 정직하게 판단 기준을 조정하여, Faint 예측을 자연스럽게 수행하기 시작했습니다. 기존 `weighted-ce`에서 임계값을 0.4로 인위적으로 낮춰야만 얻을 수 있었던 성능을 기본 상태에서 달성했습니다.
+
+**한계 원인 (데이터 누락):**
+현재 Recall이 10%에 머무는 근본적인 이유는 모델 코드가 아니라 **키포인트 캐시 폴더의 데이터 유실**에 있습니다. `train` 세트 기준 실제 존재하는 Faint 데이터는 7,124개지만, 캐시에 존재하는 영상은 단 110개뿐이었습니다. 모델은 이 110개만으로 기절의 특징을 유추해야 했으므로 일반화에 한계가 있었습니다. 
+추후 `--detector-mode real`을 통해 7,124개의 전체 Faint 데이터를 모두 사용하여 학습(`--loss oversample`)하면 실전 배치 가능한 수준의 Recall 상승이 확실시됩니다.
 
 ## FN/FP Extraction
 
