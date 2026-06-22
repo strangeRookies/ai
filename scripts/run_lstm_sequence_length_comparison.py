@@ -35,7 +35,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--repeat-seeds", type=int, default=1)
     parser.add_argument("--audit-thresholds", default="0.3,0.4,0.5,0.6,0.7")
-    parser.add_argument("--loss", choices=["ce", "weighted-ce", "focal"], default="ce")
+    parser.add_argument("--loss", choices=["ce", "weighted-ce", "focal", "oversample"], default="ce")
     parser.add_argument("--prefilter-normal-clips", action="store_true")
     return parser.parse_args()
 
