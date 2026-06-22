@@ -35,6 +35,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--repeat-seeds", type=int, default=1)
     parser.add_argument("--audit-thresholds", default="0.3,0.4,0.5,0.6,0.7")
+    parser.add_argument("--loss", choices=["ce", "weighted-ce", "focal"], default="ce")
     return parser.parse_args()
 
 
@@ -86,6 +87,8 @@ def build_command(args: argparse.Namespace, sequence_length: int, run_dir: Path)
         str(args.repeat_seeds),
         "--audit-thresholds",
         args.audit_thresholds,
+        "--loss",
+        args.loss,
     ] + (["--dry-run"] if args.dry_run else [])
 
 

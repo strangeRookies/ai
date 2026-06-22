@@ -59,6 +59,19 @@ def parse_args():
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--hidden-size", type=int, default=128)
     parser.add_argument("--lr", type=float, default=0.001)
+    parser.add_argument("--device", default="auto")
+    parser.add_argument("--imgsz", type=int, default=640)
+    parser.add_argument("--sequence-length", type=int, default=16)
+    parser.add_argument("--sequence-stride", type=int, default=8)
+    parser.add_argument("--keypoint-conf-threshold", type=float, default=0.3)
+    parser.add_argument("--max-frames", type=int, default=0)
+    parser.add_argument("--max-rows-per-split", type=int, default=0)
+    parser.add_argument("--train-split", default="train")
+    parser.add_argument("--eval-split", default="val")
+    parser.add_argument("--epochs", type=int, default=5)
+    parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--hidden-size", type=int, default=128)
+    parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--detector-conf", type=float, default=0.15, help="YOLO Pose detector confidence threshold.")
     parser.add_argument("--dry-run", action="store_true", help="Generate extractor sequence stats only; skip LSTM training.")
@@ -67,6 +80,7 @@ def parse_args():
     parser.add_argument("--prefilter-max-frames", type=int, default=120, help="Maximum frames per Normal candidate during prefiltering.")
     parser.add_argument("--audit-thresholds", default="0.3,0.4,0.5,0.6,0.7", help="Comma-separated Faint probability thresholds for prediction audit.")
     parser.add_argument("--repeat-seeds", type=int, default=1, help="Train/evaluate LSTM repeatedly for N deterministic seeds and report recall/F1 mean/std.")
+    parser.add_argument("--loss", choices=["ce", "weighted-ce", "focal"], default="ce", help="Loss function to use (default: ce). weighted-ce or focal handles class imbalance.")
     return parser.parse_args()
 
 
@@ -320,294 +334,6 @@ def collect_cached_split_sequences(rows, split_name, args):
 def collect_split_sequences(rows, split_name, detector, args):
     if args.detector_mode == "cache":
         return collect_cached_split_sequences(rows, split_name, args)
-    x_rows = []
-    y_rows = []
-    sequence_rows = []
-    clip_summaries = []
-    totals = Counter()
-    selected = [row for row in rows if (row.get("split") or "") == split_name]
-    for row in selected:
-        video_path = row.get("_resolved_video_path") or ""
-        clip_id = row.get("clip_id") or Path(row.get("video_path") or row.get("clip_path") or video_path).stem
-        frame_start, frame_end = parse_frame_range(video_path or row.get("video_path") or row.get("clip_path") or "")
-        clip = {
-            "clip_id": clip_id,
-            "split": split_name,
-            "label": label_name(row),
-            "video_path": video_path,
-            "frame_start": frame_start,
-            "frame_end": frame_end,
-            "frames_processed": 0,
-            "person_detections": 0,
-            "keypoints_extracted": 0,
-            "generated_sequences": 0,
-            "zero_sequence": True,
-            "reason_if_zero_sequence": "",
-            "fallback_usage": 0,
-            "missing_keypoints": 0,
-            "total_keypoints": 0,
-            "error": None,
-        }
-        if not video_path:
-            clip["error"] = "video_not_found"
-            clip["reason_if_zero_sequence"] = "video_not_found"
-            clip_summaries.append(clip)
-            continue
-        buffer = KeypointSequenceBuffer(args.sequence_length, args.sequence_stride)
-        shape_buffer = []
-        try:
-            with VideoReader(video_path) as reader:
-                start_frame = int(row.get("start_frame") or 0)
-                # 경로에 processed 또는 clips가 있으면 잘려진 32프레임짜리 클립이므로 점프하지 않습니다.
-                is_processed_clip = "processed" in str(video_path).lower() or "clips" in str(video_path).lower()
-                if start_frame > 0 and not is_processed_clip and getattr(reader, "cap", None) is not None:
-                    reader.cap.set(reader.cv2.CAP_PROP_POS_FRAMES, start_frame)
-                    reader.frame_idx = start_frame
-                while True:
-                    packet = reader.read()
-                    if packet is None:
-                        break
-                    if args.max_frames > 0 and clip["frames_processed"] >= args.max_frames:
-                        break
-                    detections = detector.detect(packet.frame)
-                    if args.detector_mode == "mock":
-                        detections = ensure_mock_keypoints(detections)
-                    clip["frames_processed"] += 1
-                    clip["person_detections"] += len(detections)
-                    clip["keypoints_extracted"] += sum(1 for item in detections if item.get("keypoints"))
-                    sequence = buffer.add(packet.frame_idx, detections)
-                    shape_buffer.append(packet.frame.shape)
-                    shape_buffer = shape_buffer[-args.sequence_length :]
-                    if sequence is None:
-                        continue
-                    features, missing, total = sequence_to_features(sequence, shape_buffer, args.keypoint_conf_threshold)
-                    x_rows.append(features)
-                    y_rows.append(row_label_id(row))
-                    clip["generated_sequences"] += 1
-                    clip["missing_keypoints"] += missing
-                    clip["total_keypoints"] += total
-                    sequence_rows.append(
-                        {
-                            "clip_id": clip_id,
-                            "split": split_name,
-                            "label": label_name(row),
-                            "frame_start": sequence["start_frame"],
-                            "frame_end": sequence["end_frame"],
-                            "missing_keypoints": missing,
-                            "total_keypoints": total,
-                        }
-                    )
-        except Exception as exc:
-            clip["error"] = str(exc)
-        if clip["frames_processed"] == 0 and not clip["error"]:
-            clip["error"] = "zero_frames_decoded (가능성: 코덱 불일치 또는 비디오 인코딩 오류)"
-        clip["zero_sequence"] = clip["generated_sequences"] == 0
-        if clip["zero_sequence"] and not clip["reason_if_zero_sequence"]:
-            clip["reason_if_zero_sequence"] = zero_sequence_reason(clip)
-        clip_summaries.append(clip)
-
-    for clip in clip_summaries:
-        totals["clips_processed"] += 1 if clip["frames_processed"] > 0 else 0
-        totals["clips_requested"] += 1
-        totals["person_detections"] += clip["person_detections"]
-        totals["keypoints_extracted"] += clip["keypoints_extracted"]
-        totals["generated_sequences"] += clip["generated_sequences"]
-        totals["zero_sequence_clips"] += 1 if clip["zero_sequence"] else 0
-        totals["fallback_usage"] += clip["fallback_usage"]
-        totals["missing_keypoints"] += clip["missing_keypoints"]
-        totals["total_keypoints"] += clip["total_keypoints"]
-    return x_rows, y_rows, clip_summaries, sequence_rows, dict(totals)
-
-
-def zero_sequence_reason(clip):
-    if clip.get("error"):
-        return str(clip["error"])
-    if int(clip.get("person_detections", 0)) <= 0:
-        return "no_person_detections"
-    if int(clip.get("keypoints_extracted", 0)) <= 0:
-        return "no_keypoints_extracted"
-    return "no_complete_sequence_window"
-
-
-def write_clip_diagnostics_csv(path, clip_summaries):
-    rows = []
-    for clip in clip_summaries:
-        rows.append(
-            {
-                "label": clip.get("label"),
-                "video_path": clip.get("video_path"),
-                "frame_start": clip.get("frame_start"),
-                "frame_end": clip.get("frame_end"),
-                "person_detections": clip.get("person_detections"),
-                "keypoints_extracted": clip.get("keypoints_extracted"),
-                "generated_sequences": clip.get("generated_sequences"),
-                "reason_if_zero_sequence": clip.get("reason_if_zero_sequence", ""),
-            }
-        )
-    write_csv(path, rows)
-
-
-def prefilter_normal_rows(rows, args, specs, output_dir):
-    if not args.prefilter_normal_clips or args.max_rows_per_split <= 0:
-        return rows
-    detector = create_pose_detector(args.detector_mode, specs[0]["model"], args.device, args.imgsz, conf=args.detector_conf)
-    selected = []
-    diagnostics = []
-    by_split = {}
-    for row in rows:
-        split = row.get("split") or "unspecified"
-        by_split.setdefault(split, []).append(row)
-    for split in sorted(by_split):
-        split_rows = by_split[split]
-        faint_rows = [row for row in split_rows if label_name(row) == "Faint"]
-        selected_faint = deterministic_order(faint_rows, args.seed, split, "Faint")[: args.max_rows_per_split]
-        selected.extend(selected_faint)
-        normal_rows = [row for row in split_rows if label_name(row) == "Normal"]
-        accepted_normal = []
-        for row in order_normal_candidates(normal_rows, selected_faint, args.seed, split):
-            if len(accepted_normal) >= args.max_rows_per_split:
-                break
-            diagnostic = inspect_clip_signal(row, detector, args)
-            diagnostics.append(diagnostic)
-            if diagnostic["person_detections"] > 0 and diagnostic["keypoints_extracted"] > 0:
-                accepted_normal.append(row)
-        selected.extend(accepted_normal)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    write_csv(output_dir / "normal_prefilter_diagnostics.csv", diagnostics)
-    return selected
-
-
-def inspect_clip_signal(row, detector, args):
-    video_path = row.get("_resolved_video_path") or ""
-    frame_start, frame_end = parse_frame_range(video_path or row.get("video_path") or row.get("clip_path") or "")
-    diagnostic = {
-        "label": label_name(row),
-        "video_path": video_path,
-        "frame_start": frame_start,
-        "frame_end": frame_end,
-        "person_detections": 0,
-        "keypoints_extracted": 0,
-        "generated_sequences": 0,
-        "reason_if_zero_sequence": "",
-    }
-    if not video_path:
-        diagnostic["reason_if_zero_sequence"] = "video_not_found"
-        return diagnostic
-    buffer = KeypointSequenceBuffer(args.sequence_length, args.sequence_stride)
-    frames_processed = 0
-    try:
-        with VideoReader(video_path) as reader:
-            while True:
-                packet = reader.read()
-                if packet is None:
-                    break
-                if args.prefilter_max_frames > 0 and frames_processed >= args.prefilter_max_frames:
-                    break
-                detections = detector.detect(packet.frame)
-                if args.detector_mode == "mock":
-                    detections = ensure_mock_keypoints(detections)
-                frames_processed += 1
-                diagnostic["person_detections"] += len(detections)
-                diagnostic["keypoints_extracted"] += sum(1 for item in detections if item.get("keypoints"))
-                if buffer.add(packet.frame_idx, detections):
-                    diagnostic["generated_sequences"] += 1
-    except Exception as exc:
-        diagnostic["reason_if_zero_sequence"] = str(exc)
-        return diagnostic
-    if diagnostic["generated_sequences"] <= 0:
-        diagnostic["reason_if_zero_sequence"] = zero_sequence_reason(diagnostic)
-    return diagnostic
-
-
-def summarize_split(rows, y_rows, totals, requested_class_counts=None):
-    counts = Counter(ID_TO_CLASS[int(label)] for label in y_rows)
-    total_keypoints = totals.get("total_keypoints", 0)
-    return {
-        "clips_requested": int(totals.get("clips_requested", 0)),
-        "clips_processed": int(totals.get("clips_processed", 0)),
-        "person_detections": int(totals.get("person_detections", 0)),
-        "keypoints_extracted": int(totals.get("keypoints_extracted", 0)),
-        "generated_sequences": int(totals.get("generated_sequences", 0)),
-        "zero_sequence_clips": int(totals.get("zero_sequence_clips", 0)),
-        "keypoint_missing_rate": round(float(totals.get("missing_keypoints", 0)) / max(float(total_keypoints), 1.0), 6),
-        "fallback_usage": int(totals.get("fallback_usage", 0)),
-        "fallback_usage_ratio": 0.0,
-        "sequence_class_counts": {"Normal": counts.get("Normal", 0), "Faint": counts.get("Faint", 0)},
-        "requested_class_counts": requested_class_counts or {"Normal": 0, "Faint": 0, "total": 0},
-    }
-
-
-def parse_thresholds(raw):
-    thresholds = []
-    for item in str(raw).split(","):
-        item = item.strip()
-        if not item:
-            continue
-        thresholds.append(round(float(item), 6))
-    return thresholds or [0.5]
-
-
-def train_and_evaluate(train_x, train_y, eval_x, eval_y, eval_sequences, args, output_dir):
-    import torch
-    from torch.utils.data import DataLoader, TensorDataset
-
-    resolved_device = normalize_torch_device(args.device, torch, no_cpu_fallback=args.no_cpu_fallback)
-    device = torch.device(resolved_device)
-    train_tensor = torch.from_numpy(np.stack(train_x).astype(np.float32))
-    train_labels = torch.from_numpy(np.asarray(train_y, dtype=np.int64))
-    eval_tensor = torch.from_numpy(np.stack(eval_x).astype(np.float32))
-    eval_labels = torch.from_numpy(np.asarray(eval_y, dtype=np.int64))
-    train_dataset = TensorDataset(train_tensor, train_labels)
-    eval_loader = DataLoader(TensorDataset(eval_tensor, eval_labels), batch_size=args.batch_size)
-    model_config = {
-        "input_size": int(train_tensor.shape[-1]),
-        "hidden_size": args.hidden_size,
-        "num_layers": 1,
-        "num_classes": 2,
-        "dropout": 0.0,
-    }
-    thresholds = parse_thresholds(args.audit_thresholds)
-    seed_metrics = []
-    base_metrics = None
-    repeat_count = max(1, int(args.repeat_seeds))
-    for offset in range(repeat_count):
-        seed = int(args.seed) + offset
-        set_seed(seed, torch)
-        generator = torch.Generator()
-        generator.manual_seed(seed)
-        train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, generator=generator)
-        current_metrics = train_single_lstm(
-            train_loader=train_loader,
-            eval_loader=eval_loader,
-            model_config=model_config,
-            device=device,
-            args=args,
-            output_dir=output_dir if offset == 0 else None,
-            thresholds=thresholds,
-            eval_sequences=eval_sequences,
-        )
-        seed_metrics.append({"seed": seed, "faint_recall": current_metrics.get("recall"), "f1_score": current_metrics.get("f1_score")})
-        if offset == 0:
-            base_metrics = current_metrics
-    metrics = base_metrics or empty_metrics()
-    metrics["torch_device"] = str(device)
-    metrics["warnings"] = torch_device_warnings(args.device, torch, resolved_device)
-    metrics["repeated_seed_audit"] = repeated_seed_audit(seed_metrics)
-    return metrics
-
-
-def train_single_lstm(train_loader, eval_loader, model_config, device, args, output_dir, thresholds, eval_sequences):
-    import torch
-    from torch import nn
-
-    model = LSTMActionModel(**model_config).model.to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
-    criterion = nn.CrossEntropyLoss()
-    history = []
-    for epoch in range(1, args.epochs + 1):
-        model.train()
-        total_loss = 0.0
-        total = 0
         for x_batch, y_batch in train_loader:
             x_batch = x_batch.to(device)
             y_batch = y_batch.to(device)
