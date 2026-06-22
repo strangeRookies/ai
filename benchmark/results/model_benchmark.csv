@@ -1,7 +1,0 @@
-model_name,video_name,device,imgsz,total_frames,processed_frames,avg_fps,avg_latency_ms,p95_latency_ms,gpu_memory_mb,avg_person_confidence,avg_keypoint_confidence,keypoint_missing_rate,fall_candidate_count,error_or_status
-YOLOv8n-pose,(no video),cpu,640,0,0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0,SKIPPED: sample_videos folder is empty or has no supported video files
-YOLOv11n-pose,(no video),cpu,640,0,0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0,SKIPPED: sample_videos folder is empty or has no supported video files
-YOLO26n-pose,(no video),cpu,640,0,0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0,SKIPPED: sample_videos folder is empty or has no supported video files
-YOLOv8s-pose,(no video),cpu,640,0,0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0,SKIPPED: sample_videos folder is empty or has no supported video files
-YOLOv11s-pose,(no video),cpu,640,0,0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0,SKIPPED: sample_videos folder is empty or has no supported video files
-YOLO26s-pose,(no video),cpu,640,0,0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0,SKIPPED: sample_videos folder is empty or has no supported video files

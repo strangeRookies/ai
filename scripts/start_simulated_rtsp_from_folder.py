@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import signal
 import subprocess
@@ -63,7 +64,7 @@ def parse_arguments() -> argparse.Namespace:
         "--ffmpeg-mode",
         choices=["copy", "cpu", "nvenc"],
         default=os.environ.get("FFMPEG_MODE", "cpu"),
-        help="FFmpeg encoding mode (copy: direct copy, cpu: libx264 encoding, nvenc: h264_nvenc hardware acceleration)."
+        help="FFmpeg encoding mode. CPU/NVENC modes apply the browser-safe output profile."
     )
     return parser.parse_args()
 
@@ -88,23 +89,29 @@ def build_ffmpeg_cmd(video_path: Path, rtsp_url: str, loop: bool, ffmpeg_mode: s
     if loop:
         cmd.extend(["-stream_loop", "-1"])
     cmd.extend(["-i", str(video_path), "-an"])
-    
+
     mode = ffmpeg_mode.lower()
     if mode == "copy":
         cmd.extend(["-c:v", "copy"])
-    elif mode == "nvenc":
+    else:
         cmd.extend([
-            "-c:v", "h264_nvenc",
-            "-preset", "p1",
-            "-tune", "zerolatency"
+            "-vf",
+            "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,fps=15",
+            "-c:v", "h264_nvenc" if mode == "nvenc" else "libx264",
+            "-preset", "p1" if mode == "nvenc" else "ultrafast",
+            "-tune", "zerolatency",
         ])
-    else: # cpu mode
+
+    if mode != "copy":
         cmd.extend([
-            "-c:v", "libx264",
-            "-preset", "ultrafast",
-            "-tune", "zerolatency"
+        "-pix_fmt", "yuv420p",
+        "-g", "30",
+        "-keyint_min", "30",
+        "-sc_threshold", "0",
+        "-b:v", "1500k",
+        "-maxrate", "1800k",
+        "-bufsize", "3000k",
         ])
-        
     cmd.extend(["-f", "rtsp", "-rtsp_transport", "tcp", rtsp_url])
     return cmd
 
@@ -129,6 +136,13 @@ def video_for_camera(camera: RegisteredCamera, video_files: list[Path], index: i
     if assigned_video is not None:
         return assigned_video
     return video_files[index % len(video_files)]
+
+
+def stable_video_index(camera_login_id: str, video_count: int) -> int:
+    if video_count <= 0:
+        raise ValueError("video_count must be positive")
+    digest = hashlib.sha256(camera_login_id.encode("utf-8")).digest()
+    return int.from_bytes(digest[:8], byteorder="big") % video_count
 
 
 def main() -> None:
@@ -215,11 +229,12 @@ def main() -> None:
                 current_active_ids = set()
                 
                 # Circularly assign scanned video files to active simulated cameras
-                for idx, camera in enumerate(simulated_cameras):
+                for camera in simulated_cameras:
                     cid = camera.camera_login_id
                     current_active_ids.add(cid)
 
-                    assigned_video = video_for_camera(camera, video_files, idx)
+                    video_index = stable_video_index(cid, len(video_files))
+                    assigned_video = video_for_camera(camera, video_files, video_index)
                     target_rtsp_url = camera_rtsp_url(rtsp_base_url, cid)
 
                     # Check if stream is already running for this camera

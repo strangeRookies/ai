@@ -1,9 +1,0 @@
-﻿split,label,label_name,domain,source_video,video_path,clip_path
-test,1,Faint,indoor_background,data/raw/indoor_background/indoor_1.mp4,data/raw/indoor_background/ignored_video_1.mp4,data/raw/indoor_background/clip_should_not_use.mp4
-test,0,Normal,indoor_background,data/raw/indoor_background/indoor_1.mp4,,
-test,1,Faint,indoor_background,data/raw/indoor_background/indoor_2.mp4,,
-test,0,Normal,indoor_background,data/raw/indoor_background/indoor_3.mp4,,
-test,1,Faint,outdoor,data/raw/outdoor/outdoor_1.mp4,,
-test,0,Normal,outdoor,data/raw/outdoor/outdoor_2.mp4,,
-test,1,Faint,outdoor,data/raw/outdoor/outdoor_3.mp4,,
-test,1,Faint,indoor_chromakey,data/raw/indoor_chromakey/croki_bad.mp4,,

@@ -1,3 +1,0 @@
-#!/usr/bin/env sh
-echo "fake pkill $@" >> runs/test_publish_multi_cam/pkill_calls.log
-exit 0
