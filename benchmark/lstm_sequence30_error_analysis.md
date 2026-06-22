@@ -119,54 +119,25 @@ Candidate motion features:
 
 Future model families such as GRU, TCN, ST-GCN, and PoseC3D are out of scope for this step. Treat them as later comparison candidates after the sequence 30 LSTM baseline has stable FN/FP evidence.
 
-## Class Imbalance Mitigation (Weighted Loss)
+## Class Imbalance Mitigation Results
 
-**Status**: 🚧 실행 예정 (Pending Execution on Server)
+**Status**: 실행 완료
 
-Based on the extreme 21:1 class imbalance (Normal: 3010, Faint: 144), two loss function adjustments have been implemented to penalize the model heavily for misclassifying the minority `Faint` class.
+기존 sequence_length=30 baseline에서는 모든 eval sample을 Normal로 예측하여 Faint recall이 0으로 나타났다. 이는 약 21:1 수준의 클래스 불균형으로 인해 모델이 다수 클래스인 Normal에 과도하게 치우친 결과로 해석된다.
 
-- **Weighted CrossEntropy (`--loss weighted-ce`)**: Re-weights the standard CrossEntropy Loss inversely proportional to class frequencies.
-- **Focal Loss (`--loss focal`)**: Applies `gamma=2.0` down-weighting to easily classified `Normal` samples, forcing the model to focus on the hard-to-learn `Faint` cases.
+이를 개선하기 위해 Weighted CrossEntropy와 Oversample 전략을 적용하였다.
 
-### Execution Commands (Remote Server)
+| metric          | Baseline CE | Weighted CE | Oversample |
+| --------------- | ----------: | ----------: | ---------: |
+| Accuracy        |    0.954373 |    0.926236 |   0.906119 |
+| Precision       |         0.0 |    0.153846 |      0.125 |
+| Faint recall    |         0.0 |    0.057143 |        0.1 |
+| F1 score        |         0.0 |    0.083333 |   0.111111 |
+| False Positives |           0 |          22 |         49 |
+| False Negatives |          36 |          66 |         63 |
 
-To run the training with the new Weighted CE loss, without overwriting previous baseline results, run:
+Weighted CE 적용 후 모델은 더 이상 모든 sample을 Normal로만 예측하지 않고 Faint를 일부 탐지하기 시작하였다. Oversample 전략은 Faint recall을 0.1까지 개선하여 현재 실험 중 가장 높은 Faint 탐지 성능을 보였다.
 
-```bash
-python scripts/run_lstm_sequence_length_comparison.py \
-  --output-dir benchmark/results/lstm_sequence_length_30_yolo26n_weighted_loss_v1 \
-  --detector-mode cache \
-  --keypoint-cache-dir ../ai_fall_experiments/data/keypoints/yolo26n-pose \
-  --device cuda:0 \
-  --epochs 5 \
-  --loss weighted-ce
-```
+다만 Precision과 F1은 여전히 낮으며, False Positive도 증가하였다. 따라서 현재 결과는 실전 배포 수준이라기보다, class imbalance 대응이 Faint recall 회복에 유효하다는 1차 근거로 해석한다.
 
-To run with Focal Loss:
-```bash
-python scripts/run_lstm_sequence_length_comparison.py \
-  --output-dir benchmark/results/lstm_sequence_length_30_yolo26n_focal_loss_v1 \
-  --detector-mode cache \
-  --keypoint-cache-dir ../ai_fall_experiments/data/keypoints/yolo26n-pose \
-  --device cuda:0 \
-  --epochs 5 \
-  --loss focal
-```
-
-### Verification & Logging Commands
-
-After training, verify the `summary.json` for Faint recall and F1 scores:
-```bash
-cat benchmark/results/lstm_sequence_length_30_yolo26n_weighted_loss_v1/sequence_length_30/YOLO26n-pose/summary.json | grep -A 10 '"lstm_metrics"'
-```
-
-### Experiment Results (Weighted CE vs Baseline)
-
-| metric | Baseline (CE) | Weighted CE | Focal Loss |
-| --- | --- | --- | --- |
-| Accuracy | 0.954373 | - | - |
-| Precision | 0.0 | - | - |
-| Faint recall | 0.0 | - | - |
-| F1 score | 0.0 | - | - |
-| False Positives | 0 | - | - |
-| False Negatives | 36 | - | - |
+현재 실험 split 기준으로 Faint/Normal cache hit 및 30프레임 sequence 생성은 정상적으로 확인되었다. 따라서 남은 성능 한계의 주요 원인은 cache 누락이 아니라 Faint 샘플 수 부족, 동일 Faint 샘플 반복에 따른 일반화 한계, 그리고 기존 51차원 keypoint feature의 변별력 부족으로 판단된다.
