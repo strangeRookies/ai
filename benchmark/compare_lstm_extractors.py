@@ -621,13 +621,14 @@ def train_single_lstm(train_loader, eval_loader, model_config, device, args, out
         class FocalLoss(nn.Module):
             def __init__(self, weight=None, gamma=2.0):
                 super().__init__()
-                self.ce = nn.CrossEntropyLoss(weight=weight, reduction='none')
+                self.ce = nn.CrossEntropyLoss(weight=alpha, reduction='none')
                 self.gamma = gamma
             def forward(self, inputs, targets):
                 ce_loss = self.ce(inputs, targets)
                 pt = torch.exp(-ce_loss)
                 return ((1 - pt) ** self.gamma * ce_loss).mean()
-        criterion = FocalLoss(weight=alpha)
+        # Do not use extreme alpha weights with focal loss, let gamma handle the imbalance
+        criterion = FocalLoss(weight=None, gamma=2.0)
     else:
         criterion = nn.CrossEntropyLoss()
     history = []
