@@ -67,7 +67,7 @@ def parse_args():
     parser.add_argument("--prefilter-max-frames", type=int, default=120, help="Maximum frames per Normal candidate during prefiltering.")
     parser.add_argument("--audit-thresholds", default="0.3,0.4,0.5,0.6,0.7", help="Comma-separated Faint probability thresholds for prediction audit.")
     parser.add_argument("--repeat-seeds", type=int, default=1, help="Train/evaluate LSTM repeatedly for N deterministic seeds and report recall/F1 mean/std.")
-    parser.add_argument("--loss", choices=["ce", "weighted-ce", "focal"], default="ce", help="Loss function to use (default: ce). weighted-ce or focal handles class imbalance.")
+    parser.add_argument("--loss", choices=["ce", "weighted-ce", "focal", "oversample"], default="ce", help="Loss function to use (default: ce). weighted-ce or focal handles class imbalance.")
     return parser.parse_args()
 
 
@@ -615,9 +615,32 @@ def train_single_lstm(train_loader, eval_loader, model_config, device, args, out
         weights = [w * model_config["num_classes"] / max(sum_w, 1e-6) for w in weights]
         alpha = torch.FloatTensor(weights).to(device)
 
-    if getattr(args, "loss", "ce") == "weighted-ce":
-        criterion = nn.CrossEntropyLoss(weight=alpha)
-    elif getattr(args, "loss", "ce") == "focal":
+    if args.loss == "weighted-ce":
+        # Calculate class counts from train_y
+        labels, counts = np.unique(train_y, return_counts=True)
+        # Handle missing classes if any
+        class_counts = [0, 0]
+        for l, c in zip(labels, counts):
+            class_counts[l] = c
+        # Basic inverse frequency
+        counts_arr = np.array(class_counts)
+        weights = torch.tensor([1.0 - (count / counts_arr.sum()) for count in counts_arr], dtype=torch.float32)
+        if args.device != "cpu":
+            weights = weights.to(args.device)
+        criterion = nn.CrossEntropyLoss(weight=weights)
+    elif args.loss == "oversample":
+        faint_indices = np.where(train_y == 1)[0]
+        normal_indices = np.where(train_y == 0)[0]
+        if len(faint_indices) > 0 and len(normal_indices) > len(faint_indices):
+            repeats = len(normal_indices) // len(faint_indices)
+            remainder = len(normal_indices) % len(faint_indices)
+            oversampled_faint = np.concatenate([np.repeat(faint_indices, repeats), faint_indices[:remainder]])
+            new_indices = np.concatenate([normal_indices, oversampled_faint])
+            np.random.shuffle(new_indices)
+            train_x = train_x[new_indices]
+            train_y = train_y[new_indices]
+        criterion = nn.CrossEntropyLoss()
+    elif args.loss == "focal":
         class FocalLoss(nn.Module):
             def __init__(self, weight=None, gamma=2.0):
                 super().__init__()
