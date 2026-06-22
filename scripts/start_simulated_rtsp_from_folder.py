@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import signal
 import subprocess
@@ -138,6 +139,13 @@ def video_for_camera(camera: RegisteredCamera, video_files: list[Path], index: i
     return video_files[index % len(video_files)]
 
 
+def stable_video_index(camera_login_id: str, video_count: int) -> int:
+    if video_count <= 0:
+        raise ValueError("video_count must be positive")
+    digest = hashlib.sha256(camera_login_id.encode("utf-8")).digest()
+    return int.from_bytes(digest[:8], byteorder="big") % video_count
+
+
 def main() -> None:
     args = parse_arguments()
     video_dir = args.video_dir
@@ -222,11 +230,12 @@ def main() -> None:
                 current_active_ids = set()
                 
                 # Circularly assign scanned video files to active simulated cameras
-                for idx, camera in enumerate(simulated_cameras):
+                for camera in simulated_cameras:
                     cid = camera.camera_login_id
                     current_active_ids.add(cid)
 
-                    assigned_video = video_for_camera(camera, video_files, idx)
+                    video_index = stable_video_index(cid, len(video_files))
+                    assigned_video = video_for_camera(camera, video_files, video_index)
                     target_rtsp_url = camera_rtsp_url(rtsp_base_url, cid)
 
                     # Check if stream is already running for this camera

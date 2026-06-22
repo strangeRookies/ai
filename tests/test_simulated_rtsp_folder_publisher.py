@@ -3,10 +3,18 @@ import unittest
 from pathlib import Path
 
 from ai.registered_cameras import RegisteredCamera
-from scripts.start_simulated_rtsp_from_folder import build_ffmpeg_cmd, video_for_camera
+from scripts.start_simulated_rtsp_from_folder import build_ffmpeg_cmd, stable_video_index, video_for_camera
 
 
 class SimulatedRtspFolderPublisherTest(unittest.TestCase):
+    def test_fallback_video_index_is_stable_for_camera_id(self):
+        first = stable_video_index("cam_01", 12)
+        second = stable_video_index("cam_01", 12)
+
+        self.assertEqual(first, second)
+        self.assertGreaterEqual(first, 0)
+        self.assertLess(first, 12)
+
     def test_ffmpeg_command_limits_browser_stream_load(self):
         command = build_ffmpeg_cmd(Path("sample.mp4"), "rtsp://localhost:8554/cam_01", True)
 
