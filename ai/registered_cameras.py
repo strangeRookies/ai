@@ -122,7 +122,7 @@ def parse_camera(raw: RawCamera) -> RegisteredCamera | None:
         )
         return None
 
-    raw_source_type = raw.get("sourceType") or "REAL_RTSP"
+    raw_source_type = raw.get("sourceType") or "SIMULATED_RTSP"
     match raw_source_type:
         case "REAL_RTSP" | "SIMULATED_RTSP":
             source_type: CameraSourceType = raw_source_type
