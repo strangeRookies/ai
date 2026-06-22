@@ -152,21 +152,34 @@ Weighted CE 적용 후 모델은 더 이상 모든 sample을 Normal로만 예측
 - **Class Imbalance Strategy**: 최적 성능을 보인 `Oversample` 적용 (필요시 `Weighted CE`와 비교)
 - **기존 결과 보존**: 기존의 `v1`, `v2` 결과 파일 및 디렉토리는 절대 덮어쓰지 않고 새로운 디렉토리(`full_data_v1`)를 사용
 
-### 2. Full-Data 학습 절차 (두 가지 선택지)
+### 2. Full-Data 학습 절차 (추천 방식: Option A 키포인트 선행 캐싱)
 
-전체 18만 개에 달하는 방대한 클립을 학습하기 위해서는 다음 두 가지 방법 중 하나를 선택해야 합니다.
+매번 추론을 병행하는 `--detector-mode real` 방식은 8시간 이상이 소요되어 하이퍼파라미터 튜닝 시 비효율적입니다. 따라서 사전에 missing keypoint cache를 확장한 뒤 `--detector-mode cache`로 1분 만에 재학습하는 절차(Option A)를 추천합니다.
 
-**옵션 A: 키포인트 캐시 선행 확장 (반복 실험 추천)**
-기존에 중단되었거나 누락된 나머지 95%의 전체 데이터에 대해 사전에 키포인트를 추출하여 캐시(`yolo26n-pose/`)를 100% 채운 뒤 학습을 진행합니다.
-초기 추출 시간이 소요되지만, 캐시가 완성되면 이후 학습 소요 시간이 1분 이내로 단축되므로 다양한 Feature나 파라미터 튜닝 시 매우 유리합니다.
-
-**옵션 B: 실시간 추론 학습 (`--detector-mode real`)**
-별도의 캐시 완성 과정 없이, 학습 스크립트 실행 시점에 실시간으로 YOLO 추론을 수행하며 학습을 진행합니다. (약 8시간 이상의 밤샘 학습 소요 예상)
-- **실행 명령어**:
+**1단계: Faint (소수 클래스) 누락 캐시 우선 보강**
 ```bash
+python scripts/extract_keypoint_cache.py \
+  --metadata-csv ../ai_fall_experiments/data/metadata/metadata.csv \
+  --cache-dir ../ai_fall_experiments/data/keypoints/yolo26n-pose \
+  --faint-only
+```
+- 기존 정상 캐시나 짧은/오류 파일은 덮어쓰지 않고(`--overwrite` 미사용 시) Missing 파일만 골라 생성합니다.
+
+**2단계: 전체 (Normal 포함) 누락 캐시 최종 보강**
+```bash
+python scripts/extract_keypoint_cache.py \
+  --metadata-csv ../ai_fall_experiments/data/metadata/metadata.csv \
+  --cache-dir ../ai_fall_experiments/data/keypoints/yolo26n-pose
+```
+
+**3단계: 캐시 기반 Full-Data 학습 진행 (Weighted CE / Oversample / Focal Loss 등 비교)**
+기존 구조(Sequence Length=30, YOLO26n-pose, LSTM)를 유지하며 완성된 캐시를 활용하여 쾌속 재학습을 진행합니다.
+```bash
+# Oversample 적용 예시 (권장)
 python scripts/run_lstm_sequence_length_comparison.py \
   --output-dir benchmark/results/lstm_sequence_length_30_yolo26n_full_data_v1 \
-  --detector-mode real \
+  --detector-mode cache \
+  --keypoint-cache-dir ../ai_fall_experiments/data/keypoints/yolo26n-pose \
   --device cuda:0 \
   --epochs 5 \
   --loss oversample
