@@ -552,6 +552,19 @@ def train_and_evaluate(train_x, train_y, eval_x, eval_y, eval_sequences, args, o
     import torch
     from torch.utils.data import DataLoader, TensorDataset
 
+    if args.loss == "oversample":
+        train_y_arr = np.asarray(train_y, dtype=np.int64)
+        faint_indices = np.where(train_y_arr == 1)[0]
+        normal_indices = np.where(train_y_arr == 0)[0]
+        if len(faint_indices) > 0 and len(normal_indices) > len(faint_indices):
+            repeats = len(normal_indices) // len(faint_indices)
+            remainder = len(normal_indices) % len(faint_indices)
+            oversampled_faint = np.concatenate([np.repeat(faint_indices, repeats), faint_indices[:remainder]])
+            new_indices = np.concatenate([normal_indices, oversampled_faint])
+            np.random.shuffle(new_indices)
+            train_x = [train_x[i] for i in new_indices]
+            train_y = [train_y[i] for i in new_indices]
+
     resolved_device = normalize_torch_device(args.device, torch, no_cpu_fallback=args.no_cpu_fallback)
     device = torch.device(resolved_device)
     train_tensor = torch.from_numpy(np.stack(train_x).astype(np.float32))
@@ -628,18 +641,6 @@ def train_single_lstm(train_loader, eval_loader, model_config, device, args, out
         if args.device != "cpu":
             weights = weights.to(args.device)
         criterion = nn.CrossEntropyLoss(weight=weights)
-    elif args.loss == "oversample":
-        faint_indices = np.where(train_y == 1)[0]
-        normal_indices = np.where(train_y == 0)[0]
-        if len(faint_indices) > 0 and len(normal_indices) > len(faint_indices):
-            repeats = len(normal_indices) // len(faint_indices)
-            remainder = len(normal_indices) % len(faint_indices)
-            oversampled_faint = np.concatenate([np.repeat(faint_indices, repeats), faint_indices[:remainder]])
-            new_indices = np.concatenate([normal_indices, oversampled_faint])
-            np.random.shuffle(new_indices)
-            train_x = train_x[new_indices]
-            train_y = train_y[new_indices]
-        criterion = nn.CrossEntropyLoss()
     elif args.loss == "focal":
         class FocalLoss(nn.Module):
             def __init__(self, weight=None, gamma=2.0):
