@@ -13,5 +13,5 @@ def build_ffmpeg_command(video_path: Path, rtsp_url: str) -> list[str]:
         command.extend(["-c:v", "h264_nvenc", "-preset", "p1", "-tune", "zerolatency"])
     else:
         command.extend(["-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency"])
-    command.extend(["-f", "rtsp", rtsp_url])
+    command.extend(["-f", "rtsp", "-rtsp_transport", "tcp", rtsp_url])
     return command

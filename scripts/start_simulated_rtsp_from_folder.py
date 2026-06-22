@@ -112,8 +112,7 @@ def build_ffmpeg_cmd(video_path: Path, rtsp_url: str, loop: bool, ffmpeg_mode: s
         "-maxrate", "1800k",
         "-bufsize", "3000k",
         ])
-
-    cmd.extend(["-f", "rtsp", rtsp_url])
+    cmd.extend(["-f", "rtsp", "-rtsp_transport", "tcp", rtsp_url])
     return cmd
 
 

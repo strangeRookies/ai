@@ -17,6 +17,10 @@ from ai.action.classifier import LSTMActionModel
 from ai.streams.video_reader import VideoReader
 from detector.mock_detector import MockDetector
 from detector.yolo_pose_detector import YoloPoseDetector
+try:
+    from benchmark.keypoint_cache_loader import keypoint_array_to_frames, load_keypoint_cache, resolve_keypoint_cache_path
+except ModuleNotFoundError:
+    from keypoint_cache_loader import keypoint_array_to_frames, load_keypoint_cache, resolve_keypoint_cache_path
 from scripts.run_dataset_evaluation import label_name, read_dataset_rows
 from scripts.run_rtsp_inference import ensure_mock_keypoints
 
@@ -40,7 +44,8 @@ def parse_args():
     parser.add_argument("--metadata-csv", default="../ai_fall_experiments/data/metadata/metadata.csv")
     parser.add_argument("--output-dir", default="benchmark/results/lstm_extractor_comparison")
     parser.add_argument("--models", default="YOLOv11n-pose:yolo11n-pose.pt,YOLO26n-pose:yolo26n-pose.pt,YOLOv8s-pose:yolov8s-pose.pt")
-    parser.add_argument("--detector-mode", choices=["real", "mock"], default="real")
+    parser.add_argument("--detector-mode", choices=["real", "mock", "cache"], default="real")
+    parser.add_argument("--keypoint-cache-dir", default="../ai_fall_experiments/data/keypoints/yolo26n-pose")
     parser.add_argument("--device", default="auto")
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--sequence-length", type=int, default=16)
@@ -82,6 +87,8 @@ def parse_model_specs(raw):
 def create_pose_detector(mode, model_name, device, imgsz, conf=0.25):
     if mode == "mock":
         return MockDetector(model_name="mock-pose-detector")
+    if mode == "cache":
+        return None
     return YoloPoseDetector(model_name, device=device, imgsz=imgsz, conf=conf)
 
 
@@ -223,7 +230,96 @@ def sequence_to_features(sequence, frame_shapes, keypoint_conf_threshold):
     return np.stack(rows, axis=0), missing, total
 
 
+def collect_cached_split_sequences(rows, split_name, args):
+    x_rows = []
+    y_rows = []
+    sequence_rows = []
+    clip_summaries = []
+    totals = Counter()
+    selected = [row for row in rows if (row.get("split") or "") == split_name]
+    for row in selected:
+        video_path = row.get("_resolved_video_path") or ""
+        clip_id = row.get("clip_id") or Path(row.get("video_path") or row.get("clip_path") or video_path).stem
+        frame_start, frame_end = parse_frame_range(video_path or row.get("video_path") or row.get("clip_path") or "")
+        cache_path = resolve_keypoint_cache_path(row, args.keypoint_cache_dir)
+        clip = {
+            "clip_id": clip_id,
+            "split": split_name,
+            "label": label_name(row),
+            "video_path": video_path,
+            "frame_start": frame_start,
+            "frame_end": frame_end,
+            "frames_processed": 0,
+            "person_detections": 0,
+            "keypoints_extracted": 0,
+            "generated_sequences": 0,
+            "zero_sequence": True,
+            "reason_if_zero_sequence": "",
+            "fallback_usage": 0,
+            "missing_keypoints": 0,
+            "total_keypoints": 0,
+            "error": None,
+        }
+        if cache_path is None:
+            clip["error"] = "keypoint_cache_not_found"
+            clip["reason_if_zero_sequence"] = "keypoint_cache_not_found"
+            clip_summaries.append(clip)
+            continue
+        try:
+            frames = keypoint_array_to_frames(load_keypoint_cache(cache_path))
+            buffer = KeypointSequenceBuffer(args.sequence_length, args.sequence_stride)
+            shape_buffer = []
+            for frame in frames:
+                if args.max_frames > 0 and clip["frames_processed"] >= args.max_frames:
+                    break
+                detections = frame["detections"]
+                clip["frames_processed"] += 1
+                clip["person_detections"] += len(detections)
+                clip["keypoints_extracted"] += sum(1 for item in detections if item.get("keypoints"))
+                sequence = buffer.add(frame["frame_idx"], detections)
+                shape_buffer.append(frame["frame_shape"])
+                shape_buffer = shape_buffer[-args.sequence_length :]
+                if sequence is None:
+                    continue
+                features, missing, total = sequence_to_features(sequence, shape_buffer, args.keypoint_conf_threshold)
+                x_rows.append(features)
+                y_rows.append(row_label_id(row))
+                clip["generated_sequences"] += 1
+                clip["missing_keypoints"] += missing
+                clip["total_keypoints"] += total
+                sequence_rows.append(
+                    {
+                        "clip_id": clip_id,
+                        "split": split_name,
+                        "label": label_name(row),
+                        "frame_start": sequence["start_frame"],
+                        "frame_end": sequence["end_frame"],
+                        "missing_keypoints": missing,
+                        "total_keypoints": total,
+                    }
+                )
+        except (OSError, KeyError, ValueError) as exc:
+            clip["error"] = str(exc)
+        clip["zero_sequence"] = clip["generated_sequences"] == 0
+        if clip["zero_sequence"] and not clip["reason_if_zero_sequence"]:
+            clip["reason_if_zero_sequence"] = zero_sequence_reason(clip)
+        clip_summaries.append(clip)
+    for clip in clip_summaries:
+        totals["clips_processed"] += 1 if clip["frames_processed"] > 0 else 0
+        totals["clips_requested"] += 1
+        totals["person_detections"] += clip["person_detections"]
+        totals["keypoints_extracted"] += clip["keypoints_extracted"]
+        totals["generated_sequences"] += clip["generated_sequences"]
+        totals["zero_sequence_clips"] += 1 if clip["zero_sequence"] else 0
+        totals["fallback_usage"] += clip["fallback_usage"]
+        totals["missing_keypoints"] += clip["missing_keypoints"]
+        totals["total_keypoints"] += clip["total_keypoints"]
+    return x_rows, y_rows, clip_summaries, sequence_rows, dict(totals)
+
+
 def collect_split_sequences(rows, split_name, detector, args):
+    if args.detector_mode == "cache":
+        return collect_cached_split_sequences(rows, split_name, args)
     x_rows = []
     y_rows = []
     sequence_rows = []
@@ -812,7 +908,7 @@ def compare_model(spec, rows, args, output_dir, selected_class_counts):
     (model_dir / "repeated_seed_audit.json").write_text(json.dumps(metrics.get("repeated_seed_audit", {}), indent=2, ensure_ascii=False), encoding="utf-8")
     summary = {
         "model_label": spec["label"],
-        "pose_model": spec["model"] if args.detector_mode == "real" else "mock",
+        "pose_model": spec["model"] if args.detector_mode in {"real", "cache"} else "mock",
         "fall_candidate_count_policy": "reference_only_not_model_selection",
         "train_split": args.train_split,
         "eval_split": args.eval_split,

@@ -48,20 +48,20 @@ Windows PowerShell에서 실행합니다.
 ```powershell
 cd "C:\Users\user\Documents\최종 쉴더스"
 
-# 1. 안전하게 백그라운드로 도커 서비스 빌드 및 실행
-docker compose -f strange_infra/docker-compose.yml up -d --build
+# 1. 안전하게 백그라운드로 도커 서비스 빌드 및 실행 (Redis 포함)
+docker compose -f strange_infra/docker-compose.yml --profile redis up -d --build
 docker compose -f strange_infra/docker-compose.yml ps
 ```
 
 > [!CAUTION]
 > **DB 데이터 영구 삭제 방지 (중요!)**
-> * 단순히 서비스를 껐다 켜거나 재부팅하고 싶을 때는 반드시 **`docker compose -f strange_infra/docker-compose.yml down`** (옵션 없음)을 사용하세요.
+> * 단순히 서비스를 껐다 켜거나 재부팅하고 싶을 때는 반드시 **`docker compose -f strange_infra/docker-compose.yml --profile redis down`** (옵션 없음)을 사용하세요.
 > * **`docker compose down -v`** 명령어의 **`-v` (Volume 삭제) 옵션**은 컨테이너 데이터 저장소(named volume인 `postgres-data`)를 영구적으로 완전히 삭제합니다. 이로 인해 가입한 계정 정보와 Seeding된 데이터가 전부 지워지므로, 초기화 목적이 아닌 경우 **절대 `-v`를 사용하지 마십시오.**
 > * **안전한 재시작 방법**:
 >   ```powershell
->   # 데이터는 그대로 유지한 채 안전하게 껐다 켜기
->   docker compose -f strange_infra/docker-compose.yml down
->   docker compose -f strange_infra/docker-compose.yml up -d
+>   # 데이터는 그대로 유지한 채 안전하게 껐다 켜기 (Redis 포함)
+>   docker compose -f strange_infra/docker-compose.yml --profile redis down
+>   docker compose -f strange_infra/docker-compose.yml --profile redis up -d
 >   ```
 
 > [!NOTE]
@@ -76,6 +76,7 @@ docker compose -f strange_infra/docker-compose.yml ps
 - `strange-frontend`: `localhost:3000`
 - `strange-postgres`: `localhost:5432`
 - `strange-mosquitto`: `localhost:1883`
+- `strange-redis`: `localhost:6379` (Redis 추가됨)
 
 확인:
 

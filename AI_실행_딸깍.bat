@@ -5,7 +5,7 @@ echo ========================================================
 
 echo.
 echo [1/3] Connecting to GPU PC to stop old processes and pull latest code...
-ssh welabs@58.127.241.84 "cd /home/welabs/yolo_training/strange_ai_lstm && git stash && git fetch origin && git checkout codex/ai-worker-flow-improvements && git pull origin codex/ai-worker-flow-improvements && pkill -f 'scripts/run_registered_cameras.py' 2>/dev/null || true && pkill -f 'scripts/start_simulated_rtsp_from_folder.py' 2>/dev/null || true && pkill -f 'scripts/serve_ai_overlay.py' 2>/dev/null || true && pkill -f 'rtsp://127.0.0.1:8554' 2>/dev/null || true && fuser -k 8010/tcp 2>/dev/null || true && fuser -k 8011/tcp 2>/dev/null || true && fuser -k 8012/tcp 2>/dev/null || true && fuser -k 8013/tcp 2>/dev/null || true && docker rm -f mediamtx 2>/dev/null || true"
+ssh welabs@58.127.241.84 "cd /home/welabs/yolo_training/strange_ai_lstm && git stash && git fetch origin && git checkout develop && git pull origin develop && pkill -f 'scripts/run_registered_cameras.py' 2>/dev/null || true && pkill -f 'scripts/start_simulated_rtsp_from_folder.py' 2>/dev/null || true && pkill -f 'scripts/serve_ai_overlay.py' 2>/dev/null || true && pkill -f 'rtsp://127.0.0.1:8554' 2>/dev/null || true && fuser -k 8010/tcp 2>/dev/null || true && fuser -k 8011/tcp 2>/dev/null || true && fuser -k 8012/tcp 2>/dev/null || true && fuser -k 8013/tcp 2>/dev/null || true && docker rm -f mediamtx 2>/dev/null || true"
 
 echo.
 echo [2/3] Spawning AI systems (MediaMTX, RTSP Publisher, AI Runner) on GPU PC...
