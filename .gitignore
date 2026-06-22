@@ -15,6 +15,15 @@ env/
 .env
 .env.*
 !.env.example
+AI_DEV_LOCAL_CONFIG.bat
+
+# Local credentials and private keys
+*.pem
+*.p12
+*.pfx
+*.key
+id_rsa*
+id_ed25519*
 
 # Editor and OS files
 .vscode/
@@ -55,3 +64,6 @@ sample_videos/*
 *.tar.gz
 *.7z
 *.docx
+
+# Local troubleshooting notes
+er.md

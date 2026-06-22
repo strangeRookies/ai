@@ -63,7 +63,7 @@ def parse_arguments() -> argparse.Namespace:
         "--ffmpeg-mode",
         choices=["copy", "cpu", "nvenc"],
         default=os.environ.get("FFMPEG_MODE", "cpu"),
-        help="FFmpeg encoding mode (copy: direct copy, cpu: libx264 encoding, nvenc: h264_nvenc hardware acceleration)."
+        help="FFmpeg encoding mode. CPU/NVENC modes apply the browser-safe output profile."
     )
     return parser.parse_args()
 
@@ -88,23 +88,30 @@ def build_ffmpeg_cmd(video_path: Path, rtsp_url: str, loop: bool, ffmpeg_mode: s
     if loop:
         cmd.extend(["-stream_loop", "-1"])
     cmd.extend(["-i", str(video_path), "-an"])
-    
+
     mode = ffmpeg_mode.lower()
     if mode == "copy":
         cmd.extend(["-c:v", "copy"])
-    elif mode == "nvenc":
+    else:
         cmd.extend([
-            "-c:v", "h264_nvenc",
-            "-preset", "p1",
-            "-tune", "zerolatency"
+            "-vf",
+            "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,fps=15",
+            "-c:v", "h264_nvenc" if mode == "nvenc" else "libx264",
+            "-preset", "p1" if mode == "nvenc" else "ultrafast",
+            "-tune", "zerolatency",
         ])
-    else: # cpu mode
+
+    if mode != "copy":
         cmd.extend([
-            "-c:v", "libx264",
-            "-preset", "ultrafast",
-            "-tune", "zerolatency"
+        "-pix_fmt", "yuv420p",
+        "-g", "30",
+        "-keyint_min", "30",
+        "-sc_threshold", "0",
+        "-b:v", "1500k",
+        "-maxrate", "1800k",
+        "-bufsize", "3000k",
         ])
-        
+
     cmd.extend(["-f", "rtsp", rtsp_url])
     return cmd
 
