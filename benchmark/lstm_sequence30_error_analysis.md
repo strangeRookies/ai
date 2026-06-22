@@ -50,11 +50,20 @@ False Positive가 22개 발생했지만, Faint를 4개(약 5.7%) 잡아냈습니
 **Interpretation (최종 결론):**
 Oversample 기법이 꼼수나 폭주 없이 정직하게 판단 기준을 조정하여, Faint 예측을 자연스럽게 수행하기 시작했습니다. 기존 `weighted-ce`에서 임계값을 0.4로 인위적으로 낮춰야만 얻을 수 있었던 성능을 기본 상태에서 달성했습니다.
 
-**한계 원인 (데이터 누락):**
-현재 Recall이 10%에 머무는 근본적인 이유는 모델 코드가 아니라 **키포인트 캐시 폴더의 데이터 유실**에 있습니다. `train` 세트 기준 실제 존재하는 Faint 데이터는 7,124개지만, 캐시에 존재하는 영상은 단 110개뿐이었습니다. 모델은 이 110개만으로 기절의 특징을 유추해야 했으므로 일반화에 한계가 있었습니다. 
-추후 `--detector-mode real`을 통해 7,124개의 전체 Faint 데이터를 모두 사용하여 학습(`--loss oversample`)하면 실전 배치 가능한 수준의 Recall 상승이 확실시됩니다.
+**한계 원인 (일반화 한계 및 Feature 변별력 부족):**
+현재 실험 split 기준(`test` 등)으로 캐시 매칭률은 정상(100%)이나, 절대적인 Faint 샘플 수가 너무 적습니다 (Normal 3010 vs Faint 144, 약 21:1 불균형).
+Oversampling을 통해 비율을 맞추었음에도 Recall이 10%에 머무는 근본적인 이유는 다음과 같습니다:
+1. **동일 샘플 반복에 의한 과적합**: 144개의 동일한 Faint 영상만 21배 반복 학습하므로, 새로운 Faint 영상에 대한 일반화(Generalization) 성능이 떨어집니다.
+2. **Feature 변별력 부족**: 현재 사용 중인 단순 Keypoint 51차원(17개 x 3) Feature만으로는 Normal과 Faint를 명확히 구분하기에 정보량이 부족할 수 있습니다.
 
-## FN/FP Extraction
+## Next Steps (향후 개선 방향)
+
+1. **Loss 및 샘플링 전략 정교화**
+   - 현재 확인된 Weighted CE / Focal Loss / Oversample 전략을 정량적으로 비교 분석하여 최적의 조합 도출
+2. **Motion Feature 추가 (Feature Engineering)**
+   - 단순 Keypoint 좌표뿐만 아니라, 프레임 간의 속도(Velocity), 가속도(Acceleration), 또는 주요 관절 각도 변화량 등 시계열적 모션 피처를 추가하여 변별력을 높임
+3. **학습 데이터 확장 (후순위)**
+   - 더 넓은 일반화가 필요할 시, `--detector-mode real`을 사용하여 캐시되지 않은 전체 대규모 데이터셋(약 18만 개)에 대해 장시간(8시간 이상) 학습 진행
 
 After a sequence 30 run writes `eval_predictions.csv`, export error samples with:
 
