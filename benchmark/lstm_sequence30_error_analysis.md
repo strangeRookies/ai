@@ -141,3 +141,43 @@ Weighted CE 적용 후 모델은 더 이상 모든 sample을 Normal로만 예측
 다만 Precision과 F1은 여전히 낮으며, False Positive도 증가하였다. 따라서 현재 결과는 실전 배포 수준이라기보다, class imbalance 대응이 Faint recall 회복에 유효하다는 1차 근거로 해석한다.
 
 현재 실험 split 기준으로 Faint/Normal cache hit 및 30프레임 sequence 생성은 정상적으로 확인되었다. 따라서 남은 성능 한계의 주요 원인은 cache 누락이 아니라 Faint 샘플 수 부족, 동일 Faint 샘플 반복에 따른 일반화 한계, 그리고 기존 51차원 keypoint feature의 변별력 부족으로 판단된다.
+
+## Full-Data Training Preparation (실제 전체 데이터 기반 학습 준비)
+
+현재 진행된 실험들은 제한된 캐시 데이터(split) 내에서의 **클래스 불균형(Class Imbalance) 진단 및 해소**를 목적으로 진행되었습니다. Weighted CE와 Oversample 등을 통해 모델이 Faint를 무시하지 않고 정상적으로 탐지할 수 있는 기반은 마련되었으나, 절대적인 샘플 수 부족으로 인한 일반화 한계를 극복하기 위해서는 대규모 전체 데이터를 사용하는 학습(Full-Data Training) 단계로 전환해야 합니다.
+
+### 1. 실험 설정 및 유지 사항
+- **Sequence Length**: 30 프레임 유지
+- **Model**: YOLO26n-pose (Pose Extraction) + 기존 LSTM 아키텍처 유지
+- **Class Imbalance Strategy**: 최적 성능을 보인 `Oversample` 적용 (필요시 `Weighted CE`와 비교)
+- **기존 결과 보존**: 기존의 `v1`, `v2` 결과 파일 및 디렉토리는 절대 덮어쓰지 않고 새로운 디렉토리(`full_data_v1`)를 사용
+
+### 2. Full-Data 학습 절차 (두 가지 선택지)
+
+전체 18만 개에 달하는 방대한 클립을 학습하기 위해서는 다음 두 가지 방법 중 하나를 선택해야 합니다.
+
+**옵션 A: 키포인트 캐시 선행 확장 (반복 실험 추천)**
+기존에 중단되었거나 누락된 나머지 95%의 전체 데이터에 대해 사전에 키포인트를 추출하여 캐시(`yolo26n-pose/`)를 100% 채운 뒤 학습을 진행합니다.
+초기 추출 시간이 소요되지만, 캐시가 완성되면 이후 학습 소요 시간이 1분 이내로 단축되므로 다양한 Feature나 파라미터 튜닝 시 매우 유리합니다.
+
+**옵션 B: 실시간 추론 학습 (`--detector-mode real`)**
+별도의 캐시 완성 과정 없이, 학습 스크립트 실행 시점에 실시간으로 YOLO 추론을 수행하며 학습을 진행합니다. (약 8시간 이상의 밤샘 학습 소요 예상)
+- **실행 명령어**:
+```bash
+python scripts/run_lstm_sequence_length_comparison.py \
+  --output-dir benchmark/results/lstm_sequence_length_30_yolo26n_full_data_v1 \
+  --detector-mode real \
+  --device cuda:0 \
+  --epochs 5 \
+  --loss oversample
+```
+
+### 3. 검증(Validation) 및 임계값(Threshold) 선택 기준
+전체 데이터 학습 시, 신뢰성 있는 모델 평가와 실전 배포를 위해 분리 기준과 임계값 튜닝 전략을 명확히 합니다.
+
+1. **Val / Test Split 분할 용도**: 
+   - `val` split: 학습 진행 중인 모델의 성능 모니터링, Early Stopping, 그리고 실전 배포를 위한 **최적의 임계값(Threshold)을 탐색하고 결정**하는 용도로만 사용합니다.
+   - `test` split: 학습 및 임계값 결정이 완전히 끝난 후, 모델이 한 번도 보지 못한 환경에서의 **최종 실전 성능을 측정하는 1회용 평가 잣대**로만 사용합니다.
+2. **Threshold 선택 기준**: 
+   - 배포 시스템의 제1 목적은 사고 방지이므로, **Faint 클래스의 Recall을 최우선(목표: 80% 이상)으로 방어**할 수 있는 임계값을 일차적으로 선택합니다.
+   - 단, 지나친 오탐은 관제 피로도를 높이므로, 1시간당 발생하는 False Positive(오탐)의 수용 가능 범위를 산정하여 Precision과의 타협점(Trade-off)을 최종 임계값으로 결정합니다.
