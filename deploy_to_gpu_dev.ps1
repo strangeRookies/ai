@@ -59,6 +59,7 @@ set -eu
 mkdir -p '$releasePath'
 tar -xzf '$remoteArchive' -C '$releasePath'
 rm -f '$remoteArchive'
+find '$releasePath' -name '*.sh' -exec sed -i 's/\r$//' {} +
 ln -sfn '$StablePath/.venv' '$releasePath/.venv'
 if [ -f '$StablePath/yolo26n-pose.pt' ]; then
   ln -sfn '$StablePath/yolo26n-pose.pt' '$releasePath/yolo26n-pose.pt'
@@ -72,6 +73,7 @@ printf 'GPU dev release ready: %s\n' '$releasePath'
 "@
 
 Write-Host "[3/3] Creating an isolated release and switching current..."
+$remoteCommand = $remoteCommand -replace "`r`n", "`n"
 & ssh.exe "${RemoteUser}@${RemoteHost}" $remoteCommand
 if ($LASTEXITCODE -ne 0) {
     throw "remote setup failed with exit code $LASTEXITCODE"
