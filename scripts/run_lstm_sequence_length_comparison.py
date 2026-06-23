@@ -35,6 +35,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--repeat-seeds", type=int, default=1)
     parser.add_argument("--audit-thresholds", default="0.3,0.4,0.5,0.6,0.7")
+    parser.add_argument("--loss", choices=["ce", "weighted-ce", "focal", "oversample"], default="ce")
+    parser.add_argument("--prefilter-normal-clips", action="store_true")
     return parser.parse_args()
 
 
@@ -86,7 +88,9 @@ def build_command(args: argparse.Namespace, sequence_length: int, run_dir: Path)
         str(args.repeat_seeds),
         "--audit-thresholds",
         args.audit_thresholds,
-    ] + (["--dry-run"] if args.dry_run else [])
+        "--loss",
+        args.loss,
+    ] + (["--dry-run"] if args.dry_run else []) + (["--prefilter-normal-clips"] if args.prefilter_normal_clips else [])
 
 
 def run_one(args: argparse.Namespace, sequence_length: int, output_dir: Path) -> dict[str, str | int | float | bool | None]:
