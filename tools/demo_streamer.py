@@ -61,7 +61,7 @@ def main():
             cmd.extend([
                 "-c:v", "h264_nvenc",
                 "-preset", "p1",
-                "-tune", "zerolatency",
+                "-tune", "ull",
                 "-g", "30",
                 "-keyint_min", "30",
                 "-b:v", "1500k"

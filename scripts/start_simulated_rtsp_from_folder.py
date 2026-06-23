@@ -99,7 +99,7 @@ def build_ffmpeg_cmd(video_path: Path, rtsp_url: str, loop: bool, ffmpeg_mode: s
             "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,fps=15",
             "-c:v", "h264_nvenc" if mode == "nvenc" else "libx264",
             "-preset", "p1" if mode == "nvenc" else "ultrafast",
-            "-tune", "zerolatency",
+            "-tune", "ull" if mode == "nvenc" else "zerolatency",
         ])
 
     if mode != "copy":
