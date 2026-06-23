@@ -122,6 +122,8 @@ def fake_run_args():
         mqtt_host=None,
         mqtt_port=None,
         mqtt_topic=None,
+        mqtt_camera_topic=None,
+        mqtt_event_topic=None,
         mqtt_client_id=None,
         mqtt_username=None,
         mqtt_password=None,

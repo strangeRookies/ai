@@ -90,10 +90,20 @@ class RtspInferenceTest(unittest.TestCase):
                 classifier_input="keypoints",
                 sequence_length=2,
                 sequence_stride=1,
+                cheap_filter_enabled=False,
                 resize_size=32,
                 tracker_iou_threshold=0.3,
                 track_max_missing_seconds=2.0,
                 event_log_dir=None,
+                publisher=None,
+                mqtt_host=None,
+                mqtt_port=None,
+                mqtt_topic=None,
+                mqtt_camera_topic=None,
+                mqtt_event_topic=None,
+                mqtt_client_id=None,
+                mqtt_username=None,
+                mqtt_password=None,
             )
 
             summary = run(args)

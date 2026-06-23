@@ -23,6 +23,8 @@ def fake_config(video_pool: Path) -> RunnerConfig:
         mqtt_host="emqx",
         mqtt_port=1883,
         mqtt_topic="safety/events",
+        mqtt_camera_topic="camera",
+        mqtt_event_topic="event",
         mqtt_client_id_prefix="strange-ai",
         mqtt_username=None,
         mqtt_password=None,
@@ -58,6 +60,8 @@ class RegisteredCameraDockerConfigTest(unittest.TestCase):
             "MQTT_HOST": "mqtt",
             "MQTT_PORT": "1884",
             "MQTT_TOPIC": "safety/custom",
+            "MQTT_CAMERA_TOPIC": "camera/custom",
+            "MQTT_EVENT_TOPIC": "event/custom",
             "YOLO_MODEL_PATH": "/models/yolo26n-pose.pt",
             "MODEL_CHECKPOINT_PATH": "/models/lstm.pt",
             "DEVICE": "cpu",
@@ -71,12 +75,13 @@ class RegisteredCameraDockerConfigTest(unittest.TestCase):
 
         actual = (
             config.backend_base_url, config.rtsp_base_url, config.video_pool, config.mqtt_host,
-            config.mqtt_port, config.mqtt_topic, config.yolo_model, config.action_model,
+            config.mqtt_port, config.mqtt_topic, config.mqtt_camera_topic, config.mqtt_event_topic,
+            config.yolo_model, config.action_model,
             config.device, config.sequence_length, config.sequence_stride, config.refresh_interval_seconds,
         )
         expected = (
             "http://backend:8080", "rtsp://mediamtx:8554", Path("/app/video_pool"), "mqtt",
-            1884, "safety/custom", "/models/yolo26n-pose.pt", "/models/lstm.pt",
+            1884, "safety/custom", "camera/custom", "event/custom", "/models/yolo26n-pose.pt", "/models/lstm.pt",
             "cpu", 12, 6, 15.0,
         )
         self.assertEqual(actual, expected)

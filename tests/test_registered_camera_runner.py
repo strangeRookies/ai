@@ -266,6 +266,8 @@ def fake_config(video_pool: Path) -> RunnerConfig:
         mqtt_host="emqx",
         mqtt_port=1883,
         mqtt_topic="safety/events",
+        mqtt_camera_topic="camera",
+        mqtt_event_topic="event",
         mqtt_client_id_prefix="strange-ai",
         mqtt_username=None,
         mqtt_password=None,

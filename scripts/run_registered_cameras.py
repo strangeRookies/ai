@@ -49,7 +49,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--publisher", choices=["mqtt", "console"], default=os.getenv("EVENT_PUBLISHER", "mqtt"))
     parser.add_argument("--mqtt-host", default=os.getenv("MQTT_HOST"))
     parser.add_argument("--mqtt-port", type=int, default=int(os.getenv("MQTT_PORT")) if os.getenv("MQTT_PORT") else None)
-    parser.add_argument("--mqtt-topic", default=os.getenv("MQTT_TOPIC", "safety/events"))
+    parser.add_argument("--mqtt-topic", default=os.getenv("MQTT_TOPIC"))
+    parser.add_argument("--mqtt-camera-topic", default=os.getenv("MQTT_CAMERA_TOPIC", "camera"))
+    parser.add_argument("--mqtt-event-topic", default=os.getenv("MQTT_EVENT_TOPIC", os.getenv("MQTT_TOPIC", "event")))
     parser.add_argument("--mqtt-client-id-prefix", default=os.getenv("MQTT_CLIENT_ID_PREFIX", "strange-ai"))
     parser.add_argument("--mqtt-username", default=os.getenv("MQTT_USERNAME"))
     parser.add_argument("--mqtt-password", default=os.getenv("MQTT_PASSWORD"))
@@ -85,6 +87,8 @@ def config_from_args(args: argparse.Namespace) -> RunnerConfig:
         mqtt_host=args.mqtt_host,
         mqtt_port=args.mqtt_port,
         mqtt_topic=args.mqtt_topic,
+        mqtt_camera_topic=args.mqtt_camera_topic,
+        mqtt_event_topic=args.mqtt_event_topic,
         mqtt_client_id_prefix=args.mqtt_client_id_prefix,
         mqtt_username=args.mqtt_username,
         mqtt_password=args.mqtt_password,

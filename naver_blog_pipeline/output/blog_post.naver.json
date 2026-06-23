@@ -1,0 +1,512 @@
+{
+  "title": "카메라 한 대에서 시작하는 실시간 실신 감지 AI 시스템 개발기",
+  "frontmatter": {
+    "title": "카메라 한 대에서 시작하는 실시간 실신 감지 AI 시스템 개발기",
+    "status": "draft",
+    "generated_by": "codex",
+    "source": "input/my_note.md"
+  },
+  "errors": [],
+  "blocks": [
+    {
+      "id": "heading:1dos75b",
+      "type": "heading"
+    },
+    {
+      "id": "blank:g9lbcp#1",
+      "type": "blank"
+    },
+    {
+      "id": "paragraph:m7hgnd",
+      "type": "paragraph"
+    },
+    {
+      "id": "blank:g9lbcp#2",
+      "type": "blank"
+    },
+    {
+      "id": "paragraph:1i4x42n",
+      "type": "paragraph"
+    },
+    {
+      "id": "blank:g9lbcp#3",
+      "type": "blank"
+    },
+    {
+      "id": "heading:1ogwysc",
+      "type": "heading"
+    },
+    {
+      "id": "blank:g9lbcp#4",
+      "type": "blank"
+    },
+    {
+      "id": "paragraph:14gw36b",
+      "type": "paragraph"
+    },
+    {
+      "id": "blank:g9lbcp#5",
+      "type": "blank"
+    },
+    {
+      "id": "paragraph:1gtky5e",
+      "type": "paragraph"
+    },
+    {
+      "id": "blank:g9lbcp#6",
+      "type": "blank"
+    },
+    {
+      "id": "unordered-list:1idf6ku",
+      "type": "unordered-list"
+    },
+    {
+      "id": "blank:g9lbcp#7",
+      "type": "blank"
+    },
+    {
+      "id": "paragraph:1jddzdv",
+      "type": "paragraph"
+    },
+    {
+      "id": "blank:g9lbcp#8",
+      "type": "blank"
+    },
+    {
+      "id": "heading:1cdvudk",
+      "type": "heading"
+    },
+    {
+      "id": "blank:g9lbcp#9",
+      "type": "blank"
+    },
+    {
+      "id": "paragraph:jtzyyu",
+      "type": "paragraph"
+    },
+    {
+      "id": "blank:g9lbcp#10",
+      "type": "blank"
+    },
+    {
+      "id": "unordered-list:3cx8w2",
+      "type": "unordered-list"
+    },
+    {
+      "id": "blank:g9lbcp#11",
+      "type": "blank"
+    },
+    {
+      "id": "paragraph:1u1jknf",
+      "type": "paragraph"
+    },
+    {
+      "id": "blank:g9lbcp#12",
+      "type": "blank"
+    },
+    {
+      "id": "paragraph:1ir4ybg",
+      "type": "paragraph"
+    },
+    {
+      "id": "blank:g9lbcp#13",
+      "type": "blank"
+    },
+    {
+      "id": "heading:pbf1yr",
+      "type": "heading"
+    },
+    {
+      "id": "blank:g9lbcp#14",
+      "type": "blank"
+    },
+    {
+      "id": "paragraph:1tdh6zq",
+      "type": "paragraph"
+    },
+    {
+      "id": "blank:g9lbcp#15",
+      "type": "blank"
+    },
+    {
+      "id": "paragraph:168upvy",
+      "type": "paragraph"
+    },
+    {
+      "id": "blank:g9lbcp#16",
+      "type": "blank"
+    },
+    {
+      "id": "unordered-list:1agl36p",
+      "type": "unordered-list"
+    },
+    {
+      "id": "blank:g9lbcp#17",
+      "type": "blank"
+    },
+    {
+      "id": "paragraph:11ux1j6",
+      "type": "paragraph"
+    },
+    {
+      "id": "blank:g9lbcp#18",
+      "type": "blank"
+    },
+    {
+      "id": "heading:1ksimba",
+      "type": "heading"
+    },
+    {
+      "id": "blank:g9lbcp#19",
+      "type": "blank"
+    },
+    {
+      "id": "paragraph:1vk8rx8",
+      "type": "paragraph"
+    },
+    {
+      "id": "blank:g9lbcp#20",
+      "type": "blank"
+    },
+    {
+      "id": "paragraph:mheur7",
+      "type": "paragraph"
+    },
+    {
+      "id": "blank:g9lbcp#21",
+      "type": "blank"
+    },
+    {
+      "id": "unordered-list:dn13qn",
+      "type": "unordered-list"
+    },
+    {
+      "id": "blank:g9lbcp#22",
+      "type": "blank"
+    },
+    {
+      "id": "paragraph:ntqb1e",
+      "type": "paragraph"
+    },
+    {
+      "id": "blank:g9lbcp#23",
+      "type": "blank"
+    },
+    {
+      "id": "heading:1rlyq9a",
+      "type": "heading"
+    },
+    {
+      "id": "blank:g9lbcp#24",
+      "type": "blank"
+    },
+    {
+      "id": "paragraph:1ihztzk",
+      "type": "paragraph"
+    },
+    {
+      "id": "blank:g9lbcp#25",
+      "type": "blank"
+    },
+    {
+      "id": "paragraph:1lcgnsz",
+      "type": "paragraph"
+    },
+    {
+      "id": "blank:g9lbcp#26",
+      "type": "blank"
+    },
+    {
+      "id": "unordered-list:1hgu60c",
+      "type": "unordered-list"
+    },
+    {
+      "id": "blank:g9lbcp#27",
+      "type": "blank"
+    },
+    {
+      "id": "paragraph:1vfwq8f",
+      "type": "paragraph"
+    },
+    {
+      "id": "blank:g9lbcp#28",
+      "type": "blank"
+    },
+    {
+      "id": "heading:920ien",
+      "type": "heading"
+    },
+    {
+      "id": "blank:g9lbcp#29",
+      "type": "blank"
+    },
+    {
+      "id": "paragraph:eyxmyt",
+      "type": "paragraph"
+    },
+    {
+      "id": "blank:g9lbcp#30",
+      "type": "blank"
+    },
+    {
+      "id": "paragraph:sk8z70",
+      "type": "paragraph"
+    },
+    {
+      "id": "blank:g9lbcp#31",
+      "type": "blank"
+    },
+    {
+      "id": "paragraph:1wfqaj",
+      "type": "paragraph"
+    },
+    {
+      "id": "blank:g9lbcp#32",
+      "type": "blank"
+    },
+    {
+      "id": "unordered-list:1mrqwv",
+      "type": "unordered-list"
+    },
+    {
+      "id": "blank:g9lbcp#33",
+      "type": "blank"
+    },
+    {
+      "id": "paragraph:1xo661t",
+      "type": "paragraph"
+    },
+    {
+      "id": "blank:g9lbcp#34",
+      "type": "blank"
+    },
+    {
+      "id": "heading:1xtnocw",
+      "type": "heading"
+    },
+    {
+      "id": "blank:g9lbcp#35",
+      "type": "blank"
+    },
+    {
+      "id": "paragraph:7mu1ys",
+      "type": "paragraph"
+    },
+    {
+      "id": "blank:g9lbcp#36",
+      "type": "blank"
+    },
+    {
+      "id": "paragraph:i3xsdh",
+      "type": "paragraph"
+    },
+    {
+      "id": "blank:g9lbcp#37",
+      "type": "blank"
+    },
+    {
+      "id": "unordered-list:ye5ff8",
+      "type": "unordered-list"
+    },
+    {
+      "id": "blank:g9lbcp#38",
+      "type": "blank"
+    },
+    {
+      "id": "paragraph:px4mc4",
+      "type": "paragraph"
+    },
+    {
+      "id": "blank:g9lbcp#39",
+      "type": "blank"
+    },
+    {
+      "id": "heading:wd7s7c",
+      "type": "heading"
+    },
+    {
+      "id": "blank:g9lbcp#40",
+      "type": "blank"
+    },
+    {
+      "id": "paragraph:1i9en80",
+      "type": "paragraph"
+    },
+    {
+      "id": "blank:g9lbcp#41",
+      "type": "blank"
+    },
+    {
+      "id": "paragraph:143dggt",
+      "type": "paragraph"
+    },
+    {
+      "id": "blank:g9lbcp#42",
+      "type": "blank"
+    },
+    {
+      "id": "unordered-list:1v7rfun",
+      "type": "unordered-list"
+    },
+    {
+      "id": "blank:g9lbcp#43",
+      "type": "blank"
+    },
+    {
+      "id": "paragraph:t66htq",
+      "type": "paragraph"
+    },
+    {
+      "id": "blank:g9lbcp#44",
+      "type": "blank"
+    },
+    {
+      "id": "heading:1q2fnxf",
+      "type": "heading"
+    },
+    {
+      "id": "blank:g9lbcp#45",
+      "type": "blank"
+    },
+    {
+      "id": "paragraph:1gauvmf",
+      "type": "paragraph"
+    },
+    {
+      "id": "blank:g9lbcp#46",
+      "type": "blank"
+    },
+    {
+      "id": "paragraph:hqj6mj",
+      "type": "paragraph"
+    },
+    {
+      "id": "blank:g9lbcp#47",
+      "type": "blank"
+    },
+    {
+      "id": "unordered-list:1l35ilh",
+      "type": "unordered-list"
+    },
+    {
+      "id": "blank:g9lbcp#48",
+      "type": "blank"
+    },
+    {
+      "id": "paragraph:lnxstf",
+      "type": "paragraph"
+    },
+    {
+      "id": "blank:g9lbcp#49",
+      "type": "blank"
+    },
+    {
+      "id": "heading:1b7lznc",
+      "type": "heading"
+    },
+    {
+      "id": "blank:g9lbcp#50",
+      "type": "blank"
+    },
+    {
+      "id": "paragraph:ys50bt",
+      "type": "paragraph"
+    },
+    {
+      "id": "blank:g9lbcp#51",
+      "type": "blank"
+    },
+    {
+      "id": "paragraph:1v9oi9z",
+      "type": "paragraph"
+    },
+    {
+      "id": "blank:g9lbcp#52",
+      "type": "blank"
+    },
+    {
+      "id": "ordered-list:h3m8vb",
+      "type": "ordered-list"
+    },
+    {
+      "id": "blank:g9lbcp#53",
+      "type": "blank"
+    },
+    {
+      "id": "paragraph:xgx4ca",
+      "type": "paragraph"
+    },
+    {
+      "id": "blank:g9lbcp#54",
+      "type": "blank"
+    },
+    {
+      "id": "heading:u56udu",
+      "type": "heading"
+    },
+    {
+      "id": "blank:g9lbcp#55",
+      "type": "blank"
+    },
+    {
+      "id": "paragraph:tn2stt",
+      "type": "paragraph"
+    },
+    {
+      "id": "blank:g9lbcp#56",
+      "type": "blank"
+    },
+    {
+      "id": "paragraph:14yb43m",
+      "type": "paragraph"
+    },
+    {
+      "id": "blank:g9lbcp#57",
+      "type": "blank"
+    },
+    {
+      "id": "unordered-list:lontna",
+      "type": "unordered-list"
+    },
+    {
+      "id": "blank:g9lbcp#58",
+      "type": "blank"
+    },
+    {
+      "id": "paragraph:tto0nj",
+      "type": "paragraph"
+    },
+    {
+      "id": "blank:g9lbcp#59",
+      "type": "blank"
+    },
+    {
+      "id": "heading:1mw4f2f",
+      "type": "heading"
+    },
+    {
+      "id": "blank:g9lbcp#60",
+      "type": "blank"
+    },
+    {
+      "id": "paragraph:os62hp",
+      "type": "paragraph"
+    },
+    {
+      "id": "blank:g9lbcp#61",
+      "type": "blank"
+    },
+    {
+      "id": "paragraph:sx84pf",
+      "type": "paragraph"
+    },
+    {
+      "id": "blank:g9lbcp#62",
+      "type": "blank"
+    },
+    {
+      "id": "paragraph:ezr684",
+      "type": "paragraph"
+    }
+  ]
+}
