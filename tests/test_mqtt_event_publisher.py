@@ -17,7 +17,9 @@ class MqttEventPublisherTest(unittest.TestCase):
 
         self.assertEqual(settings["host"], "localhost")
         self.assertEqual(settings["port"], 1883)
-        self.assertEqual(settings["topic"], "safety/events")
+        self.assertEqual(settings["topic"], "event")
+        self.assertEqual(settings["camera_topic"], "camera")
+        self.assertEqual(settings["event_topic"], "event")
         self.assertEqual(settings["client_id"], "strange-ai-local")
         self.assertIsNone(settings["username"])
         self.assertIsNone(settings["password"])
@@ -28,6 +30,8 @@ class MqttEventPublisherTest(unittest.TestCase):
             os.environ["MQTT_HOST"] = "mqtt.aws.internal"
             os.environ["MQTT_PORT"] = "8883"
             os.environ["MQTT_TOPIC"] = "prod/safety/events"
+            os.environ["MQTT_CAMERA_TOPIC"] = "camera"
+            os.environ["MQTT_EVENT_TOPIC"] = "event"
             os.environ["MQTT_CLIENT_ID"] = "strange-ai-prod"
             os.environ["MQTT_USERNAME"] = "edge-user"
             os.environ["MQTT_PASSWORD"] = "secret-value"
@@ -39,6 +43,8 @@ class MqttEventPublisherTest(unittest.TestCase):
         self.assertEqual(settings["host"], "mqtt.aws.internal")
         self.assertEqual(settings["port"], 8883)
         self.assertEqual(settings["topic"], "prod/safety/events")
+        self.assertEqual(settings["camera_topic"], "camera")
+        self.assertEqual(settings["event_topic"], "event")
         self.assertEqual(settings["client_id"], "strange-ai-prod")
         self.assertEqual(settings["username"], "edge-user")
         self.assertEqual(settings["password"], "secret-value")
@@ -59,7 +65,16 @@ class MqttEventPublisherTest(unittest.TestCase):
 
 
 def mqtt_env_names():
-    return ("MQTT_HOST", "MQTT_PORT", "MQTT_TOPIC", "MQTT_CLIENT_ID", "MQTT_USERNAME", "MQTT_PASSWORD")
+    return (
+        "MQTT_HOST",
+        "MQTT_PORT",
+        "MQTT_TOPIC",
+        "MQTT_CAMERA_TOPIC",
+        "MQTT_EVENT_TOPIC",
+        "MQTT_CLIENT_ID",
+        "MQTT_USERNAME",
+        "MQTT_PASSWORD",
+    )
 
 
 def restore_env(values):

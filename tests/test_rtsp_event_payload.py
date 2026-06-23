@@ -19,55 +19,43 @@ from scripts.run_rtsp_inference import (
 
 
 class RtspEventPayloadTest(unittest.TestCase):
-    def test_inference_event_payload_contains_only_operational_fields(self):
-        args = Namespace(camera_id="legacy_cam", camera_login_id="cam_01", event_severity="HIGH", yolo_model="yolo26n-pose.pt")
-        packet = Namespace(frame_idx=12, timestamp=123.5)
+    def test_inference_event_payload_uses_confirmed_event_schema(self):
+        args = Namespace(camera_id="legacy_cam", camera_login_id="cam_01")
+        packet = Namespace(frame_idx=12, timestamp=123.5, frame=np.zeros((360, 640, 3), dtype=np.uint8))
         prediction = {"label": "Faint", "score": 0.81, "probabilities": {"Normal": 0.19, "Faint": 0.81}}
-        sequence = {"bbox": [1, 2, 3, 4], "track_id": 9, "start_frame": 4, "end_frame": 12}
+        sequence = {"bbox": [1, 2, 201, 152], "track_id": 9, "start_frame": 4, "end_frame": 12}
 
         payload = build_inference_event_payload(args, packet, prediction, boxes=[], sequence=sequence)
 
-        self.assertEqual(set(payload), {
-            "type", "camera_id", "camera_login_id", "timestamp", "severity",
-            "message", "source", "track_id", "metadata",
-        })
-        self.assertEqual(payload["camera_id"], "cam_01")
-        self.assertEqual(payload["camera_login_id"], "cam_01")
-        self.assertEqual(payload["type"], "fall_detected")
-        self.assertEqual(payload["severity"], "HIGH")
-        self.assertEqual(payload["message"], "쓰러짐 의심 상황이 감지되었습니다.")
-        self.assertEqual(payload["source"], "edge-ai")
-        self.assertEqual(payload["track_id"], 9)
-        self.assertTrue(isinstance(payload["timestamp"], str) and payload["timestamp"].endswith("Z"))
-        self.assertEqual(
-            payload["metadata"],
-            {
-                "bbox": [1, 2, 3, 4],
-                "confidence": 0.81,
-                "rule_score": 0.81,
-                "pose_state": "LYING",
-                "model_name": "yolo26n-pose",
-            },
-        )
-        self.assertNotIn("event_type", payload)
-        self.assertNotIn("detected_at", payload)
+        self.assertEqual(payload["schemaVersion"], "1.0")
+        self.assertEqual(payload["messageType"], "event")
+        self.assertEqual(payload["streamId"], "cam_01")
+        self.assertEqual(payload["type"], "faint")
+        self.assertEqual(payload["memoText"], "쓰러짐 의심!")
+        self.assertEqual(payload["confidence"], 0.81)
+        self.assertEqual(payload["trackingId"], 9)
+        self.assertEqual(payload["frameWidth"], 640)
+        self.assertEqual(payload["frameHeight"], 360)
+        self.assertEqual(payload["boundingBox"], {"x": 1, "y": 2, "width": 200, "height": 150})
+        self.assertIn("eventId", payload)
+        self.assertNotIn("camera_id", payload)
+        self.assertNotIn("camera_login_id", payload)
         self.assertNotIn("probabilities", payload)
-        self.assertNotIn("threshold", payload)
-        self.assertNotIn("post_processing", payload)
 
-    def test_inference_event_payload_omits_track_id_when_missing(self):
-        args = Namespace(camera_id="cam_01", event_severity="HIGH")
+    def test_inference_event_payload_omits_tracking_id_when_missing(self):
+        args = Namespace(camera_id="cam_01", camera_login_id=None)
         packet = Namespace(frame_idx=12, timestamp=123.5)
         prediction = {"label": "Faint", "score": 0.81}
         sequence = {"bbox": [1, 2, 3, 4], "start_frame": 4, "end_frame": 12}
 
         payload = build_inference_event_payload(args, packet, prediction, boxes=[], sequence=sequence)
 
-        self.assertNotIn("track_id", payload)
-        self.assertEqual(payload["metadata"]["bbox"], [1, 2, 3, 4])
+        self.assertNotIn("trackingId", payload)
+        self.assertEqual(payload["streamId"], "cam_01")
+        self.assertEqual(payload["boundingBox"], {"x": 1, "y": 2, "width": 2, "height": 2})
 
     def test_inference_event_payload_keeps_clip_reference_out_of_mqtt_contract(self):
-        args = Namespace(camera_id="cam_01", event_severity="HIGH")
+        args = Namespace(camera_id="cam_01", camera_login_id=None)
         packet = Namespace(frame_idx=12, timestamp=123.5)
         prediction = {"label": "Faint", "score": 0.81}
         sequence = {
@@ -137,7 +125,7 @@ class RtspEventPayloadTest(unittest.TestCase):
     def test_write_run_summary_keeps_output_as_summary_json(self):
         with tempfile.TemporaryDirectory() as tmp:
             output_path = Path(tmp) / "summary.json"
-            summary = {"events_generated": 1, "sample_event": {"camera_id": "cam_01"}}
+            summary = {"events_generated": 1, "sample_event": {"streamId": "cam_01"}}
 
             write_run_summary(output_path, summary)
             saved = json.loads(output_path.read_text(encoding="utf-8"))
@@ -162,9 +150,11 @@ class RtspEventPayloadTest(unittest.TestCase):
         self.assertEqual(summary["alert_delivery_result"], "mqtt")
         self.assertEqual(summary["events_generated"], 1)
         self.assertEqual(len(published), 1)
-        self.assertNotIn("probabilities", published[0])
-        self.assertEqual(published[0]["type"], "fall_detected")
-        self.assertIn("metadata", published[0])
+        topic, payload = published[0]
+        self.assertEqual(topic, "event")
+        self.assertNotIn("probabilities", payload)
+        self.assertEqual(payload["messageType"], "event")
+        self.assertEqual(payload["streamId"], "cam_01")
 
     def test_cheap_filter_reduces_lstm_calls_for_low_risk_sequences(self):
         summary = run_with_fake_rtsp(fake_run_args(event_log_dir=None, cheap_filter_enabled=True))
@@ -204,6 +194,8 @@ def fake_run_args(event_log_dir, dry_run=True, cheap_filter_enabled=False):
         mqtt_host=None,
         mqtt_port=None,
         mqtt_topic=None,
+        mqtt_camera_topic=None,
+        mqtt_event_topic=None,
         mqtt_client_id=None,
         mqtt_username=None,
         mqtt_password=None,
@@ -240,7 +232,7 @@ class FakeVideoReader:
     def __enter__(self):
         return self
 
-    def __exit__(self, exc_type, exc, traceback):
+    def __exit__(self, unused_exc_type, unused_exc, unused_traceback):
         return False
 
     def read(self):
@@ -274,11 +266,13 @@ class FakeMqttPublisher:
     def connect(self):
         return True
 
-    def publish(self, payload):
-        self.published.append(payload)
+    def publish(self, payload, topic=None):
+        self.published.append((topic, payload))
         return True
 
     def close(self):
         return None
 
 
+if __name__ == "__main__":
+    unittest.main()

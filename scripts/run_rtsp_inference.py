@@ -31,7 +31,7 @@ from ai.inference.rtsp_runtime import (
     update_tracking_summary,
 )
 from ai.evaluation.prediction_log import append_prediction_jsonl, build_prediction_log_row
-from ai.publishers.event_publisher import create_event_publisher
+from ai.publishers.event_publisher import create_event_publisher, mqtt_topic_settings_from_args
 from ai.runtime_metrics import RuntimeMetrics
 from ai.streams.video_reader import VideoReader
 from ai.visualization.draw import draw_overlay
@@ -66,6 +66,7 @@ def run(args):
     )
     publisher = None
     publisher_mode = "preflight" if getattr(args, "preflight_only", False) else None
+    topic_settings = mqtt_topic_settings_from_args(args)
     metrics = RuntimeMetrics()
     writer = None
     summary = {
@@ -228,7 +229,7 @@ def run(args):
                         event_log = build_inference_event_log(args, packet, track_prediction, boxes, sequence)
                         if getattr(args, "event_log_dir", None):
                             save_inference_event_log(args.event_log_dir, event_log)
-                        publisher.publish(payload)
+                        publisher.publish(payload, topic=topic_settings["event_topic"])
                         summary["events_generated"] += 1
                         track_key = str(track_id)
                         summary["events_generated_by_track"][track_key] = summary["events_generated_by_track"].get(track_key, 0) + 1
