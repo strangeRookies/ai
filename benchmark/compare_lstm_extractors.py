@@ -67,6 +67,7 @@ def parse_args():
     parser.add_argument("--prefilter-max-frames", type=int, default=120, help="Maximum frames per Normal candidate during prefiltering.")
     parser.add_argument("--audit-thresholds", default="0.3,0.4,0.5,0.6,0.7", help="Comma-separated Faint probability thresholds for prediction audit.")
     parser.add_argument("--repeat-seeds", type=int, default=1, help="Train/evaluate LSTM repeatedly for N deterministic seeds and report recall/F1 mean/std.")
+    parser.add_argument("--loss", choices=["ce", "weighted-ce", "focal", "oversample"], default="ce", help="Loss function to use (default: ce). weighted-ce or focal handles class imbalance.")
     return parser.parse_args()
 
 
@@ -551,6 +552,19 @@ def train_and_evaluate(train_x, train_y, eval_x, eval_y, eval_sequences, args, o
     import torch
     from torch.utils.data import DataLoader, TensorDataset
 
+    if args.loss == "oversample":
+        train_y_arr = np.asarray(train_y, dtype=np.int64)
+        faint_indices = np.where(train_y_arr == 1)[0]
+        normal_indices = np.where(train_y_arr == 0)[0]
+        if len(faint_indices) > 0 and len(normal_indices) > len(faint_indices):
+            repeats = len(normal_indices) // len(faint_indices)
+            remainder = len(normal_indices) % len(faint_indices)
+            oversampled_faint = np.concatenate([np.repeat(faint_indices, repeats), faint_indices[:remainder]])
+            new_indices = np.concatenate([normal_indices, oversampled_faint])
+            np.random.shuffle(new_indices)
+            train_x = [train_x[i] for i in new_indices]
+            train_y = [train_y[i] for i in new_indices]
+
     resolved_device = normalize_torch_device(args.device, torch, no_cpu_fallback=args.no_cpu_fallback)
     device = torch.device(resolved_device)
     train_tensor = torch.from_numpy(np.stack(train_x).astype(np.float32))
@@ -585,6 +599,7 @@ def train_and_evaluate(train_x, train_y, eval_x, eval_y, eval_sequences, args, o
             output_dir=output_dir if offset == 0 else None,
             thresholds=thresholds,
             eval_sequences=eval_sequences,
+            train_y=train_y,
         )
         seed_metrics.append({"seed": seed, "faint_recall": current_metrics.get("recall"), "f1_score": current_metrics.get("f1_score")})
         if offset == 0:
@@ -596,13 +611,50 @@ def train_and_evaluate(train_x, train_y, eval_x, eval_y, eval_sequences, args, o
     return metrics
 
 
-def train_single_lstm(train_loader, eval_loader, model_config, device, args, output_dir, thresholds, eval_sequences):
+def train_single_lstm(train_loader, eval_loader, model_config, device, args, output_dir, thresholds, eval_sequences, train_y=None):
     import torch
     from torch import nn
+    from collections import Counter
 
     model = LSTMActionModel(**model_config).model.to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
-    criterion = nn.CrossEntropyLoss()
+    
+    alpha = None
+    if getattr(args, "loss", "ce") in ["weighted-ce", "focal"] and train_y is not None:
+        counts = Counter(train_y)
+        total = len(train_y)
+        weights = [total / max(counts.get(i, 1), 1) for i in range(model_config["num_classes"])]
+        sum_w = sum(weights)
+        weights = [w * model_config["num_classes"] / max(sum_w, 1e-6) for w in weights]
+        alpha = torch.FloatTensor(weights).to(device)
+
+    if args.loss == "weighted-ce":
+        # Calculate class counts from train_y
+        labels, counts = np.unique(train_y, return_counts=True)
+        # Handle missing classes if any
+        class_counts = [0, 0]
+        for l, c in zip(labels, counts):
+            class_counts[l] = c
+        # Basic inverse frequency
+        counts_arr = np.array(class_counts)
+        weights = torch.tensor([1.0 - (count / counts_arr.sum()) for count in counts_arr], dtype=torch.float32)
+        if args.device != "cpu":
+            weights = weights.to(args.device)
+        criterion = nn.CrossEntropyLoss(weight=weights)
+    elif args.loss == "focal":
+        class FocalLoss(nn.Module):
+            def __init__(self, weight=None, gamma=2.0):
+                super().__init__()
+                self.ce = nn.CrossEntropyLoss(weight=alpha, reduction='none')
+                self.gamma = gamma
+            def forward(self, inputs, targets):
+                ce_loss = self.ce(inputs, targets)
+                pt = torch.exp(-ce_loss)
+                return ((1 - pt) ** self.gamma * ce_loss).mean()
+        # Do not use extreme alpha weights with focal loss, let gamma handle the imbalance
+        criterion = FocalLoss(weight=None, gamma=2.0)
+    else:
+        criterion = nn.CrossEntropyLoss()
     history = []
     for epoch in range(1, args.epochs + 1):
         model.train()
