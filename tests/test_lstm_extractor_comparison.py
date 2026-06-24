@@ -69,7 +69,7 @@ class LstmExtractorComparisonTest(unittest.TestCase):
         self.assertEqual(missing, 16)
         self.assertEqual(total, 17)
 
-    def test_sequence_to_features_uses_runtime_sequence_length_and_51_features(self):
+    def test_sequence_to_features_uses_runtime_sequence_length_and_54_features(self):
         detections = [
             {"keypoints": [{"x": 10.0, "y": 20.0, "confidence": 0.9} for _ in range(17)]},
             {"keypoints": [{"x": 20.0, "y": 40.0, "confidence": 0.8} for _ in range(17)]},
@@ -82,7 +82,7 @@ class LstmExtractorComparisonTest(unittest.TestCase):
             0.3,
         )
 
-        self.assertEqual(features.shape, (3, 51))
+        self.assertEqual(features.shape, (3, 54))
         self.assertEqual(missing, 0)
         self.assertEqual(total, 51)
 
@@ -106,7 +106,7 @@ class LstmExtractorComparisonTest(unittest.TestCase):
 
             self.assertEqual(len(x_rows), 2)
             self.assertEqual(y_rows, [1, 1])
-            self.assertEqual(x_rows[0].shape, (4, 51))
+            self.assertEqual(x_rows[0].shape, (4, 54))
             self.assertEqual(clip_summaries[0]["frames_processed"], 6)
             self.assertEqual(clip_summaries[0]["generated_sequences"], 2)
             self.assertEqual(sequence_rows[0]["frame_start"], 0)
