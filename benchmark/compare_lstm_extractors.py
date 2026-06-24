@@ -1202,7 +1202,7 @@ def main():
         "[lstm-extractor-compare] sequence config: "
         f"sequence_length={args.sequence_length} "
         f"sequence_stride={args.sequence_stride} "
-        "defaults=16/8 frame_sampling=disabled keypoint_feature=(sequence_length,51)",
+        "defaults=16/8 frame_sampling=disabled keypoint_feature=(sequence_length,54)",
         flush=True,
     )
     specs = parse_model_specs(args.models)
