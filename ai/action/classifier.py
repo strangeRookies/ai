@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 DEFAULT_CLASSES = ("Normal", "Faint")
-KEYPOINT_FEATURE_DIM = 51
+KEYPOINT_FEATURE_DIM = 54
 
 
 class ActionClassifier:
@@ -142,7 +142,13 @@ def keypoint_sequence_to_features(sequence, keypoint_count=17):
     for index, detection in enumerate(detections):
         shape = frame_shapes[index] if index < len(frame_shapes) else None
         rows.append(keypoints_to_feature(detection, shape, keypoint_count))
-    return np.stack(rows, axis=0).astype(np.float32)
+    base_features = np.stack(rows, axis=0).astype(np.float32)
+    
+    try:
+        from .motion_features import append_motion_features
+        return append_motion_features(base_features)
+    except ImportError:
+        return base_features
 
 
 def keypoints_to_feature(detection, frame_shape=None, keypoint_count=17):

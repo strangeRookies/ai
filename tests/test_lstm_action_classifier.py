@@ -52,7 +52,7 @@ class LSTMActionClassifierTest(unittest.TestCase):
 
         features = keypoint_sequence_to_features(sequence)
 
-        self.assertEqual(features.shape, (1, 51))
+        self.assertEqual(features.shape, (1, 54))
         self.assertAlmostEqual(float(features[0][0]), 0.25)
         self.assertAlmostEqual(float(features[0][1]), 0.25)
         self.assertAlmostEqual(float(features[0][2]), 0.9)

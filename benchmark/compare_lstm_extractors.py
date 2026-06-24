@@ -228,7 +228,15 @@ def sequence_to_features(sequence, frame_shapes, keypoint_conf_threshold):
         rows.append(features)
         missing += current_missing
         total += current_total
-    return np.stack(rows, axis=0), missing, total
+    
+    base_features = np.stack(rows, axis=0)
+    try:
+        from ai.action.motion_features import append_motion_features
+        final_features = append_motion_features(base_features)
+    except ImportError:
+        final_features = base_features
+        
+    return final_features, missing, total
 
 
 def collect_cached_split_sequences(rows, split_name, args):
