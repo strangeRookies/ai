@@ -79,7 +79,7 @@ def main():
         
         if not target_path:
             target_dir = cache_dir / label
-            target_dir.mkdir(exist_ok=True)
+            target_dir.mkdir(parents=True, exist_ok=True)
             target_path = target_dir / f"{clip_id}.npz"
             
         print(f"[{idx+1}/{len(rows)}] Extracting {clip_id} ({label})")

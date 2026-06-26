@@ -73,6 +73,10 @@ def _track_id(value):
     return int(float(str(value)))
 
 
+def mjpeg_debug_enabled(args: argparse.Namespace) -> bool:
+    return bool(getattr(args, "mjpeg_debug", False))
+
+
 def process_frame(packet, detector, classifier, sequence_buffer, summary, args, post_processor=None, tracker=None, state=None, display_id_mapper=None, publisher=None, overlay_publish_state=None):
     detections = detector.detect(packet.frame)
     if args.detector_mode == "mock":
@@ -172,6 +176,8 @@ def process_frame(packet, detector, classifier, sequence_buffer, summary, args, 
     maybe_log_debug(packet, boxes, summary, prediction, args, prefix="[ai-overlay-debug]")
 
     update_overlay_runtime(summary)
+    if not mjpeg_debug_enabled(args):
+        return None
     overlay = draw_overlay(packet.frame, boxes, prediction, packet.frame_idx)
     draw_metrics_panel(overlay, summary, args, prediction)
     return overlay
@@ -249,7 +255,8 @@ class OverlayWorker:
                             publisher=publisher,
                             overlay_publish_state=overlay_publish_state
                         )
-                        self.state.update_frame(overlay, summary)
+                        if overlay is not None:
+                            self.state.update_frame(overlay, summary)
                         if self.args.max_frames > 0 and summary["frames_processed"] >= self.args.max_frames:
                             return
             except Exception as exc:
@@ -265,7 +272,7 @@ class OverlayWorker:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Serve a local MJPEG stream with AI bbox/keypoint/action overlays.")
+    parser = argparse.ArgumentParser(description="Publish AI metadata; optionally serve a debug MJPEG overlay stream.")
     parser.add_argument("--rtsp-url", default=os.getenv("RTSP_URL", "rtsp://localhost:8554/cam_01"))
     parser.add_argument("--camera-id", default="cam_01")
     parser.add_argument("--camera-login-id", default=None,
@@ -273,6 +280,12 @@ def main():
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8010)
     parser.add_argument("--mjpeg-fps", type=float, default=8.0)
+    parser.add_argument(
+        "--mjpeg-debug",
+        action=argparse.BooleanOptionalAction,
+        default=os.getenv("AI_MJPEG_DEBUG", "false").lower() in {"1", "true", "yes", "on"},
+        help="Expose annotated MJPEG only for local debugging.",
+    )
     parser.add_argument("--detector-mode", choices=["real", "mock"], default="mock")
     parser.add_argument("--yolo-model", default="yolo26n-pose.pt")
     parser.add_argument("--device", default="auto")
@@ -324,22 +337,30 @@ def main():
 
     state = OverlayState()
     worker = OverlayWorker(args, state)
-    server = create_overlay_server(args.host, args.port, state, args.camera_id, args.mjpeg_fps)
-
-    worker.start()
-    print(f"[ai-overlay] serving http://{args.host}:{args.port}/stream", flush=True)
-    print(f"[ai-overlay] input={redact_url(args.rtsp_url)} detector={args.detector_mode}", flush=True)
+    server = None
 
     def shutdown(_signum, _frame):
-        server.shutdown()
+        worker.stop()
+        if server is not None:
+            server.shutdown()
 
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
     try:
-        server.serve_forever()
+        worker.start()
+        print(f"[ai-overlay] input={redact_url(args.rtsp_url)} detector={args.detector_mode}", flush=True)
+        if mjpeg_debug_enabled(args):
+            server = create_overlay_server(args.host, args.port, state, args.camera_id, args.mjpeg_fps)
+            print(f"[ai-overlay] debug MJPEG serving http://{args.host}:{args.port}/stream", flush=True)
+            server.serve_forever()
+        else:
+            print("[ai-overlay] metadata-only mode; WebRTC stays on the MediaMTX stream", flush=True)
+            while worker.thread.is_alive():
+                worker.thread.join(timeout=1)
     finally:
         worker.stop()
-        server.server_close()
+        if server is not None:
+            server.server_close()
 
 
 if __name__ == "__main__":

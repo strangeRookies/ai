@@ -73,6 +73,7 @@ class MqttEventPublisher(EventPublisher):
                 )
                 return False
         try:
+            print(f"[mqtt] publishing: {_payload_context(payload, target_topic)}", flush=True)
             result = self.client.publish(target_topic, json.dumps(payload, ensure_ascii=False), qos=0)
             if result.rc != self.mqtt.MQTT_ERR_SUCCESS:
                 print(
@@ -80,6 +81,7 @@ class MqttEventPublisher(EventPublisher):
                     file=sys.stderr,
                 )
                 return False
+            print(f"[mqtt] published: {_payload_context(payload, target_topic)}", flush=True)
             return True
         except (OSError, RuntimeError, ValueError) as exc:
             self.connected = False
