@@ -1,7 +1,0 @@
-model,status,processed_clips,failed_clips,total_frames,total_time_sec,avg_fps,avg_inference_ms,output_dir,error_message
-yolo11n-pose,success,7180,0,126528,1172.9515,107.8715,5.033,/home/welabs/yolo_training/ai_fall_experiments/data/keypoints/yolo11n-pose,
-yolo11s-pose,success,7180,0,126528,1177.3426,107.4691,5.0697,/home/welabs/yolo_training/ai_fall_experiments/data/keypoints/yolo11s-pose,
-yolo26n-pose,success,7180,0,126528,1216.1702,104.0381,5.3145,/home/welabs/yolo_training/ai_fall_experiments/data/keypoints/yolo26n-pose,
-yolo26s-pose,success,7180,0,126528,1222.0383,103.5385,5.3829,/home/welabs/yolo_training/ai_fall_experiments/data/keypoints/yolo26s-pose,
-yolov8n-pose,success,7180,0,126528,1099.117,115.1179,4.4237,/home/welabs/yolo_training/ai_fall_experiments/data/keypoints/yolov8n-pose,
-yolov8s-pose,success,7180,0,126528,1105.3408,114.4697,4.4634,/home/welabs/yolo_training/ai_fall_experiments/data/keypoints/yolov8s-pose,
