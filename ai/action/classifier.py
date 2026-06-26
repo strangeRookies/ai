@@ -117,7 +117,8 @@ def classes_from_checkpoint(checkpoint):
 def sequence_to_lstm_features(sequence, input_size=KEYPOINT_FEATURE_DIM, crop_feature_size=32):
     """Select features that match the loaded checkpoint input size.
 
-    `input_size=51` means keypoint features: 17 keypoints times x, y, and confidence.
+    `input_size=54` means keypoint features: 17 keypoints times x, y, and confidence (51 dimensions)
+    plus 3 motion features (velocity, centroid shift, etc.) computed from the tracking buffer.
     If a non-keypoint checkpoint receives crops, crop features are used instead.
     Crop feature dim is `crop_feature_size * crop_feature_size`.
     """

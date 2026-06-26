@@ -174,8 +174,8 @@ def parse_args(argv=None):
     parser.add_argument("--device", default="auto")
     parser.add_argument("--max-frames", type=int, default=60)
     parser.add_argument("--max-rows-per-split", type=int, default=2)
-    parser.add_argument("--sequence-length", type=int, default=8)
-    parser.add_argument("--sequence-stride", type=int, default=4)
+    parser.add_argument("--sequence-length", type=int, default=30)
+    parser.add_argument("--sequence-stride", type=int, default=15)
     parser.add_argument("--output", default=None)
     return parser.parse_args(argv)
 
@@ -186,7 +186,7 @@ def main():
         "[dataset-evaluation] sequence config: "
         f"sequence_length={args.sequence_length} "
         f"sequence_stride={args.sequence_stride} "
-        "defaults=8/4 frame_sampling=disabled",
+        "defaults=30/15 frame_sampling=disabled",
         flush=True,
     )
 
