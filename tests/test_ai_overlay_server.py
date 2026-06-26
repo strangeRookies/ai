@@ -5,7 +5,7 @@ import numpy as np
 
 from ai.streams.video_reader import FramePacket
 from scripts.run_rtsp_inference import create_classifier, create_detector
-from scripts.serve_ai_overlay import format_action_overlay_text, initial_summary, process_frame
+from scripts.serve_ai_overlay import OverlayPublishState, format_action_overlay_text, initial_summary, process_frame
 from ai.action.per_track_sequence_buffer import PerTrackCropSequenceBuffers
 from ai.visualization.action_overlay import annotate_boxes_with_action
 from tracking.simple_tracker import SimpleTrackAssigner
@@ -102,6 +102,36 @@ class AiOverlayServerTest(unittest.TestCase):
         self.assertEqual(event_payload["messageType"], "event")
         self.assertEqual(event_payload["streamId"], "cam_01")
         self.assertIn("boundingBox", event_payload)
+
+    def test_overlay_publish_state_reuses_latest_signal_for_active_track(self):
+        state = OverlayPublishState()
+        boxes = [{"x1": 10, "y1": 20, "x2": 30, "y2": 40, "track_id": 7, "faint_probability": 0.63}]
+
+        state.apply_latest_signals(boxes)
+        self.assertEqual(state.signals_by_track[7]["faint_probability"], 0.63)
+
+        next_boxes = [{"x1": 12, "y1": 22, "x2": 32, "y2": 42, "track_id": 7}]
+        state.apply_latest_signals(next_boxes)
+
+        self.assertEqual(next_boxes[0]["faint_probability"], 0.63)
+        self.assertFalse(next_boxes[0]["event_triggered"])
+
+    def test_overlay_publish_state_removes_signal_when_track_disappears(self):
+        state = OverlayPublishState()
+        state.apply_latest_signals([{"x1": 10, "y1": 20, "x2": 30, "y2": 40, "track_id": 7, "faint_probability": 0.63}])
+
+        state.apply_latest_signals([])
+
+        self.assertEqual(state.signals_by_track, {})
+
+    def test_overlay_publish_state_timestamp_is_monotonic(self):
+        state = OverlayPublishState()
+        first = state.next_timestamp_ms()
+        state.last_timestamp_ms = first + 100
+
+        second = state.next_timestamp_ms()
+
+        self.assertEqual(second, first + 101)
 
 
 class FakePublisher:
