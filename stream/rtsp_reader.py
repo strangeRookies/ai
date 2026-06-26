@@ -50,12 +50,16 @@ class RtspFrameReader:
     def _run(self):
         try:
             import cv2
+            import os
         except ImportError as exc:
             print(f"[rtsp-reader] OpenCV import failed: {exc}", file=sys.stderr)
             return
 
+        # Enable TCP transport and 5-second socket timeout to prevent indefinite blocking
+        os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|timeout;5000000"
+
         while not self._stop_event.is_set():
-            cap = cv2.VideoCapture(self.rtsp_url)
+            cap = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG)
             if not cap.isOpened():
                 print(
                     f"[rtsp-reader] RTSP connection failed: url={redact_url(self.rtsp_url)}. "

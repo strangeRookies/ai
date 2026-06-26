@@ -65,6 +65,8 @@ class RunnerConfig:
     mqtt_host: str | None
     mqtt_port: int | None
     mqtt_topic: str | None
+    mqtt_camera_topic: str | None
+    mqtt_event_topic: str | None
     mqtt_client_id_prefix: str
     mqtt_username: str | None
     mqtt_password: str | None
@@ -122,7 +124,7 @@ def parse_camera(raw: RawCamera) -> RegisteredCamera | None:
         )
         return None
 
-    raw_source_type = raw.get("sourceType") or "REAL_RTSP"
+    raw_source_type = raw.get("sourceType") or "SIMULATED_RTSP"
     match raw_source_type:
         case "REAL_RTSP" | "SIMULATED_RTSP":
             source_type: CameraSourceType = raw_source_type
@@ -246,6 +248,8 @@ def build_overlay_command(
         ("--mqtt-host", config.mqtt_host),
         ("--mqtt-port", str(config.mqtt_port) if config.mqtt_port is not None else None),
         ("--mqtt-topic", config.mqtt_topic),
+        ("--mqtt-camera-topic", config.mqtt_camera_topic),
+        ("--mqtt-event-topic", config.mqtt_event_topic),
         ("--mqtt-client-id", f"{config.mqtt_client_id_prefix}-{camera.camera_login_id}"),
         ("--mqtt-username", config.mqtt_username),
         ("--action-model", config.action_model),

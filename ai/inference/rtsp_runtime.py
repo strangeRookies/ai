@@ -14,6 +14,7 @@ from ai.action.faint_post_processing import (
     faint_probability,
 )
 from ai.postprocess.supervision_postprocessor import SupervisionPostProcessor
+from ai.publishers.mqtt_payloads import build_confirmed_event_payload, frame_size_from_shape
 from detector.mock_detector import MockDetector
 from detector.yolo_pose_detector import YoloPoseDetector
 from tracking.simple_tracker import SimpleTrackAssigner
@@ -149,38 +150,18 @@ def maybe_log_debug(packet, boxes, summary, prediction, args, prefix="[rtsp-infe
 
 
 def build_inference_event_payload(args, packet, prediction, boxes, sequence):
-    bbox = sequence.get("bbox") if sequence else None
-    track_id = sequence.get("track_id") if sequence else None
-    faint_prob = faint_probability(prediction)
-
-    # ISO-8601 UTC 문자열 (백엔드 SafetyEventDto.rawTimestamp → resolvedTimestamp() 호환)
-    detected_at = _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime())
     camera_login_id = getattr(args, "camera_login_id", None) or args.camera_id
-    score = float(prediction["score"])
-    rule_score = float(faint_prob) if faint_prob is not None else score
-    model_name = Path(str(getattr(args, "yolo_model", "yolo26n-pose"))).name
-    if model_name.endswith(".pt"):
-        model_name = model_name[:-3]
-
-    payload = {
-        "type": "fall_detected",
-        "camera_id": camera_login_id,
-        "camera_login_id": camera_login_id,
-        "timestamp": detected_at,
-        "severity": getattr(args, "event_severity", "HIGH"),
-        "message": "쓰러짐 의심 상황이 감지되었습니다.",
-        "source": "edge-ai",
-        "metadata": {
-            "bbox": bbox,
-            "confidence": score,
-            "rule_score": rule_score,
-            "pose_state": "LYING",
-            "model_name": model_name,
-        },
-    }
-    if track_id is not None:
-        payload["track_id"] = track_id
-    return payload
+    frame = getattr(packet, "frame", None)
+    frame_width, frame_height = frame_size_from_shape(frame.shape) if frame is not None else (0, 0)
+    return build_confirmed_event_payload(
+        stream_id=camera_login_id,
+        frame_width=frame_width,
+        frame_height=frame_height,
+        prediction=prediction,
+        sequence=sequence,
+        boxes=boxes,
+        timestamp_ms=int(_time.time() * 1000),
+    )
 
 
 def build_inference_event_log(args, packet, prediction, boxes, sequence):

@@ -10,7 +10,7 @@ def build_ffmpeg_command(video_path: Path, rtsp_url: str) -> list[str]:
     if ffmpeg_mode == "copy":
         command.extend(["-c:v", "copy"])
     elif ffmpeg_mode == "nvenc":
-        command.extend(["-c:v", "h264_nvenc", "-preset", "p1", "-tune", "zerolatency"])
+        command.extend(["-c:v", "h264_nvenc", "-preset", "p1", "-tune", "ull"])
     else:
         command.extend(["-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency"])
     command.extend(["-f", "rtsp", "-rtsp_transport", "tcp", rtsp_url])

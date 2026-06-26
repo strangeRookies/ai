@@ -107,6 +107,8 @@ def publish_unavailable_camera_status(
             mqtt_host=config.mqtt_host,
             mqtt_port=config.mqtt_port,
             mqtt_topic=config.mqtt_topic,
+            mqtt_camera_topic=config.mqtt_camera_topic,
+            mqtt_event_topic=config.mqtt_event_topic,
             mqtt_client_id=f"{config.mqtt_client_id_prefix}-{camera.camera_login_id}-status",
             mqtt_username=config.mqtt_username,
             mqtt_password=config.mqtt_password,

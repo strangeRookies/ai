@@ -527,3 +527,76 @@ pgrep -af "serve_ai_overlay.py"
 ss -lntup | grep -E "8010|8011|8012|8013|8889|8888|8554|8189"
 tail -f ai_runner.log
 ```
+## WebRTC / MQTT metadata 분리 기준
+
+최신 AI worker 기준으로 WebRTC/WHEP는 영상 송출만 담당합니다. AI worker는 bbox를 영상 위에 직접 그린 MJPEG stream에 의존해서 metadata를 전달하지 않고, 별도 MQTT JSON payload를 발행합니다.
+
+- 실시간 overlay 좌표: MQTT `camera` topic
+- 확정 이상행동 이벤트: MQTT `event` topic
+- legacy 호환: `--mqtt-topic` 또는 `MQTT_TOPIC`을 지정하면 event topic alias로만 사용합니다.
+- AI 담당 범위: MQTT publish까지만 수행합니다. DB 저장, Redis write, WebSocket broadcast, Frontend Zustand 업데이트는 AI가 직접 처리하지 않습니다.
+- Backend 담당 범위: `camera` topic overlay payload를 subscribe한 뒤 WebSocket으로 Frontend에 전달합니다. `event` topic 확정 이벤트만 DB 저장 대상입니다.
+- Frontend 담당 범위: WebRTC video 위에 WebSocket/Zustand로 받은 bbox를 그립니다.
+
+Overlay payload는 감지 결과가 없거나 아직 LSTM sequence 판단이 나오지 않은 frame에서도 빈 `events: []` 배열을 publish합니다. 이렇게 해야 Frontend가 TTL에만 의존하지 않고 즉시 overlay를 지울 수 있습니다.
+
+Runner 실행 시 topic은 아래처럼 명시하는 것을 권장합니다.
+
+```bash
+python scripts/run_registered_cameras.py \
+  --backend-base-url http://127.0.0.1:8080 \
+  --rtsp-base-url rtsp://127.0.0.1:8554 \
+  --video-pool /home/welabs/yolo_training/ai_fall_experiments/data/raw/indoor_chromakey/videos \
+  --overlay-base-port 8010 \
+  --overlay-report-enabled \
+  --detector-mode real \
+  --yolo-model yolo26n-pose.pt \
+  --publisher mqtt \
+  --mqtt-host 15.165.248.37 \
+  --mqtt-port 1883 \
+  --mqtt-camera-topic camera \
+  --mqtt-event-topic event \
+  --skip-simulated-ffmpeg
+```
+
+Overlay payload 예시:
+
+```json
+{
+  "schemaVersion": "1.0",
+  "messageType": "overlay",
+  "timestampMs": 1782180000123,
+  "streamId": "cam_01",
+  "frameWidth": 640,
+  "frameHeight": 360,
+  "events": [
+    {
+      "type": "faint",
+      "confidence": 0.72,
+      "trackingId": 3,
+      "boundingBox": {"x": 120, "y": 80, "width": 200, "height": 150}
+    }
+  ]
+}
+```
+
+Confirmed event payload 예시:
+
+```json
+{
+  "schemaVersion": "1.0",
+  "messageType": "event",
+  "eventId": "evt-20260623-cam_01-000001",
+  "timestampMs": 1782180000123,
+  "streamId": "cam_01",
+  "type": "faint",
+  "memoText": "쓰러짐 의심!",
+  "confidence": 0.92,
+  "trackingId": 3,
+  "frameWidth": 640,
+  "frameHeight": 360,
+  "boundingBox": {"x": 120, "y": 80, "width": 200, "height": 150}
+}
+```
+
+`streamId`는 반드시 backend 등록 카메라의 `cameraLoginId`와 동일해야 합니다. bbox 좌표는 AI 추론 frame 기준 픽셀 좌표이며, Frontend는 `frameWidth/frameHeight`와 실제 video 표시 크기를 기준으로 scale 변환해서 그려야 합니다.
