@@ -62,7 +62,7 @@
 
 * 실제 운영 checkpoint별 `classes` metadata 확인
 * 기존 checkpoint가 `["Normal", "Fall"]`이면 threshold 적용 여부 확인
-* 학습 기본값 `16/8`과 RTSP 추론 기본값 `8/4` 불일치 영향 확인
+* ~~학습 기본값 `16/8`과 RTSP 추론 기본값 `8/4` 불일치 영향 확인~~ (완료: 30프레임으로 통일)
 * 실제 RTSP 처리 FPS와 latency 확인
 
 ## 7. 다음 모델 고도화 작업
@@ -71,7 +71,7 @@
 2. 현재 crop LSTM baseline 재평가
 3. threshold sweep 확인 또는 실행
 4. false positive / false negative 목록 저장
-5. sequence `8/4`, `16/8`, `30/15` 비교 실험
+5. ~~sequence `8/4`, `16/8`, `30/15` 비교 실험~~ (완료: 30프레임 압승 확인)
 6. hard negative Normal 후보 수집
 7. Faint early 구간 보강
 8. keypoint 51차원 LSTM baseline 추가 검토

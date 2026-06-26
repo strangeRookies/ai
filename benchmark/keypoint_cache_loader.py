@@ -130,6 +130,10 @@ def cached_keypoints_to_detection(keypoints):
 
 
 def cached_keypoints_to_points(keypoints):
+    if not keypoints:
+        return []
+    if isinstance(keypoints[0], dict):
+        return list(keypoints)
     points = np.asarray(keypoints, dtype=np.float32)
     if points.ndim != 2 or points.shape[0] < 1:
         return []
@@ -141,6 +145,10 @@ def cached_keypoints_to_points(keypoints):
 
 
 def infer_frame_shape(keypoints):
+    if not keypoints:
+        return (1, 1, 3)
+    if isinstance(keypoints[0], dict):
+        return (1, 1, 3)
     points = np.asarray(keypoints, dtype=np.float32)
     if points.size == 0 or points.ndim < 2:
         return (1, 1, 3)
