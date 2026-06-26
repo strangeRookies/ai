@@ -50,3 +50,11 @@
    - `.env`, secrets, credentials, API key 등이 포함된 설정 파일을 직접 화면에 출력하거나, 원격에 push하거나, 코드에 하드코딩하지 마십시오.
 3. **폴더 침범 금지**:
    - 에이전트 본인의 수정 가능 범위 이외의 영역을 절대 임의로 수정하여 커밋하지 마십시오. 공통 계약 변경이 필요할 경우, `PROJECT_CONTRACT.md` 변경 프로세스를 먼저 밟으십시오.
+
+
+## /make-slide
+Claude Code: when the user types `/make-slide`, read `.claude/skills/make-slide/SKILL.md` and follow the presentation creation workflow.
+
+Codex: select `make-slide` from `/skills` or invoke it as `$make-slide`. The Codex wrapper is `.agents/skills/make-slide/SKILL.md`.
+
+Browse themes at https://make-slide.vercel.app.
