@@ -33,11 +33,7 @@ def build_overlay_payload(
         "streamId": stream_id,
         "frameWidth": int(frame_width),
         "frameHeight": int(frame_height),
-        "events": [
-            _overlay_event(box, frame_width=frame_width, frame_height=frame_height)
-            for box in boxes
-            if _has_overlay_signal(box)
-        ],
+        "events": [_overlay_event(box) for box in boxes if _has_overlay_signal(box)],
     }
 
 
@@ -95,14 +91,14 @@ def _has_overlay_signal(box: JsonMap) -> bool:
     return box.get("faint_probability") is not None or bool(box.get("event_triggered"))
 
 
-def _overlay_event(box: JsonMap, frame_width: int | None = None, frame_height: int | None = None) -> dict[str, JsonValue]:
+def _overlay_event(box: JsonMap) -> dict[str, JsonValue]:
     confidence = box.get("faint_probability")
     if confidence is None:
         confidence = box.get("score", 0.0)
     event: dict[str, JsonValue] = {
         "type": DEFAULT_EVENT_TYPE,
         "confidence": _clamp_probability(confidence),
-        "boundingBox": _box_bbox(box, frame_width=frame_width, frame_height=frame_height),
+        "boundingBox": _box_bbox(box),
     }
     tracking_id = box.get("track_id")
     if tracking_id is not None:
@@ -110,12 +106,12 @@ def _overlay_event(box: JsonMap, frame_width: int | None = None, frame_height: i
     return event
 
 
-def _box_bbox(box: JsonMap, frame_width: int | None = None, frame_height: int | None = None) -> dict[str, JsonValue]:
+def _box_bbox(box: JsonMap) -> dict[str, JsonValue]:
     x1 = _float_value(box.get("x1"))
     y1 = _float_value(box.get("y1"))
     x2 = _float_value(box.get("x2"))
     y2 = _float_value(box.get("y2"))
-    return _bbox_from_xyxy(x1, y1, x2, y2, frame_width=frame_width, frame_height=frame_height)
+    return _bbox_from_xyxy(x1, y1, x2, y2)
 
 
 def _sequence_bbox(sequence: JsonMap) -> dict[str, JsonValue] | None:
@@ -136,29 +132,14 @@ def _first_box_bbox(boxes: Sequence[JsonMap]) -> dict[str, JsonValue] | None:
     return _box_bbox(boxes[0])
 
 
-def _bbox_from_xyxy(
-    x1: float,
-    y1: float,
-    x2: float,
-    y2: float,
-    frame_width: int | None = None,
-    frame_height: int | None = None,
-) -> dict[str, JsonValue]:
-    if frame_width is not None and frame_width > 0:
-        x1 = _clamp_value(x1, 0.0, float(frame_width))
-        x2 = _clamp_value(x2, 0.0, float(frame_width))
-    if frame_height is not None and frame_height > 0:
-        y1 = _clamp_value(y1, 0.0, float(frame_height))
-        y2 = _clamp_value(y2, 0.0, float(frame_height))
-    x = round(min(x1, x2))
-    y = round(min(y1, y2))
-    right = round(max(x1, x2))
-    bottom = round(max(y1, y2))
+def _bbox_from_xyxy(x1: float, y1: float, x2: float, y2: float) -> dict[str, JsonValue]:
+    x = round(x1)
+    y = round(y1)
     return {
         "x": x,
         "y": y,
-        "width": max(0, right - x),
-        "height": max(0, bottom - y),
+        "width": max(0, round(x2) - x),
+        "height": max(0, round(y2) - y),
     }
 
 
@@ -200,10 +181,6 @@ def _float_value(value: JsonValue) -> float:
 def _clamp_probability(value: JsonValue) -> float:
     probability = _float_value(value)
     return max(0.0, min(1.0, probability))
-
-
-def _clamp_value(value: float, lower: float, upper: float) -> float:
-    return max(lower, min(upper, value))
 
 
 def _default_event_id(stream_id: str, timestamp_ms: int) -> str:
