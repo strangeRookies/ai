@@ -10,6 +10,10 @@ if not exist "%LOCAL_CONFIG%" (
 )
 call "%LOCAL_CONFIG%"
 
+rem Convert script path to forward slashes to prevent PowerShell escape parser bugs
+set "SCRIPT_PATH=%~dp0deploy_to_gpu_dev.ps1"
+set "SCRIPT_PATH=%SCRIPT_PATH:\=/%"
+
 if not defined GPU_HOST exit /b 1
 if not defined GPU_USER exit /b 1
 if not defined MQTT_HOST exit /b 1
@@ -25,7 +29,7 @@ echo ========================================================
 
 echo.
 echo [1/4] Uploading local source code to GPU dev releases...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "& '%~dp0deploy_to_gpu_dev.ps1' -RemoteHost '%GPU_HOST%' -RemoteUser '%GPU_USER%' -StablePath '%STABLE_ROOT%' -DevBasePath '%DEV_BASE%'"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& '%SCRIPT_PATH%' -RemoteHost '%GPU_HOST%' -RemoteUser '%GPU_USER%' -StablePath '%STABLE_ROOT%' -DevBasePath '%DEV_BASE%'"
 if errorlevel 1 exit /b 1
 
 echo.
