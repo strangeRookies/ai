@@ -1,0 +1,22 @@
+# Development RTSP server config for MediaMTX.
+#
+# Start with:
+#   mediamtx stream/mediamtx.yml
+#
+# Cameras are published by DB cameraLoginId path name:
+#   rtsp://localhost:8554/{cameraLoginId}
+
+logLevel: info
+
+rtspAddress: :8554
+rtmp: no
+hls: yes
+webrtc: yes
+webrtcICEHostNAT1To1IPs:
+  - 127.0.0.1
+webrtcICETCPMuxAddress: :8189
+srt: no
+
+paths:
+  all_others:
+    source: publisher

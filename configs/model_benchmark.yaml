@@ -1,0 +1,31 @@
+warmup_frames: 5
+keypoint_conf_threshold: 0.3
+
+video_extensions:
+  - .mp4
+  - .avi
+  - .mov
+  - .mkv
+  - .webm
+
+models:
+  - name: YOLOv8n-pose
+    candidates:
+      - yolo8n-pose.pt
+      - yolov8n-pose.pt
+  - name: YOLOv11n-pose
+    candidates:
+      - yolo11n-pose.pt
+  - name: YOLO26n-pose
+    candidates:
+      - yolo26n-pose.pt
+  - name: YOLOv8s-pose
+    candidates:
+      - yolo8s-pose.pt
+      - yolov8s-pose.pt
+  - name: YOLOv11s-pose
+    candidates:
+      - yolo11s-pose.pt
+  - name: YOLO26s-pose
+    candidates:
+      - yolo26s-pose.pt
