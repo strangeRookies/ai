@@ -7,12 +7,27 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 from ai.publishers.event_publisher import MqttEventPublisher, mqtt_settings_from_env
 
 
+def mqtt_publisher_kwargs(settings):
+    return {
+        "host": settings["host"],
+        "port": settings["port"],
+        "topic": settings["topic"],
+        "client_id": settings["client_id"],
+        "username": settings["username"],
+        "password": settings["password"],
+    }
+
+
 def build_test_event():
     return {
+        "schemaVersion": "1.0",
         "camera_id": "cam_01",
+        "camera_login_id": "cam_01",
         "timestamp": 1710000000.0,
         "event_type": "Faint",
         "severity": "HIGH",
+        "message": "MQTT test event",
+        "source": "edge-ai-test",
         "confidence": 0.91,
         "bbox": [100.0, 80.0, 220.0, 300.0],
         "track_id": 1,
@@ -26,7 +41,7 @@ def main():
         print(f"[mqtt-test] configuration error: {exc}", file=sys.stderr)
         return 1
 
-    publisher = MqttEventPublisher(**settings)
+    publisher = MqttEventPublisher(**mqtt_publisher_kwargs(settings))
     connected = publisher.connect()
     if not connected:
         return 1

@@ -31,6 +31,7 @@ def build_overlay_payload(
         "messageType": "overlay",
         "timestampMs": timestamp_ms if timestamp_ms is not None else current_timestamp_ms(),
         "streamId": stream_id,
+        "cameraLoginId": stream_id,
         "frameWidth": int(frame_width),
         "frameHeight": int(frame_height),
         "events": [
@@ -57,24 +58,47 @@ def build_confirmed_event_payload(
     confidence = _prediction_confidence(prediction)
     tracking_id = _tracking_id(sequence) if sequence is not None else None
     bbox = _sequence_bbox(sequence) if sequence is not None else None
+    dto_bbox = _sequence_bbox_list(sequence) if sequence is not None else None
     if bbox is None:
         bbox = _first_box_bbox(boxes)
+    if dto_bbox is None:
+        dto_bbox = _first_box_bbox_list(boxes)
+    keypoints = _event_keypoints(sequence, boxes)
+    event: dict[str, JsonValue] = {
+        "type": event_type,
+        "confidence": confidence,
+        "bbox": bbox,
+        "keypoints": keypoints,
+    }
+    if tracking_id is not None:
+        event["trackingId"] = tracking_id
 
     payload: dict[str, JsonValue] = {
         "schemaVersion": SCHEMA_VERSION,
         "messageType": "event",
         "eventId": event_id or _default_event_id(stream_id, emitted_at),
         "timestampMs": emitted_at,
+        "timestamp": emitted_at / 1000.0,
         "streamId": stream_id,
+        "cameraLoginId": stream_id,
+        "camera_id": stream_id,
+        "camera_login_id": stream_id,
         "type": event_type,
+        "event_type": event_type,
         "memoText": memo_text,
+        "message": memo_text,
+        "source": "edge-ai",
+        "severity": "HIGH",
         "confidence": confidence,
         "frameWidth": int(frame_width),
         "frameHeight": int(frame_height),
         "boundingBox": bbox,
+        "bbox": dto_bbox,
+        "events": [event],
     }
     if tracking_id is not None:
         payload["trackingId"] = tracking_id
+        payload["track_id"] = tracking_id
     return payload
 
 
@@ -99,10 +123,13 @@ def _overlay_event(box: JsonMap, frame_width: int | None = None, frame_height: i
     confidence = box.get("faint_probability")
     if confidence is None:
         confidence = box.get("score", 0.0)
+    bbox = _box_bbox(box, frame_width=frame_width, frame_height=frame_height)
     event: dict[str, JsonValue] = {
         "type": DEFAULT_EVENT_TYPE,
         "confidence": _clamp_probability(confidence),
-        "boundingBox": _box_bbox(box, frame_width=frame_width, frame_height=frame_height),
+        "bbox": bbox,
+        "boundingBox": bbox,
+        "keypoints": _box_keypoints(box),
     }
     tracking_id = box.get("track_id")
     if tracking_id is not None:
@@ -130,10 +157,51 @@ def _sequence_bbox(sequence: JsonMap) -> dict[str, JsonValue] | None:
     )
 
 
+def _sequence_bbox_list(sequence: JsonMap) -> list[JsonValue] | None:
+    raw = sequence.get("bbox")
+    if not isinstance(raw, list) or len(raw) < 4:
+        return None
+    return [
+        round(_float_value(raw[0])),
+        round(_float_value(raw[1])),
+        round(_float_value(raw[2])),
+        round(_float_value(raw[3])),
+    ]
+
+
 def _first_box_bbox(boxes: Sequence[JsonMap]) -> dict[str, JsonValue] | None:
     if not boxes:
         return None
     return _box_bbox(boxes[0])
+
+
+def _first_box_bbox_list(boxes: Sequence[JsonMap]) -> list[JsonValue] | None:
+    if not boxes:
+        return None
+    box = boxes[0]
+    return [
+        round(_float_value(box.get("x1"))),
+        round(_float_value(box.get("y1"))),
+        round(_float_value(box.get("x2"))),
+        round(_float_value(box.get("y2"))),
+    ]
+
+
+def _event_keypoints(sequence: JsonMap | None, boxes: Sequence[JsonMap]) -> list[JsonValue]:
+    if sequence is not None:
+        raw_keypoints = sequence.get("keypoints")
+        if isinstance(raw_keypoints, list):
+            return list(raw_keypoints)
+    if not boxes:
+        return []
+    return _box_keypoints(boxes[0])
+
+
+def _box_keypoints(box: JsonMap) -> list[JsonValue]:
+    raw_keypoints = box.get("keypoints")
+    if not isinstance(raw_keypoints, list):
+        return []
+    return list(raw_keypoints)
 
 
 def _bbox_from_xyxy(

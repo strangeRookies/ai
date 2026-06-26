@@ -30,6 +30,7 @@ class MqttPayloadsTest(unittest.TestCase):
                 "messageType": "overlay",
                 "timestampMs": 1782180000123,
                 "streamId": "cam_01",
+                "cameraLoginId": "cam_01",
                 "frameWidth": 640,
                 "frameHeight": 360,
                 "events": [
@@ -37,7 +38,9 @@ class MqttPayloadsTest(unittest.TestCase):
                         "type": "faint",
                         "confidence": 0.72,
                         "trackingId": 3,
+                        "bbox": {"x": 120, "y": 80, "width": 200, "height": 150},
                         "boundingBox": {"x": 120, "y": 80, "width": 200, "height": 150},
+                        "keypoints": [],
                     }
                 ],
             },
@@ -93,16 +96,71 @@ class MqttPayloadsTest(unittest.TestCase):
                 "messageType": "event",
                 "eventId": "evt-20260623-cam_01-000001",
                 "timestampMs": 1782180000123,
+                "timestamp": 1782180000.123,
                 "streamId": "cam_01",
+                "cameraLoginId": "cam_01",
+                "camera_id": "cam_01",
+                "camera_login_id": "cam_01",
                 "type": "faint",
+                "event_type": "faint",
                 "memoText": "쓰러짐 의심!",
+                "message": "쓰러짐 의심!",
+                "source": "edge-ai",
+                "severity": "HIGH",
                 "confidence": 0.92,
                 "trackingId": 3,
+                "track_id": 3,
                 "frameWidth": 640,
                 "frameHeight": 360,
                 "boundingBox": {"x": 120, "y": 80, "width": 200, "height": 150},
+                "bbox": [120, 80, 320, 230],
+                "events": [
+                    {
+                        "type": "faint",
+                        "confidence": 0.92,
+                        "trackingId": 3,
+                        "bbox": {"x": 120, "y": 80, "width": 200, "height": 150},
+                        "keypoints": [],
+                    }
+                ],
             },
         )
+
+    def test_confirmed_event_payload_includes_backend_dto_aliases(self):
+        payload = build_confirmed_event_payload(
+            stream_id="cam_10",
+            frame_width=1280,
+            frame_height=720,
+            timestamp_ms=1782180000123,
+            prediction={"label": "Faint", "score": 0.87, "probabilities": {"Faint": 0.87}},
+            sequence={"bbox": [120, 80, 260, 360], "track_id": 7},
+            boxes=[],
+        )
+
+        self.assertEqual(payload["camera_id"], "cam_10")
+        self.assertEqual(payload["cameraLoginId"], "cam_10")
+        self.assertEqual(payload["camera_login_id"], "cam_10")
+        self.assertEqual(payload["timestamp"], 1782180000.123)
+        self.assertEqual(payload["event_type"], "faint")
+        self.assertEqual(payload["bbox"], [120, 80, 260, 360])
+        self.assertEqual(payload["track_id"], 7)
+
+    def test_payload_events_preserve_sequence_keypoints(self):
+        payload = build_confirmed_event_payload(
+            stream_id="cam_11",
+            frame_width=640,
+            frame_height=360,
+            timestamp_ms=1782180000123,
+            prediction={"label": "Faint", "score": 0.91, "probabilities": {"Faint": 0.91}},
+            sequence={
+                "bbox": [20, 30, 100, 140],
+                "keypoints": [{"x": 30.0, "y": 40.0, "confidence": 0.9}],
+                "track_id": 9,
+            },
+            boxes=[],
+        )
+
+        self.assertEqual(payload["events"][0]["keypoints"], [{"x": 30.0, "y": 40.0, "confidence": 0.9}])
 
 
 if __name__ == "__main__":

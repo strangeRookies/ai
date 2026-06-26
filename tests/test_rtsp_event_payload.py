@@ -34,12 +34,16 @@ class RtspEventPayloadTest(unittest.TestCase):
         self.assertEqual(payload["memoText"], "쓰러짐 의심!")
         self.assertEqual(payload["confidence"], 0.81)
         self.assertEqual(payload["trackingId"], 9)
+        self.assertEqual(payload["track_id"], 9)
         self.assertEqual(payload["frameWidth"], 640)
         self.assertEqual(payload["frameHeight"], 360)
         self.assertEqual(payload["boundingBox"], {"x": 1, "y": 2, "width": 200, "height": 150})
+        self.assertEqual(payload["bbox"], [1, 2, 201, 152])
+        self.assertEqual(payload["camera_id"], "cam_01")
+        self.assertEqual(payload["camera_login_id"], "cam_01")
+        self.assertEqual(payload["event_type"], "faint")
+        self.assertEqual(payload["source"], "edge-ai")
         self.assertIn("eventId", payload)
-        self.assertNotIn("camera_id", payload)
-        self.assertNotIn("camera_login_id", payload)
         self.assertNotIn("probabilities", payload)
 
     def test_inference_event_payload_omits_tracking_id_when_missing(self):
