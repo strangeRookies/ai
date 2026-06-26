@@ -23,57 +23,14 @@ from stream.rtsp_reader import redact_url
 from tracking.display_id_mapper import DisplayIdMapper
 from ai.publishers.event_publisher import create_event_publisher, mqtt_topic_settings_from_args
 from ai.publishers.camera_status_publisher import CameraStatusPublisher
-from ai.publishers.mqtt_payloads import build_overlay_payload, current_timestamp_ms, frame_size_from_shape
+from ai.publishers.mqtt_payloads import build_overlay_payload, frame_size_from_shape
 
 
 def initial_summary():
     return initial_overlay_summary()
 
 
-class OverlayPublishState:
-    def __init__(self):
-        self.signals_by_track = {}
-        self.last_timestamp_ms = 0
-
-    def apply_latest_signals(self, boxes):
-        active_track_ids = {_track_id(box.get("track_id")) for box in boxes if box.get("track_id") is not None}
-        for track_id in list(self.signals_by_track):
-            if track_id not in active_track_ids:
-                del self.signals_by_track[track_id]
-
-        for box in boxes:
-            raw_track_id = box.get("track_id")
-            if raw_track_id is None:
-                continue
-            track_id = _track_id(raw_track_id)
-            faint_prob = box.get("faint_probability")
-            event_triggered = bool(box.get("event_triggered"))
-            if faint_prob is not None or event_triggered:
-                self.signals_by_track[track_id] = {
-                    "faint_probability": faint_prob,
-                    "event_triggered": event_triggered,
-                }
-                continue
-
-            latest = self.signals_by_track.get(track_id)
-            if latest is None:
-                continue
-            box["faint_probability"] = latest.get("faint_probability")
-            box["event_triggered"] = bool(latest.get("event_triggered"))
-
-    def next_timestamp_ms(self):
-        timestamp_ms = current_timestamp_ms()
-        if timestamp_ms <= self.last_timestamp_ms:
-            timestamp_ms = self.last_timestamp_ms + 1
-        self.last_timestamp_ms = timestamp_ms
-        return timestamp_ms
-
-
-def _track_id(value):
-    return int(float(str(value)))
-
-
-def process_frame(packet, detector, classifier, sequence_buffer, summary, args, post_processor=None, tracker=None, state=None, display_id_mapper=None, publisher=None, overlay_publish_state=None):
+def process_frame(packet, detector, classifier, sequence_buffer, summary, args, post_processor=None, tracker=None, state=None, display_id_mapper=None, publisher=None):
     detections = detector.detect(packet.frame)
     if args.detector_mode == "mock":
         detections = ensure_mock_keypoints(detections)
@@ -144,16 +101,11 @@ def process_frame(packet, detector, classifier, sequence_buffer, summary, args, 
     topic_settings = mqtt_topic_settings_from_args(args)
     frame_width, frame_height = frame_size_from_shape(packet.frame.shape)
     stream_id = getattr(args, "camera_login_id", None) or args.camera_id
-    timestamp_ms = None
-    if overlay_publish_state is not None:
-        overlay_publish_state.apply_latest_signals(boxes)
-        timestamp_ms = overlay_publish_state.next_timestamp_ms()
     overlay_payload = build_overlay_payload(
         stream_id=stream_id,
         frame_width=frame_width,
         frame_height=frame_height,
         boxes=boxes,
-        timestamp_ms=timestamp_ms,
     )
     summary["latest_overlay_event_count"] = len(overlay_payload["events"])
     if publisher is not None:
@@ -213,7 +165,6 @@ class OverlayWorker:
         cheap_filter_config = cheap_filter_config_from_args(self.args)
         print(f"[ai-overlay] tracking postprocessor: {postprocessing_mode}", flush=True)
         display_id_mapper = DisplayIdMapper()
-        overlay_publish_state = OverlayPublishState()
         while not self.stop_event.is_set():
             if self.args.classifier_input == "crops":
                 sequence_buffer = PerTrackCropSequenceBuffers(
@@ -246,8 +197,7 @@ class OverlayWorker:
                             packet, detector, classifier, sequence_buffer, summary, self.args,
                             post_processor=post_processor, tracker=tracker,
                             state=self.state, display_id_mapper=display_id_mapper,
-                            publisher=publisher,
-                            overlay_publish_state=overlay_publish_state
+                            publisher=publisher
                         )
                         self.state.update_frame(overlay, summary)
                         if self.args.max_frames > 0 and summary["frames_processed"] >= self.args.max_frames:

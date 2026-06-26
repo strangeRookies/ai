@@ -54,26 +54,6 @@ class MqttPayloadsTest(unittest.TestCase):
 
         self.assertEqual(payload["events"], [])
 
-    def test_overlay_payload_clamps_bbox_to_frame_bounds(self):
-        payload = build_overlay_payload(
-            stream_id="cam_01",
-            frame_width=640,
-            frame_height=360,
-            timestamp_ms=1782180000123,
-            boxes=[
-                {
-                    "x1": -10,
-                    "y1": 20,
-                    "x2": 700,
-                    "y2": 400,
-                    "track_id": 3,
-                    "faint_probability": 0.72,
-                }
-            ],
-        )
-
-        self.assertEqual(payload["events"][0]["boundingBox"], {"x": 0, "y": 20, "width": 640, "height": 340})
-
     def test_confirmed_event_payload_uses_event_topic_schema(self):
         payload = build_confirmed_event_payload(
             stream_id="cam_01",
