@@ -1,0 +1,7 @@
+@echo off
+set "GPU_HOST=58.127.241.84"
+set "GPU_USER=welabs"
+set "MQTT_HOST=15.165.248.37"
+set "MQTT_PORT=1883"
+set "STABLE_ROOT=/home/welabs/yolo_training/strange_ai_lstm"
+set "DEV_BASE=/home/welabs/yolo_training/strange_ai_lstm-dev"
