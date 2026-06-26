@@ -25,7 +25,7 @@ echo ========================================================
 
 echo.
 echo [1/4] Uploading local source code to GPU dev releases...
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0deploy_to_gpu_dev.ps1" -RemoteHost "%GPU_HOST%" -RemoteUser "%GPU_USER%" -StablePath "%STABLE_ROOT%" -DevBasePath "%DEV_BASE%"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& '%~dp0deploy_to_gpu_dev.ps1' -RemoteHost '%GPU_HOST%' -RemoteUser '%GPU_USER%' -StablePath '%STABLE_ROOT%' -DevBasePath '%DEV_BASE%'"
 if errorlevel 1 exit /b 1
 
 echo.
