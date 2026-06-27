@@ -121,8 +121,8 @@ docker run --rm --gpus all \
 | `MEDIAMTX_RTSP_BASE_URL` | `rtsp://host.docker.internal:8554` | RTSP base URL for simulated cameras |
 | `YOLO_MODEL_PATH` | `/models/yolo26n-pose.pt` | YOLO pose model path |
 | `MODEL_CHECKPOINT_PATH` | `/models/lstm.pt` | LSTM checkpoint path |
-| `SEQUENCE_LENGTH` | `8` | Per-track sequence length |
-| `SEQUENCE_STRIDE` | `4` | Sequence stride |
+| `SEQUENCE_LENGTH` | `30` | Per-track sequence length |
+| `SEQUENCE_STRIDE` | `15` | Sequence stride |
 | `CAMERA_POLL_INTERVAL_SECONDS` | `30` | Active camera refresh interval |
 | `DEVICE` | `auto` | YOLO device: `auto`, `cpu`, `0`, or `cuda:0` |
 | `ACTION_DEVICE` | `auto` | LSTM device |

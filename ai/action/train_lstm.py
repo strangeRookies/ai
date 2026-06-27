@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 
 from ai.action.classifier import DEFAULT_CLASSES, LSTMActionModel, crops_to_features
+from ai.action.lstm_contract import DEFAULT_LSTM_SEQUENCE_LENGTH, DEFAULT_LSTM_SEQUENCE_STRIDE
 from ai.action.sequence_buffer import CropSequenceBuffer
 from ai.detection.yolo_person_detector import MockPersonDetector, YoloPersonDetector
 from ai.labels.event_label_loader import load_event_label
@@ -320,8 +321,8 @@ def main():
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--fallback-full-frame", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--high-fallback-ratio", type=float, default=0.5)
-    parser.add_argument("--sequence-length", type=int, default=30)
-    parser.add_argument("--sequence-stride", type=int, default=15)
+    parser.add_argument("--sequence-length", type=int, default=DEFAULT_LSTM_SEQUENCE_LENGTH)
+    parser.add_argument("--sequence-stride", type=int, default=DEFAULT_LSTM_SEQUENCE_STRIDE)
     parser.add_argument("--resize-size", type=int, default=224)
     parser.add_argument("--feature-size", type=int, default=32)
     parser.add_argument("--hidden-size", type=int, default=128)

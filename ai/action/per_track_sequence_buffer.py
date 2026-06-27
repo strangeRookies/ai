@@ -112,7 +112,7 @@ class PerTrackCropSequenceBuffers:
     바운딩 박스로 크롭된 이미지 데이터를 기반으로 동작하는 이미지 분류 기반의 분류 모델(Classifier) 연동 시 사용됩니다.
     """
 
-    def __init__(self, sequence_length=8, stride=4, resize_size=224, max_track_age_seconds=5.0):
+    def __init__(self, sequence_length=30, stride=15, resize_size=224, max_track_age_seconds=5.0):
         """트랙별 이미지 크롭 시퀀스 버퍼 관리자를 초기화합니다.
         
         Args:

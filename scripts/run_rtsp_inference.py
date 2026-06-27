@@ -15,6 +15,7 @@ from ai.action.faint_post_processing import (
     is_alert_prediction,
 )
 from ai.action.per_track_sequence_buffer import PerTrackCropSequenceBuffers, PerTrackKeypointSequenceBuffers
+from ai.action.lstm_contract import DEFAULT_KEYPOINT_INPUT_SIZE, log_lstm_config
 from ai.inference.rtsp_runtime import (
     build_inference_event_log,
     build_inference_event_payload,
@@ -88,6 +89,7 @@ def run(args):
         "camera_cooldown_seconds": getattr(args, "camera_cooldown_seconds", DEFAULT_CAMERA_COOLDOWN_SECONDS),
         "sequence_length": args.sequence_length,
         "sequence_stride": args.sequence_stride,
+        "lstm_input_size": getattr(classifier, "input_size", DEFAULT_KEYPOINT_INPUT_SIZE),
         "sequence_config_note": "runtime CLI/env values override buffer class defaults; stride is sequence start interval, not FPS sampling",
         "cheap_filter_enabled": cheap_filter_config.enabled,
         "cheap_filter_sequences_kept": 0,
@@ -121,9 +123,17 @@ def run(args):
             "[rtsp-inference] sequence config: "
             f"sequence_length={args.sequence_length} "
             f"sequence_stride={args.sequence_stride} "
-            "buffer_defaults=PerTrackKeypointSequenceBuffers(8/4),KeypointSequenceBuffer(16/8) "
             "frame_sampling=disabled",
             flush=True,
+        )
+        log_lstm_config(
+            "[lstm-config]",
+            args.sequence_length,
+            args.sequence_stride,
+            getattr(classifier, "input_size", DEFAULT_KEYPOINT_INPUT_SIZE),
+            f"checkpoint/config/cli:{classifier_mode}",
+            getattr(classifier, "checkpoint_sequence_length", None),
+            getattr(classifier, "checkpoint_sequence_stride", None),
         )
         return summary
 
@@ -133,9 +143,17 @@ def run(args):
         "[rtsp-inference] sequence config: "
         f"sequence_length={args.sequence_length} "
         f"sequence_stride={args.sequence_stride} "
-        "buffer_defaults=PerTrackKeypointSequenceBuffers(8/4),KeypointSequenceBuffer(16/8) "
         "frame_sampling=disabled",
         flush=True,
+    )
+    log_lstm_config(
+        "[lstm-config]",
+        args.sequence_length,
+        args.sequence_stride,
+        getattr(classifier, "input_size", DEFAULT_KEYPOINT_INPUT_SIZE),
+        f"checkpoint/config/cli:{classifier_mode}",
+        getattr(classifier, "checkpoint_sequence_length", None),
+        getattr(classifier, "checkpoint_sequence_stride", None),
     )
 
     try:

@@ -14,6 +14,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from ai.action.keypoint_sequence_buffer import KeypointSequenceBuffer
 from ai.action.classifier import LSTMActionModel
+from ai.action.lstm_contract import DEFAULT_KEYPOINT_INPUT_SIZE, DEFAULT_LSTM_SEQUENCE_LENGTH, DEFAULT_LSTM_SEQUENCE_STRIDE
 from ai.streams.video_reader import VideoReader
 from detector.mock_detector import MockDetector
 from detector.yolo_pose_detector import YoloPoseDetector
@@ -48,8 +49,8 @@ def parse_args():
     parser.add_argument("--keypoint-cache-dir", default="../ai_fall_experiments/data/keypoints/yolo26n-pose")
     parser.add_argument("--device", default="auto")
     parser.add_argument("--imgsz", type=int, default=640)
-    parser.add_argument("--sequence-length", type=int, default=30)
-    parser.add_argument("--sequence-stride", type=int, default=15)
+    parser.add_argument("--sequence-length", type=int, default=DEFAULT_LSTM_SEQUENCE_LENGTH)
+    parser.add_argument("--sequence-stride", type=int, default=DEFAULT_LSTM_SEQUENCE_STRIDE)
     parser.add_argument("--keypoint-conf-threshold", type=float, default=0.3)
     parser.add_argument("--max-frames", type=int, default=0)
     parser.add_argument("--max-rows-per-split", type=int, default=0)
@@ -229,14 +230,7 @@ def sequence_to_features(sequence, frame_shapes, keypoint_conf_threshold):
         missing += current_missing
         total += current_total
     
-    base_features = np.stack(rows, axis=0)
-    try:
-        from ai.action.motion_features import append_motion_features
-        final_features = append_motion_features(base_features)
-    except ImportError:
-        final_features = base_features
-        
-    return final_features, missing, total
+    return np.stack(rows, axis=0).astype(np.float32), missing, total
 
 
 def collect_cached_split_sequences(rows, split_name, args):
@@ -682,7 +676,18 @@ def train_single_lstm(train_loader, eval_loader, model_config, device, args, out
         history.append(record)
     if output_dir is not None:
         output_dir.mkdir(parents=True, exist_ok=True)
-        torch.save({"model_state": model.state_dict(), "model_config": model_config, "classes": ["Normal", "Faint"]}, output_dir / "best.pt")
+        torch.save(
+            {
+                "model_state": model.state_dict(),
+                "model_config": model_config,
+                "classes": ["Normal", "Faint"],
+                "feature_type": "keypoints",
+                "input_size": DEFAULT_KEYPOINT_INPUT_SIZE,
+                "sequence_length": int(args.sequence_length),
+                "sequence_stride": int(args.sequence_stride),
+            },
+            output_dir / "best.pt",
+        )
         (output_dir / "history.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
     metrics = evaluate_lstm(model, eval_loader, device, include_probabilities=True)
     predictions = metrics.pop("predictions", [])

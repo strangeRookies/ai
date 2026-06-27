@@ -7,6 +7,7 @@ from ai.action.faint_post_processing import (
     DEFAULT_FAINT_THRESHOLD,
     DEFAULT_MIN_CONSECUTIVE_FAINT,
 )
+from ai.action.lstm_contract import DEFAULT_LSTM_SEQUENCE_LENGTH, DEFAULT_LSTM_SEQUENCE_STRIDE
 
 
 def env_float(name, default):
@@ -54,8 +55,8 @@ def parse_args(argv=None):
     parser.add_argument("--event-severity", default="HIGH")
     parser.add_argument("--debug-every-n", type=int, default=30)
     parser.add_argument("--classifier-input", choices=["keypoints", "crops"], default="keypoints")
-    parser.add_argument("--sequence-length", type=int, default=env_int("SEQUENCE_LENGTH", 30))
-    parser.add_argument("--sequence-stride", type=int, default=env_int("SEQUENCE_STRIDE", 15))
+    parser.add_argument("--sequence-length", type=int, default=env_int("SEQUENCE_LENGTH", DEFAULT_LSTM_SEQUENCE_LENGTH))
+    parser.add_argument("--sequence-stride", type=int, default=env_int("SEQUENCE_STRIDE", DEFAULT_LSTM_SEQUENCE_STRIDE))
     parser.add_argument("--cheap-filter-enabled", action=argparse.BooleanOptionalAction, default=os.getenv("CHEAP_FILTER_ENABLED", "false").lower() in {"1", "true", "yes", "on"})
     parser.add_argument("--cheap-filter-slope-ratio", type=float, default=env_float("CHEAP_FILTER_SLOPE_RATIO", 1.3))
     parser.add_argument("--cheap-filter-min-keypoint-conf", type=float, default=env_float("CHEAP_FILTER_MIN_KEYPOINT_CONF", 0.25))

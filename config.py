@@ -1,6 +1,8 @@
 import os
 from dataclasses import dataclass
 
+from ai.action.lstm_contract import DEFAULT_LSTM_SEQUENCE_LENGTH, DEFAULT_LSTM_SEQUENCE_STRIDE
+
 
 def get_env_int(name, default):
     value = os.getenv(name, str(default))
@@ -50,6 +52,7 @@ class Settings:
     track_iou_threshold: float
     track_max_missing_seconds: float
     sequence_length: int
+    sequence_stride: int
     sequence_max_track_age_seconds: float
     event_clip_pre_frames: int
     event_clip_post_frames: int
@@ -85,7 +88,8 @@ def load_settings():
         fall_decision_required=get_env_int("FALL_DECISION_REQUIRED", 2),
         track_iou_threshold=get_env_float("TRACK_IOU_THRESHOLD", 0.3),
         track_max_missing_seconds=get_env_float("TRACK_MAX_MISSING_SECONDS", 2),
-        sequence_length=get_env_int("SEQUENCE_LENGTH", 30),
+        sequence_length=get_env_int("SEQUENCE_LENGTH", DEFAULT_LSTM_SEQUENCE_LENGTH),
+        sequence_stride=get_env_int("SEQUENCE_STRIDE", DEFAULT_LSTM_SEQUENCE_STRIDE),
         sequence_max_track_age_seconds=get_env_float("SEQUENCE_MAX_TRACK_AGE_SECONDS", 5),
         event_clip_pre_frames=get_env_int("EVENT_CLIP_PRE_FRAMES", 150),
         event_clip_post_frames=get_env_int("EVENT_CLIP_POST_FRAMES", 150),

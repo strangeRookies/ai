@@ -5,6 +5,7 @@ from queue import Empty, Queue
 
 from ai.events.clip_worker import ClipWriterWorker, enqueue_event_clip
 from ai.events.event_clip import EventClipBuffer
+from ai.action.lstm_contract import DEFAULT_KEYPOINT_INPUT_SIZE, log_lstm_config
 from config import load_settings
 from detector.mock_detector import MockDetector
 from detector.yolo_pose_detector import YoloPoseDetector
@@ -140,14 +141,7 @@ def main():
         sequence_length=settings.sequence_length,
         max_track_age_seconds=settings.sequence_max_track_age_seconds,
     )
-    print(
-        "[edge-ai] sequence config: "
-        f"path=main.py sequence_length={settings.sequence_length} "
-        "sequence_stride=TODO(confirm; this path has no stride setting) "
-        "buffer=rules.track_sequence.PerTrackSequenceBuffer "
-        "note=stride is not configured on this path",
-        flush=True,
-    )
+    log_lstm_config("[lstm-config]", settings.sequence_length, settings.sequence_stride, DEFAULT_KEYPOINT_INPUT_SIZE, "config/env")
 
     if args.dry_run:
         publisher = DryRunPublisher()

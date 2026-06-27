@@ -5,10 +5,13 @@ import numpy as np
 
 from ai.action.classifier import (
     DEFAULT_CLASSES,
+    KEYPOINT_FEATURE_DIM,
     LSTMActionClassifier,
+    MOTION_KEYPOINT_FEATURE_DIM,
     classes_from_checkpoint,
     crops_to_features,
     keypoint_sequence_to_features,
+    normalize_feature_width,
     normalize_torch_device,
     sequence_to_lstm_features,
     threshold_prediction,
@@ -52,10 +55,57 @@ class LSTMActionClassifierTest(unittest.TestCase):
 
         features = keypoint_sequence_to_features(sequence)
 
-        self.assertEqual(features.shape, (1, 54))
+        self.assertEqual(features.shape, (1, 51))
         self.assertAlmostEqual(float(features[0][0]), 0.25)
         self.assertAlmostEqual(float(features[0][1]), 0.25)
         self.assertAlmostEqual(float(features[0][2]), 0.9)
+
+    def test_keypoint_sequence_to_features_can_emit_legacy_54_dim_motion_input(self):
+        sequence = {
+            "detections": [
+                {"keypoints": [{"x": 50.0, "y": 25.0, "confidence": 0.9} for _ in range(17)]},
+                {"keypoints": [{"x": 70.0, "y": 45.0, "confidence": 0.8} for _ in range(17)]},
+            ],
+            "frame_shapes": [(100, 200, 3), (100, 200, 3)],
+        }
+
+        features = keypoint_sequence_to_features(sequence, expected_input_size=MOTION_KEYPOINT_FEATURE_DIM)
+
+        self.assertEqual(features.shape, (2, 54))
+
+    def test_keypoint_sequence_to_features_matches_51_dim_checkpoint(self):
+        sequence = {
+            "detections": [
+                {"keypoints": [{"x": 50.0, "y": 25.0, "confidence": 0.9} for _ in range(18)]}
+            ],
+            "frame_shapes": [(100, 200, 3)],
+        }
+
+        features = keypoint_sequence_to_features(sequence, expected_input_size=KEYPOINT_FEATURE_DIM)
+
+        self.assertEqual(features.shape, (1, 51))
+        self.assertAlmostEqual(float(features[0][0]), 0.25)
+        self.assertAlmostEqual(float(features[0][1]), 0.25)
+        self.assertAlmostEqual(float(features[0][2]), 0.9)
+
+    def test_sequence_to_lstm_features_uses_checkpoint_input_size_for_keypoints(self):
+        sequence = {
+            "detections": [
+                {"keypoints": [{"x": 10.0, "y": 20.0, "confidence": 0.8} for _ in range(17)]}
+            ],
+            "frame_shapes": [(100, 200, 3)],
+        }
+
+        features = sequence_to_lstm_features(sequence, input_size=51)
+
+        self.assertEqual(features.shape, (1, 51))
+
+    def test_normalize_feature_width_truncates_54_to_51(self):
+        features = np.ones((2, 54), dtype=np.float32)
+
+        normalized = normalize_feature_width(features, 51, camera_login_id="cam_04", checkpoint_path="model.pt")
+
+        self.assertEqual(normalized.shape, (2, 51))
 
     @unittest.skipIf(not CV2_AVAILABLE, "cv2 is required for crop feature tests")
     def test_sequence_to_lstm_features_uses_crop_size_for_crop_checkpoint(self):

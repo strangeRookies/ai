@@ -7,6 +7,7 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
+from ai.action.lstm_contract import DEFAULT_LSTM_SEQUENCE_LENGTH, DEFAULT_LSTM_SEQUENCE_STRIDE
 from ai.action.keypoint_sequence_buffer import KeypointSequenceBuffer
 from ai.streams.video_reader import VideoReader
 from scripts.check_dataset_split import stratified_group_split
@@ -174,8 +175,8 @@ def parse_args(argv=None):
     parser.add_argument("--device", default="auto")
     parser.add_argument("--max-frames", type=int, default=60)
     parser.add_argument("--max-rows-per-split", type=int, default=2)
-    parser.add_argument("--sequence-length", type=int, default=30)
-    parser.add_argument("--sequence-stride", type=int, default=15)
+    parser.add_argument("--sequence-length", type=int, default=DEFAULT_LSTM_SEQUENCE_LENGTH)
+    parser.add_argument("--sequence-stride", type=int, default=DEFAULT_LSTM_SEQUENCE_STRIDE)
     parser.add_argument("--output", default=None)
     return parser.parse_args(argv)
 

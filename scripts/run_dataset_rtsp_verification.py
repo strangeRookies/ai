@@ -4,6 +4,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+
+from ai.action.lstm_contract import DEFAULT_LSTM_SEQUENCE_LENGTH, DEFAULT_LSTM_SEQUENCE_STRIDE
+
 
 def run_json_command(command):
     completed = subprocess.run(command, check=True, capture_output=True, text=True)
@@ -20,8 +24,8 @@ def main():
     parser.add_argument("--output-dir", default="runs/verification")
     parser.add_argument("--max-frames", type=int, default=60)
     parser.add_argument("--detector-mode", choices=["mock", "yolo"], default="mock")
-    parser.add_argument("--sequence-length", type=int, default=30)
-    parser.add_argument("--sequence-stride", type=int, default=15)
+    parser.add_argument("--sequence-length", type=int, default=DEFAULT_LSTM_SEQUENCE_LENGTH)
+    parser.add_argument("--sequence-stride", type=int, default=DEFAULT_LSTM_SEQUENCE_STRIDE)
     parser.add_argument("--write-fixed-split", default=None)
     parser.add_argument("--start-rtsp-publishers", action="store_true")
     parser.add_argument("--read-from-rtsp", action="store_true")
