@@ -48,6 +48,7 @@ echo.
 echo === [Tunnel Only Mode] ===
 echo [1/5] Skipping repo sync.
 echo [2/5] Keeping existing AI processes active.
+set "RUN_MODE=tunnel_only"
 goto DO_TUNNEL
 
 :MODE_FULL
@@ -69,26 +70,35 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
+set "RUN_MODE=full_run"
 
 :DO_TUNNEL
 echo.
 echo [3/5] Starting SSH tunnel in a new window...
-start "AI STABLE SSH Tunnel - keep open" cmd /k ssh -o ExitOnForwardFailure=yes -N -L 8888:127.0.0.1:8888 -L 8889:127.0.0.1:8889 -L 8189:127.0.0.1:8189 -R 18080:127.0.0.1:8080 %GPU_USER%@%GPU_HOST%
+if "%RUN_MODE%"=="tunnel_only" (
+  start "AI STABLE SSH Tunnel - keep open" cmd /k ssh -o ExitOnForwardFailure=yes -N -L 8888:127.0.0.1:8888 -L 8889:127.0.0.1:8889 -L 8189:127.0.0.1:8189 %GPU_USER%@%GPU_HOST%
+) else (
+  start "AI STABLE SSH Tunnel - keep open" cmd /k ssh -o ExitOnForwardFailure=yes -N -L 8888:127.0.0.1:8888 -L 8889:127.0.0.1:8889 -L 8189:127.0.0.1:8189 -R 18080:127.0.0.1:8080 %GPU_USER%@%GPU_HOST%
+)
 
 echo Enter the SSH password in the tunnel window and keep it open.
 pause
 
 echo.
 echo [4/5] Checking GPU access to Windows backend through reverse tunnel...
-ssh %GPU_USER%@%GPU_HOST% "curl -fsS http://127.0.0.1:18080/api/cameras/active >/dev/null"
-if errorlevel 1 (
-  echo [ERROR] GPU PC cannot reach the Windows backend through port 18080.
-  echo Make sure the tunnel window is open and the backend is running on localhost:8080.
-  pause
-  exit /b 1
+if "%RUN_MODE%"=="tunnel_only" (
+  echo Skipping backend check (Tunnel Only mode).
+) else (
+  ssh %GPU_USER%@%GPU_HOST% "curl -fsS http://127.0.0.1:18080/api/cameras/active >/dev/null"
+  if errorlevel 1 (
+    echo [ERROR] GPU PC cannot reach the Windows backend through port 18080.
+    echo Make sure the tunnel window is open and the backend is running on localhost:8080.
+    pause
+    exit /b 1
+  )
 )
 
-if "%MODE%"=="2" (
+if "%RUN_MODE%"=="tunnel_only" (
   echo.
   echo [5/5] Skipping AI runtime startup.
   goto FINISH
@@ -105,7 +115,7 @@ if errorlevel 1 (
 
 :FINISH
 echo.
-if "%MODE%"=="2" (
+if "%RUN_MODE%"=="tunnel_only" (
   echo SSH Tunnel established. Keep the tunnel window open.
 ) else (
   echo STABLE runtime started. Keep the tunnel window open.
