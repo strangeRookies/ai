@@ -157,7 +157,19 @@ def draw_metrics_panel(frame, summary, args, prediction):
     text_w1, _ = cv2.getTextSize(line1, font, scale, thickness)[0]
     text_w2, _ = cv2.getTextSize(line2, font, scale, thickness)[0]
     width = max(text_w1, text_w2) + 20
-    height = 38
+    debug_enabled = bool(getattr(args, "frame_sync_debug", False))
+    frame_sync_line = ""
+    if debug_enabled:
+        frame_sync_line = (
+            f"FRAME: {summary.get('latest_frame_id', '?')} | "
+            f"CAP: {summary.get('latest_captured_at_ms', '?')} | "
+            f"AI: {summary.get('latest_ai_latency_ms', '?')}ms | "
+            f"PUB: {summary.get('latest_publish_latency_ms', '?')}ms | "
+            f"SEQ: {getattr(args, 'sequence_length', '?')}/{getattr(args, 'sequence_stride', '?')}"
+        )
+    text_w3 = cv2.getTextSize(frame_sync_line, font, scale, thickness)[0][0] if frame_sync_line else 0
+    width = max(width, text_w3 + 20)
+    height = 58 if debug_enabled else 38
     
     # Draw background with overlay blend for semi-transparency
     overlay = frame.copy()
@@ -170,6 +182,8 @@ def draw_metrics_panel(frame, summary, args, prediction):
     # Draw text
     cv2.putText(frame, line1, (x, y), font, scale, (241, 245, 249), thickness, cv2.LINE_AA)
     cv2.putText(frame, line2, (x, y + 20), font, scale, (241, 245, 249), thickness, cv2.LINE_AA)
+    if frame_sync_line:
+        cv2.putText(frame, frame_sync_line, (x, y + 40), font, scale, (191, 219, 254), thickness, cv2.LINE_AA)
 
 
 def make_placeholder(message):

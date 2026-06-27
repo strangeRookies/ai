@@ -6,7 +6,7 @@ from typing import Final, TypeAlias
 
 from ai.action.faint_post_processing import faint_probability
 
-SCHEMA_VERSION: Final = "1.0"
+SCHEMA_VERSION: Final = "1.1"
 DEFAULT_EVENT_TYPE: Final = "faint"
 DEFAULT_MEMO_TEXT: Final = "쓰러짐 의심!"
 
@@ -25,21 +25,28 @@ def build_overlay_payload(
     frame_height: int,
     boxes: Sequence[JsonMap],
     timestamp_ms: int | None = None,
+    frame_id: int | None = None,
+    captured_at_ms: int | None = None,
+    processed_at_ms: int | None = None,
+    published_at_ms: int | None = None,
 ) -> dict[str, JsonValue]:
-    return {
+    emitted_at = timestamp_ms if timestamp_ms is not None else published_at_ms or current_timestamp_ms()
+    payload: dict[str, JsonValue] = {
         "schemaVersion": SCHEMA_VERSION,
         "messageType": "overlay",
-        "timestampMs": timestamp_ms if timestamp_ms is not None else current_timestamp_ms(),
+        "timestampMs": emitted_at,
         "streamId": stream_id,
         "cameraLoginId": stream_id,
         "frameWidth": int(frame_width),
         "frameHeight": int(frame_height),
         "events": [
-            _overlay_event(box, frame_width=frame_width, frame_height=frame_height)
+            _overlay_event(box, frame_width=frame_width, frame_height=frame_height, frame_id=frame_id)
             for box in boxes
             if _has_overlay_signal(box)
         ],
     }
+    _add_frame_sync_fields(payload, frame_id, captured_at_ms, processed_at_ms, published_at_ms)
+    return payload
 
 
 def build_confirmed_event_payload(
@@ -52,8 +59,13 @@ def build_confirmed_event_payload(
     timestamp_ms: int | None = None,
     event_id: str | None = None,
     memo_text: str = DEFAULT_MEMO_TEXT,
+    frame_id: int | None = None,
+    captured_at_ms: int | None = None,
+    processed_at_ms: int | None = None,
+    published_at_ms: int | None = None,
+    sequence_metadata: JsonMap | None = None,
 ) -> dict[str, JsonValue]:
-    emitted_at = timestamp_ms if timestamp_ms is not None else current_timestamp_ms()
+    emitted_at = timestamp_ms if timestamp_ms is not None else published_at_ms or current_timestamp_ms()
     event_type = _event_type(prediction)
     confidence = _prediction_confidence(prediction)
     tracking_id = _tracking_id(sequence) if sequence is not None else None
@@ -72,6 +84,8 @@ def build_confirmed_event_payload(
     }
     if tracking_id is not None:
         event["trackingId"] = tracking_id
+    if frame_id is not None:
+        event["frameId"] = int(frame_id)
 
     payload: dict[str, JsonValue] = {
         "schemaVersion": SCHEMA_VERSION,
@@ -96,6 +110,9 @@ def build_confirmed_event_payload(
         "bbox": dto_bbox,
         "events": [event],
     }
+    _add_frame_sync_fields(payload, frame_id, captured_at_ms, processed_at_ms, published_at_ms)
+    if sequence_metadata is not None:
+        payload["sequence"] = dict(sequence_metadata)
     if tracking_id is not None:
         payload["trackingId"] = tracking_id
         payload["track_id"] = tracking_id
@@ -119,7 +136,12 @@ def _has_overlay_signal(box: JsonMap) -> bool:
     return box.get("faint_probability") is not None or bool(box.get("event_triggered"))
 
 
-def _overlay_event(box: JsonMap, frame_width: int | None = None, frame_height: int | None = None) -> dict[str, JsonValue]:
+def _overlay_event(
+    box: JsonMap,
+    frame_width: int | None = None,
+    frame_height: int | None = None,
+    frame_id: int | None = None,
+) -> dict[str, JsonValue]:
     confidence = box.get("faint_probability")
     if confidence is None:
         confidence = box.get("score", 0.0)
@@ -134,7 +156,33 @@ def _overlay_event(box: JsonMap, frame_width: int | None = None, frame_height: i
     tracking_id = box.get("track_id")
     if tracking_id is not None:
         event["trackingId"] = int(float(str(tracking_id)))
+    box_frame_id = box.get("frameId")
+    if box_frame_id is not None:
+        event["frameId"] = int(float(str(box_frame_id)))
+    elif frame_id is not None:
+        event["frameId"] = int(frame_id)
     return event
+
+
+def _add_frame_sync_fields(
+    payload: dict[str, JsonValue],
+    frame_id: int | None,
+    captured_at_ms: int | None,
+    processed_at_ms: int | None,
+    published_at_ms: int | None,
+) -> None:
+    if frame_id is not None:
+        payload["frameId"] = int(frame_id)
+    if captured_at_ms is not None:
+        payload["capturedAtMs"] = int(captured_at_ms)
+    if processed_at_ms is not None:
+        payload["processedAtMs"] = int(processed_at_ms)
+    if published_at_ms is not None:
+        payload["publishedAtMs"] = int(published_at_ms)
+    if captured_at_ms is not None and processed_at_ms is not None:
+        payload["aiLatencyMs"] = max(0, int(processed_at_ms) - int(captured_at_ms))
+    if captured_at_ms is not None and published_at_ms is not None:
+        payload["publishLatencyMs"] = max(0, int(published_at_ms) - int(captured_at_ms))
 
 
 def _box_bbox(box: JsonMap, frame_width: int | None = None, frame_height: int | None = None) -> dict[str, JsonValue]:

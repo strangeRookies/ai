@@ -1,0 +1,108 @@
+from __future__ import annotations
+
+import time
+from collections import defaultdict, deque
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, replace
+
+
+@dataclass(frozen=True, slots=True)
+class FrameMetadata:
+    camera_login_id: str
+    frame_id: int
+    captured_at_ms: int
+    width: int
+    height: int
+    read_index: int
+    source_frame_index: int
+    processed_at_ms: int | None = None
+    published_at_ms: int | None = None
+
+    @property
+    def ai_latency_ms(self) -> int | None:
+        if self.processed_at_ms is None:
+            return None
+        return max(0, self.processed_at_ms - self.captured_at_ms)
+
+    @property
+    def publish_latency_ms(self) -> int | None:
+        if self.published_at_ms is None:
+            return None
+        return max(0, self.published_at_ms - self.captured_at_ms)
+
+
+class FrameMetadataBuffer:
+    def __init__(self, maxlen: int = 60, now_ms: Callable[[], int] | None = None):
+        self.maxlen = max(1, int(maxlen))
+        self._now_ms = now_ms or current_epoch_ms
+        self._frames_by_camera: defaultdict[str, deque[FrameMetadata]] = defaultdict(lambda: deque(maxlen=self.maxlen))
+        self._next_frame_id_by_camera: defaultdict[str, int] = defaultdict(int)
+
+    def record_capture(self, camera_login_id: str, packet, frame_shape: Sequence[int]) -> FrameMetadata:
+        frame_id = self._next_frame_id(camera_login_id)
+        width, height = frame_size_from_shape(frame_shape)
+        metadata = FrameMetadata(
+            camera_login_id=str(camera_login_id),
+            frame_id=frame_id,
+            captured_at_ms=self._now_ms(),
+            width=width,
+            height=height,
+            read_index=int(getattr(packet, "frame_idx", frame_id - 1)),
+            source_frame_index=int(getattr(packet, "frame_idx", frame_id - 1)),
+        )
+        self._frames_by_camera[str(camera_login_id)].append(metadata)
+        return metadata
+
+    def mark_processed(self, camera_login_id: str, frame_id: int) -> FrameMetadata:
+        return self._replace_metadata(camera_login_id, frame_id, processed_at_ms=self._now_ms())
+
+    def mark_published(self, camera_login_id: str, frame_id: int) -> FrameMetadata:
+        return self._replace_metadata(camera_login_id, frame_id, published_at_ms=self._now_ms())
+
+    def get_latest(self, camera_login_id: str) -> FrameMetadata | None:
+        frames = self._frames_by_camera.get(str(camera_login_id))
+        if not frames:
+            return None
+        return frames[-1]
+
+    def get_by_frame_id(self, camera_login_id: str, frame_id: int) -> FrameMetadata | None:
+        for metadata in self._frames_by_camera.get(str(camera_login_id), ()):
+            if metadata.frame_id == int(frame_id):
+                return metadata
+        return None
+
+    def get_nearest_by_timestamp(self, camera_login_id: str, timestamp_ms: int) -> FrameMetadata | None:
+        frames = self._frames_by_camera.get(str(camera_login_id))
+        if not frames:
+            return None
+        return min(frames, key=lambda item: abs(item.captured_at_ms - int(timestamp_ms)))
+
+    def size(self, camera_login_id: str) -> int:
+        return len(self._frames_by_camera.get(str(camera_login_id), ()))
+
+    def _next_frame_id(self, camera_login_id: str) -> int:
+        key = str(camera_login_id)
+        self._next_frame_id_by_camera[key] += 1
+        return self._next_frame_id_by_camera[key]
+
+    def _replace_metadata(self, camera_login_id: str, frame_id: int, **changes: int) -> FrameMetadata:
+        key = str(camera_login_id)
+        frames = self._frames_by_camera.get(key)
+        if not frames:
+            raise LookupError(f"frame metadata not found: camera_login_id={key} frame_id={frame_id}")
+        for index, metadata in enumerate(frames):
+            if metadata.frame_id == int(frame_id):
+                updated = replace(metadata, **changes)
+                frames[index] = updated
+                return updated
+        raise LookupError(f"frame metadata not found: camera_login_id={key} frame_id={frame_id}")
+
+
+def current_epoch_ms() -> int:
+    return time.time_ns() // 1_000_000
+
+
+def frame_size_from_shape(frame_shape: Sequence[int]) -> tuple[int, int]:
+    if len(frame_shape) < 2:
+        return 0, 0
+    return int(frame_shape[1]), int(frame_shape[0])

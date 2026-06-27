@@ -4,6 +4,7 @@ from argparse import Namespace
 import numpy as np
 
 from ai.streams.video_reader import FramePacket
+from ai.frame_sync import FrameMetadataBuffer
 from scripts.run_rtsp_inference import create_classifier, create_detector
 from scripts.serve_ai_overlay import OverlayPublishState, format_action_overlay_text, initial_summary, process_frame
 from ai.action.per_track_sequence_buffer import PerTrackCropSequenceBuffers
@@ -87,21 +88,52 @@ class AiOverlayServerTest(unittest.TestCase):
         tracker = SimpleTrackAssigner()
         summary = initial_summary()
         publisher = FakePublisher()
+        now_values = iter([1000, 1010, 1015, 1100, 1125, 1130])
+        frame_buffer = FrameMetadataBuffer(now_ms=lambda: next(now_values))
 
         frame = np.zeros((64, 64, 3), dtype=np.uint8)
-        process_frame(FramePacket(frame_idx=0, fps=10.0, timestamp=0.0, frame=frame), detector, classifier, buffer, summary, args, tracker=tracker, publisher=publisher)
-        process_frame(FramePacket(frame_idx=1, fps=10.0, timestamp=0.1, frame=frame), detector, classifier, buffer, summary, args, tracker=tracker, publisher=publisher)
+        process_frame(
+            FramePacket(frame_idx=0, fps=10.0, timestamp=0.0, frame=frame),
+            detector,
+            classifier,
+            buffer,
+            summary,
+            args,
+            tracker=tracker,
+            publisher=publisher,
+            frame_buffer=frame_buffer,
+        )
+        process_frame(
+            FramePacket(frame_idx=1, fps=10.0, timestamp=0.1, frame=frame),
+            detector,
+            classifier,
+            buffer,
+            summary,
+            args,
+            tracker=tracker,
+            publisher=publisher,
+            frame_buffer=frame_buffer,
+        )
 
         overlay_topic, overlay_payload = publisher.published[-2]
         event_topic, event_payload = publisher.published[-1]
         self.assertEqual(overlay_topic, "camera")
         self.assertEqual(overlay_payload["messageType"], "overlay")
         self.assertEqual(overlay_payload["streamId"], "cam_01")
+        self.assertEqual(overlay_payload["frameId"], 2)
+        self.assertEqual(overlay_payload["capturedAtMs"], 1100)
+        self.assertEqual(overlay_payload["processedAtMs"], 1125)
+        self.assertEqual(overlay_payload["publishedAtMs"], 1130)
+        self.assertEqual(overlay_payload["aiLatencyMs"], 25)
+        self.assertEqual(overlay_payload["publishLatencyMs"], 30)
         self.assertEqual(overlay_payload["frameWidth"], 64)
         self.assertEqual(overlay_payload["frameHeight"], 64)
         self.assertEqual(event_topic, "event")
         self.assertEqual(event_payload["messageType"], "event")
         self.assertEqual(event_payload["streamId"], "cam_01")
+        self.assertEqual(event_payload["frameId"], 2)
+        self.assertEqual(event_payload["sequence"]["sequenceStartFrameId"], 1)
+        self.assertEqual(event_payload["sequence"]["sequenceEndFrameId"], 2)
         self.assertIn("boundingBox", event_payload)
 
     def test_overlay_publish_state_reuses_latest_signal_for_active_track(self):

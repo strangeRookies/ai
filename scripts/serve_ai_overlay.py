@@ -11,6 +11,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from ai.action.per_track_sequence_buffer import PerTrackCropSequenceBuffers, PerTrackKeypointSequenceBuffers
 from ai.action.lstm_contract import DEFAULT_KEYPOINT_INPUT_SIZE, DEFAULT_LSTM_SEQUENCE_LENGTH, DEFAULT_LSTM_SEQUENCE_STRIDE, log_lstm_config
+from ai.frame_sync import FrameMetadataBuffer
 from ai.inference.rtsp_runtime import build_inference_event_payload, cheap_filter_config_from_args, create_detection_postprocessor, ensure_mock_keypoints
 from ai.inference.rtsp_runtime import maybe_log_debug, normalize_detections, update_detections_with_postprocessor, update_prediction_counts, update_tracking_summary
 from ai.overlay_http import OverlayState, create_overlay_server
@@ -78,7 +79,28 @@ def mjpeg_debug_enabled(args: argparse.Namespace) -> bool:
     return bool(getattr(args, "mjpeg_debug", False))
 
 
-def process_frame(packet, detector, classifier, sequence_buffer, summary, args, post_processor=None, tracker=None, state=None, display_id_mapper=None, publisher=None, overlay_publish_state=None):
+def process_frame(
+    packet,
+    detector,
+    classifier,
+    sequence_buffer,
+    summary,
+    args,
+    post_processor=None,
+    tracker=None,
+    state=None,
+    display_id_mapper=None,
+    publisher=None,
+    overlay_publish_state=None,
+    frame_buffer=None,
+):
+    stream_id = getattr(args, "camera_login_id", None) or args.camera_id
+    frame_metadata = None
+    if frame_buffer is not None:
+        frame_metadata = frame_buffer.record_capture(stream_id, packet, packet.frame.shape)
+        summary["latest_frame_id"] = frame_metadata.frame_id
+        summary["latest_captured_at_ms"] = frame_metadata.captured_at_ms
+        summary["frame_sync_buffer_size"] = frame_buffer.size(stream_id)
     detections = detector.detect(packet.frame)
     if args.detector_mode == "mock":
         detections = ensure_mock_keypoints(detections)
@@ -105,13 +127,34 @@ def process_frame(packet, detector, classifier, sequence_buffer, summary, args, 
             raw_id = box.get("track_id")
             if raw_id is not None:
                 box["display_id"] = display_id_mapper.display_id(int(raw_id))
+            if frame_metadata is not None:
+                box["frameId"] = frame_metadata.frame_id
         summary["display_id_map"] = display_id_mapper.mapping_snapshot()
+    elif frame_metadata is not None:
+        for box in boxes:
+            box["frameId"] = frame_metadata.frame_id
 
     classifier_input = getattr(args, "classifier_input", None)
+    frame_id = frame_metadata.frame_id if frame_metadata is not None else None
+    captured_at_ms = frame_metadata.captured_at_ms if frame_metadata is not None else None
     if classifier_input == "crops":
-        sequences = sequence_buffer.add(packet.frame_idx, packet.frame, boxes, now=packet.timestamp)
+        sequences = sequence_buffer.add(
+            packet.frame_idx,
+            packet.frame,
+            boxes,
+            now=packet.timestamp,
+            frame_id=frame_id,
+            captured_at_ms=captured_at_ms,
+        )
     else:
-        sequences = sequence_buffer.add(packet.frame_idx, detections, packet.frame.shape, now=packet.timestamp)
+        sequences = sequence_buffer.add(
+            packet.frame_idx,
+            detections,
+            packet.frame.shape,
+            now=packet.timestamp,
+            frame_id=frame_id,
+            captured_at_ms=captured_at_ms,
+        )
     prediction = None
     predictions_by_track = {}
     sequences_by_track = {}
@@ -149,17 +192,32 @@ def process_frame(packet, detector, classifier, sequence_buffer, summary, args, 
     annotate_boxes_with_track_actions(boxes, predictions_by_track, consecutive_by_track, triggered_track_ids, args)
     topic_settings = mqtt_topic_settings_from_args(args)
     frame_width, frame_height = frame_size_from_shape(packet.frame.shape)
-    stream_id = getattr(args, "camera_login_id", None) or args.camera_id
+    if frame_buffer is not None and frame_metadata is not None:
+        frame_metadata = frame_buffer.mark_processed(stream_id, frame_metadata.frame_id)
+        summary["latest_processed_at_ms"] = frame_metadata.processed_at_ms
+        summary["latest_ai_latency_ms"] = frame_metadata.ai_latency_ms
     timestamp_ms = None
+    published_at_ms = None
     if overlay_publish_state is not None:
         overlay_publish_state.apply_latest_signals(boxes)
         timestamp_ms = overlay_publish_state.next_timestamp_ms()
+    if frame_buffer is not None and frame_metadata is not None:
+        frame_metadata = frame_buffer.mark_published(stream_id, frame_metadata.frame_id)
+        published_at_ms = frame_metadata.published_at_ms
+        timestamp_ms = published_at_ms
+        summary["latest_published_at_ms"] = published_at_ms
+        summary["latest_publish_latency_ms"] = frame_metadata.publish_latency_ms
+        log_frame_sync(args, stream_id, frame_metadata, frame_buffer)
     overlay_payload = build_overlay_payload(
         stream_id=stream_id,
         frame_width=frame_width,
         frame_height=frame_height,
         boxes=boxes,
         timestamp_ms=timestamp_ms,
+        frame_id=getattr(frame_metadata, "frame_id", None),
+        captured_at_ms=getattr(frame_metadata, "captured_at_ms", None),
+        processed_at_ms=getattr(frame_metadata, "processed_at_ms", None),
+        published_at_ms=published_at_ms,
     )
     summary["latest_overlay_event_count"] = len(overlay_payload["events"])
     if publisher is not None:
@@ -167,7 +225,16 @@ def process_frame(packet, detector, classifier, sequence_buffer, summary, args, 
     for track_id in triggered_track_ids:
         track_prediction = predictions_by_track[track_id]
         sequence = sequences_by_track[track_id]
-        payload = build_inference_event_payload(args, packet, track_prediction, boxes, sequence)
+        payload = build_inference_event_payload(
+            args,
+            packet,
+            track_prediction,
+            boxes,
+            sequence,
+            frame_metadata=frame_metadata,
+            published_at_ms=published_at_ms,
+        )
+        log_lstm_event(args, stream_id, sequence, track_prediction)
         summary["events_generated"] += 1
         if summary["sample_event"] is None:
             summary["sample_event"] = payload
@@ -180,9 +247,50 @@ def process_frame(packet, detector, classifier, sequence_buffer, summary, args, 
     update_overlay_runtime(summary)
     if not mjpeg_debug_enabled(args):
         return None
-    overlay = draw_overlay(packet.frame, boxes, prediction, packet.frame_idx)
+    overlay_frame_id = frame_metadata.frame_id if frame_metadata is not None else packet.frame_idx
+    overlay = draw_overlay(packet.frame, boxes, prediction, overlay_frame_id)
     draw_metrics_panel(overlay, summary, args, prediction)
     return overlay
+
+
+def log_frame_sync(args, stream_id, frame_metadata, frame_buffer):
+    every_n = max(0, int(getattr(args, "debug_every_n", 30)))
+    warning_ms = max(0, int(getattr(args, "frame_sync_delay_warning_ms", 300)))
+    publish_latency_ms = frame_metadata.publish_latency_ms
+    if publish_latency_ms is not None and warning_ms > 0 and publish_latency_ms > warning_ms:
+        print(
+            "[frame-sync] warning "
+            f"{stream_id} "
+            f"overlay_delay_ms={publish_latency_ms} "
+            f"frame_id={frame_metadata.frame_id}",
+            flush=True,
+        )
+    if every_n <= 0 or frame_metadata.frame_id % every_n != 0:
+        return
+    print(
+        "[frame-sync] "
+        f"{stream_id} "
+        f"frame_id={frame_metadata.frame_id} "
+        f"captured_at_ms={frame_metadata.captured_at_ms} "
+        f"ai_latency_ms={frame_metadata.ai_latency_ms} "
+        f"publish_latency_ms={frame_metadata.publish_latency_ms} "
+        f"buffer_size={frame_buffer.size(stream_id)}",
+        flush=True,
+    )
+
+
+def log_lstm_event(args, stream_id, sequence, prediction):
+    probability = prediction.get("score")
+    print(
+        "[lstm-event] "
+        f"{stream_id} "
+        f"sequence={sequence.get('sequence_start_frame_id')}-{sequence.get('sequence_end_frame_id')} "
+        f"length={getattr(args, 'sequence_length', '')} "
+        f"stride={getattr(args, 'sequence_stride', '')} "
+        f"event={prediction.get('label')} "
+        f"prob={probability}",
+        flush=True,
+    )
 
 
 class OverlayWorker:
@@ -231,6 +339,7 @@ class OverlayWorker:
         print(f"[ai-overlay] tracking postprocessor: {postprocessing_mode}", flush=True)
         display_id_mapper = DisplayIdMapper()
         overlay_publish_state = OverlayPublishState()
+        frame_buffer = FrameMetadataBuffer(maxlen=self.args.frame_sync_buffer_size)
         while not self.stop_event.is_set():
             if self.args.classifier_input == "crops":
                 sequence_buffer = PerTrackCropSequenceBuffers(
@@ -264,7 +373,8 @@ class OverlayWorker:
                             post_processor=post_processor, tracker=tracker,
                             state=self.state, display_id_mapper=display_id_mapper,
                             publisher=publisher,
-                            overlay_publish_state=overlay_publish_state
+                            overlay_publish_state=overlay_publish_state,
+                            frame_buffer=frame_buffer,
                         )
                         if overlay is not None:
                             self.state.update_frame(overlay, summary)
@@ -327,6 +437,9 @@ def main():
     parser.add_argument("--track-max-missing-seconds", type=float, default=4.0)
     parser.add_argument("--center-match-ratio", type=float, default=0.70)
     parser.add_argument("--overlay-debug-tracks", action="store_true")
+    parser.add_argument("--frame-sync-debug", action=argparse.BooleanOptionalAction, default=os.getenv("FRAME_SYNC_DEBUG", "false").lower() in {"1", "true", "yes", "on"})
+    parser.add_argument("--frame-sync-buffer-size", type=int, default=int(os.getenv("FRAME_SYNC_BUFFER_SIZE", "60")))
+    parser.add_argument("--frame-sync-delay-warning-ms", type=int, default=int(os.getenv("FRAME_SYNC_DELAY_WARNING_MS", "300")))
     parser.add_argument("--max-frames", type=int, default=0)
     parser.add_argument("--reconnect-delay", type=float, default=2.0)
     parser.add_argument("--debug-every-n", type=int, default=30)
