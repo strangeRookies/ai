@@ -1,5 +1,6 @@
 @echo off
 setlocal
+chcp 65001 >nul
 
 set "LOCAL_CONFIG=%~dp0AI_DEV_LOCAL_CONFIG.bat"
 if not exist "%LOCAL_CONFIG%" (
