@@ -39,10 +39,15 @@ def build_overlay_payload(
         "cameraLoginId": stream_id,
         "frameWidth": int(frame_width),
         "frameHeight": int(frame_height),
+        # ALL detected boxes are always included so the frontend can draw
+        # every tracked person.  Faint probability / event_triggered flags
+        # are attached per-box by annotate_boxes_with_track_actions; boxes
+        # whose LSTM sequence is not yet ready simply have neither field set
+        # and will be rendered as normal (no-alert) bounding boxes.
         "events": [
             _overlay_event(box, frame_width=frame_width, frame_height=frame_height, frame_id=frame_id)
             for box in boxes
-            if _has_overlay_signal(box)
+            if box.get("x1") is not None or box.get("bbox") is not None
         ],
     }
     _add_frame_sync_fields(payload, frame_id, captured_at_ms, processed_at_ms, published_at_ms)
@@ -133,6 +138,9 @@ def camera_stream_id(args: JsonMap) -> str:
 
 
 def _has_overlay_signal(box: JsonMap) -> bool:
+    """이벤트 확정 payload(event_topic) 발행 조건 전용 필터.
+    overlay_topic에서는 사용하지 않음 - 모든 bbox를 항상 포함.
+    """
     return box.get("faint_probability") is not None or bool(box.get("event_triggered"))
 
 
@@ -142,13 +150,22 @@ def _overlay_event(
     frame_height: int | None = None,
     frame_id: int | None = None,
 ) -> dict[str, JsonValue]:
-    confidence = box.get("faint_probability")
-    if confidence is None:
-        confidence = box.get("score", 0.0)
+    faint_prob = box.get("faint_probability")
+    event_triggered = bool(box.get("event_triggered"))
+    # Distinguish boxes: if LSTM has produced a faint probability, label as
+    # 'faint' so the frontend can colour-code them. Otherwise label 'tracking'
+    # meaning the person is being tracked but not yet evaluated.
+    if faint_prob is not None:
+        event_type: str = DEFAULT_EVENT_TYPE  # 'faint'
+        confidence = _clamp_probability(faint_prob)
+    else:
+        event_type = "tracking"
+        confidence = _clamp_probability(box.get("score", 0.0))
     bbox = _box_bbox(box, frame_width=frame_width, frame_height=frame_height)
     event: dict[str, JsonValue] = {
-        "type": DEFAULT_EVENT_TYPE,
-        "confidence": _clamp_probability(confidence),
+        "type": event_type,
+        "confidence": confidence,
+        "eventTriggered": event_triggered,
         "bbox": bbox,
         "boundingBox": bbox,
         "keypoints": _box_keypoints(box),
