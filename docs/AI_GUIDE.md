@@ -70,20 +70,22 @@ strange_ai/ (GPU PC 분석 경로)
 
 ### 3. Keypoint Sequence Buffer 생성
 * 각 `track_id`에 할당된 포즈가 입력되면 `PerTrackKeypointSequenceBuffers` 및 `KeypointSequenceBuffer`에 17개 COCO 포즈 관절의 (x, y, confidence) 정보를 적재하여 LSTM 분류기 입력을 위한 시퀀스를 구성합니다.
-* **LSTM 입력 데이터 텐서 구조:** `(Batch, sequence_length, 51)`
-  * `51`: 17개 keypoints × 3채널(x, y, confidence)로 구성된 피처 벡터 차원수.
+* **LSTM 입력 데이터 텐서 구조:** `(Batch, sequence_length, checkpoint.model_config.input_size)`
+  * `51`: 17개 keypoints × 3채널(x, y, confidence).
+  * `54`: 51차원 keypoint feature에 3차원 motion feature(이동 속도, 중심 이동 등)를 추가한 구조.
+  * 실시간 추론은 checkpoint의 `model_config.input_size`를 기준으로 feature 차원을 맞춘다. 51차원 checkpoint에는 motion feature를 붙이지 않고, 54차원 checkpoint에는 motion feature를 포함한다.
 * **가변 설정 및 실행 경로별 기본값:**
-  시스템은 하나의 고정된 시퀀스 길이를 사용하는 대신, 분석 대상과 실행 스크립트에 따라 상이한 기본값을 사용하도록 설계되었습니다.
+  시스템은 학습 및 실제 가동 환경의 일치(Alignment)를 위해 기본 sequence_length=30, sequence_stride=15 설정을 공통 디폴트로 사용합니다.
 
 | 실행 경로 / 클래스 | 기본 sequence_length | 기본 stride | 설명 |
 | :--- | :--- | :--- | :--- |
-| **`config.py`** | 30 | - | `SEQUENCE_LENGTH` 상수 정의 |
-| **`main.py`** | 30 | - | `config.py`의 `SEQUENCE_LENGTH`를 기본값으로 사용 |
-| **`run_registered_cameras.py`** | 8 | 4 | 다중 카메라 실시간 분석기 (`--sequence-length`, `--sequence-stride` 옵션 제공) |
-| **`run_dataset_evaluation.py`** | 8 | 4 | 데이터셋 평가기 (`--sequence-length`, `--sequence-stride` 옵션 제공) |
-| **`KeypointSequenceBuffer`** (클래스) | 16 | 8 | 단독 버퍼 클래스 생성자 기본값 |
-| **`PerTrackKeypointSequenceBuffers`** (클래스) | 8 | 4 | 추적 관리용 버퍼 묶음 기본값 |
-| **`sequence_buffer.py`** (생성자) | 16 | 8 | 버퍼 모듈 내 생성자 기본값 |
+| **`config.py`** | 30 | 15 | `SEQUENCE_LENGTH`, `SEQUENCE_STRIDE` 상수 정의 |
+| **`main.py`** | 30 | 15 | `config.py`의 `SEQUENCE_LENGTH`, `SEQUENCE_STRIDE`를 기본값으로 사용 |
+| **`run_registered_cameras.py`** | 30 | 15 | 다중 카메라 실시간 분석기 (`--sequence-length`, `--sequence-stride` 옵션 제공) |
+| **`run_dataset_evaluation.py`** | 30 | 15 | 데이터셋 평가기 (`--sequence-length`, `--sequence-stride` 옵션 제공) |
+| **`KeypointSequenceBuffer`** (클래스) | 30 | 15 | 단독 버퍼 클래스 생성자 기본값 |
+| **`PerTrackKeypointSequenceBuffers`** (클래스) | 30 | 15 | 추적 관리용 버퍼 묶음 기본값 |
+| **`sequence_buffer.py`** (생성자) | 30 | 15 | 버퍼 모듈 내 생성자 기본값 |
 
 * **원본 영상(약 29.97 FPS) 기준 설정별 실제 시간 길이 (Duration) 및 다음 sequence 생성 간격:**
   * **30 프레임 설정:** 시간 길이 `30 / 29.97 ≈ 1.00초` (지연이 비교적 길지만 긴 동작 감지에 유리)

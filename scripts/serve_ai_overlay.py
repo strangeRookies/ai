@@ -10,6 +10,8 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from ai.action.per_track_sequence_buffer import PerTrackCropSequenceBuffers, PerTrackKeypointSequenceBuffers
+from ai.action.lstm_contract import DEFAULT_KEYPOINT_INPUT_SIZE, DEFAULT_LSTM_SEQUENCE_LENGTH, DEFAULT_LSTM_SEQUENCE_STRIDE, log_lstm_config
+from ai.frame_sync import FrameMetadataBuffer
 from ai.inference.rtsp_runtime import build_inference_event_payload, cheap_filter_config_from_args, create_detection_postprocessor, ensure_mock_keypoints
 from ai.inference.rtsp_runtime import maybe_log_debug, normalize_detections, update_detections_with_postprocessor, update_prediction_counts, update_tracking_summary
 from ai.overlay_http import OverlayState, create_overlay_server
@@ -23,14 +25,82 @@ from stream.rtsp_reader import redact_url
 from tracking.display_id_mapper import DisplayIdMapper
 from ai.publishers.event_publisher import create_event_publisher, mqtt_topic_settings_from_args
 from ai.publishers.camera_status_publisher import CameraStatusPublisher
-from ai.publishers.mqtt_payloads import build_overlay_payload, frame_size_from_shape
+from ai.publishers.mqtt_payloads import build_overlay_payload, current_timestamp_ms, frame_size_from_shape
 
 
 def initial_summary():
     return initial_overlay_summary()
 
 
-def process_frame(packet, detector, classifier, sequence_buffer, summary, args, post_processor=None, tracker=None, state=None, display_id_mapper=None, publisher=None):
+class OverlayPublishState:
+    def __init__(self):
+        self.signals_by_track = {}
+        self.last_timestamp_ms = 0
+
+    def apply_latest_signals(self, boxes):
+        active_track_ids = {_track_id(box.get("track_id")) for box in boxes if box.get("track_id") is not None}
+        for track_id in list(self.signals_by_track):
+            if track_id not in active_track_ids:
+                del self.signals_by_track[track_id]
+
+        for box in boxes:
+            raw_track_id = box.get("track_id")
+            if raw_track_id is None:
+                continue
+            track_id = _track_id(raw_track_id)
+            faint_prob = box.get("faint_probability")
+            event_triggered = bool(box.get("event_triggered"))
+            if faint_prob is not None or event_triggered:
+                self.signals_by_track[track_id] = {
+                    "faint_probability": faint_prob,
+                    "event_triggered": event_triggered,
+                }
+                continue
+
+            latest = self.signals_by_track.get(track_id)
+            if latest is None:
+                continue
+            box["faint_probability"] = latest.get("faint_probability")
+            box["event_triggered"] = bool(latest.get("event_triggered"))
+
+    def next_timestamp_ms(self):
+        timestamp_ms = current_timestamp_ms()
+        if timestamp_ms <= self.last_timestamp_ms:
+            timestamp_ms = self.last_timestamp_ms + 1
+        self.last_timestamp_ms = timestamp_ms
+        return timestamp_ms
+
+
+def _track_id(value):
+    return int(float(str(value)))
+
+
+def mjpeg_debug_enabled(args: argparse.Namespace) -> bool:
+    return bool(getattr(args, "mjpeg_debug", False))
+
+
+def process_frame(
+    packet,
+    detector,
+    classifier,
+    sequence_buffer,
+    summary,
+    args,
+    post_processor=None,
+    tracker=None,
+    state=None,
+    display_id_mapper=None,
+    publisher=None,
+    overlay_publish_state=None,
+    frame_buffer=None,
+):
+    stream_id = getattr(args, "camera_login_id", None) or args.camera_id
+    frame_metadata = None
+    if frame_buffer is not None:
+        frame_metadata = frame_buffer.record_capture(stream_id, packet, packet.frame.shape)
+        summary["latest_frame_id"] = frame_metadata.frame_id
+        summary["latest_captured_at_ms"] = frame_metadata.captured_at_ms
+        summary["frame_sync_buffer_size"] = frame_buffer.size(stream_id)
     detections = detector.detect(packet.frame)
     if args.detector_mode == "mock":
         detections = ensure_mock_keypoints(detections)
@@ -57,19 +127,41 @@ def process_frame(packet, detector, classifier, sequence_buffer, summary, args, 
             raw_id = box.get("track_id")
             if raw_id is not None:
                 box["display_id"] = display_id_mapper.display_id(int(raw_id))
+            if frame_metadata is not None:
+                box["frameId"] = frame_metadata.frame_id
         summary["display_id_map"] = display_id_mapper.mapping_snapshot()
+    elif frame_metadata is not None:
+        for box in boxes:
+            box["frameId"] = frame_metadata.frame_id
 
     classifier_input = getattr(args, "classifier_input", None)
+    frame_id = frame_metadata.frame_id if frame_metadata is not None else None
+    captured_at_ms = frame_metadata.captured_at_ms if frame_metadata is not None else None
     if classifier_input == "crops":
-        sequences = sequence_buffer.add(packet.frame_idx, packet.frame, boxes, now=packet.timestamp)
+        sequences = sequence_buffer.add(
+            packet.frame_idx,
+            packet.frame,
+            boxes,
+            now=packet.timestamp,
+            frame_id=frame_id,
+            captured_at_ms=captured_at_ms,
+        )
     else:
-        sequences = sequence_buffer.add(packet.frame_idx, detections, packet.frame.shape, now=packet.timestamp)
+        sequences = sequence_buffer.add(
+            packet.frame_idx,
+            detections,
+            packet.frame.shape,
+            now=packet.timestamp,
+            frame_id=frame_id,
+            captured_at_ms=captured_at_ms,
+        )
     prediction = None
     predictions_by_track = {}
     sequences_by_track = {}
     triggered_track_ids = set()
     consecutive_by_track = {}
     for sequence in sequences:
+        sequence["camera_login_id"] = getattr(args, "camera_login_id", None) or args.camera_id
         prediction = classifier.predict(sequence)
         track_id = sequence.get("track_id")
         if track_id is not None:
@@ -100,12 +192,32 @@ def process_frame(packet, detector, classifier, sequence_buffer, summary, args, 
     annotate_boxes_with_track_actions(boxes, predictions_by_track, consecutive_by_track, triggered_track_ids, args)
     topic_settings = mqtt_topic_settings_from_args(args)
     frame_width, frame_height = frame_size_from_shape(packet.frame.shape)
-    stream_id = getattr(args, "camera_login_id", None) or args.camera_id
+    if frame_buffer is not None and frame_metadata is not None:
+        frame_metadata = frame_buffer.mark_processed(stream_id, frame_metadata.frame_id)
+        summary["latest_processed_at_ms"] = frame_metadata.processed_at_ms
+        summary["latest_ai_latency_ms"] = frame_metadata.ai_latency_ms
+    timestamp_ms = None
+    published_at_ms = None
+    if overlay_publish_state is not None:
+        overlay_publish_state.apply_latest_signals(boxes)
+        timestamp_ms = overlay_publish_state.next_timestamp_ms()
+    if frame_buffer is not None and frame_metadata is not None:
+        frame_metadata = frame_buffer.mark_published(stream_id, frame_metadata.frame_id)
+        published_at_ms = frame_metadata.published_at_ms
+        timestamp_ms = published_at_ms
+        summary["latest_published_at_ms"] = published_at_ms
+        summary["latest_publish_latency_ms"] = frame_metadata.publish_latency_ms
+        log_frame_sync(args, stream_id, frame_metadata, frame_buffer)
     overlay_payload = build_overlay_payload(
         stream_id=stream_id,
         frame_width=frame_width,
         frame_height=frame_height,
         boxes=boxes,
+        timestamp_ms=timestamp_ms,
+        frame_id=getattr(frame_metadata, "frame_id", None),
+        captured_at_ms=getattr(frame_metadata, "captured_at_ms", None),
+        processed_at_ms=getattr(frame_metadata, "processed_at_ms", None),
+        published_at_ms=published_at_ms,
     )
     summary["latest_overlay_event_count"] = len(overlay_payload["events"])
     if publisher is not None:
@@ -113,7 +225,16 @@ def process_frame(packet, detector, classifier, sequence_buffer, summary, args, 
     for track_id in triggered_track_ids:
         track_prediction = predictions_by_track[track_id]
         sequence = sequences_by_track[track_id]
-        payload = build_inference_event_payload(args, packet, track_prediction, boxes, sequence)
+        payload = build_inference_event_payload(
+            args,
+            packet,
+            track_prediction,
+            boxes,
+            sequence,
+            frame_metadata=frame_metadata,
+            published_at_ms=published_at_ms,
+        )
+        log_lstm_event(args, stream_id, sequence, track_prediction)
         summary["events_generated"] += 1
         if summary["sample_event"] is None:
             summary["sample_event"] = payload
@@ -124,9 +245,52 @@ def process_frame(packet, detector, classifier, sequence_buffer, summary, args, 
     maybe_log_debug(packet, boxes, summary, prediction, args, prefix="[ai-overlay-debug]")
 
     update_overlay_runtime(summary)
-    overlay = draw_overlay(packet.frame, boxes, prediction, packet.frame_idx)
+    if not mjpeg_debug_enabled(args):
+        return None
+    overlay_frame_id = frame_metadata.frame_id if frame_metadata is not None else packet.frame_idx
+    overlay = draw_overlay(packet.frame, boxes, prediction, overlay_frame_id)
     draw_metrics_panel(overlay, summary, args, prediction)
     return overlay
+
+
+def log_frame_sync(args, stream_id, frame_metadata, frame_buffer):
+    every_n = max(0, int(getattr(args, "debug_every_n", 30)))
+    warning_ms = max(0, int(getattr(args, "frame_sync_delay_warning_ms", 300)))
+    publish_latency_ms = frame_metadata.publish_latency_ms
+    if publish_latency_ms is not None and warning_ms > 0 and publish_latency_ms > warning_ms:
+        print(
+            "[frame-sync] warning "
+            f"{stream_id} "
+            f"overlay_delay_ms={publish_latency_ms} "
+            f"frame_id={frame_metadata.frame_id}",
+            flush=True,
+        )
+    if every_n <= 0 or frame_metadata.frame_id % every_n != 0:
+        return
+    print(
+        "[frame-sync] "
+        f"{stream_id} "
+        f"frame_id={frame_metadata.frame_id} "
+        f"captured_at_ms={frame_metadata.captured_at_ms} "
+        f"ai_latency_ms={frame_metadata.ai_latency_ms} "
+        f"publish_latency_ms={frame_metadata.publish_latency_ms} "
+        f"buffer_size={frame_buffer.size(stream_id)}",
+        flush=True,
+    )
+
+
+def log_lstm_event(args, stream_id, sequence, prediction):
+    probability = prediction.get("score")
+    print(
+        "[lstm-event] "
+        f"{stream_id} "
+        f"sequence={sequence.get('sequence_start_frame_id')}-{sequence.get('sequence_end_frame_id')} "
+        f"length={getattr(args, 'sequence_length', '')} "
+        f"stride={getattr(args, 'sequence_stride', '')} "
+        f"event={prediction.get('label')} "
+        f"prob={probability}",
+        flush=True,
+    )
 
 
 class OverlayWorker:
@@ -148,6 +312,15 @@ class OverlayWorker:
         classifier, _classifier_mode = create_classifier(self.args.action_model, self.args.action_device, self.args.action_threshold)
         publisher, publisher_mode = create_event_publisher(self.args)
         print(f"[ai-overlay] initialized event publisher: {publisher_mode}", flush=True)
+        log_lstm_config(
+            "[lstm-config]",
+            self.args.sequence_length,
+            self.args.sequence_stride,
+            getattr(classifier, "input_size", DEFAULT_KEYPOINT_INPUT_SIZE),
+            f"checkpoint/config/cli:{_classifier_mode}",
+            getattr(classifier, "checkpoint_sequence_length", None),
+            getattr(classifier, "checkpoint_sequence_stride", None),
+        )
 
         # 카메라 연결 상태 퍼블리셔 (safety/cameras/status 토픽)
         camera_login_id = getattr(self.args, "camera_login_id", self.args.camera_id)
@@ -165,6 +338,8 @@ class OverlayWorker:
         cheap_filter_config = cheap_filter_config_from_args(self.args)
         print(f"[ai-overlay] tracking postprocessor: {postprocessing_mode}", flush=True)
         display_id_mapper = DisplayIdMapper()
+        overlay_publish_state = OverlayPublishState()
+        frame_buffer = FrameMetadataBuffer(maxlen=self.args.frame_sync_buffer_size)
         while not self.stop_event.is_set():
             if self.args.classifier_input == "crops":
                 sequence_buffer = PerTrackCropSequenceBuffers(
@@ -197,9 +372,12 @@ class OverlayWorker:
                             packet, detector, classifier, sequence_buffer, summary, self.args,
                             post_processor=post_processor, tracker=tracker,
                             state=self.state, display_id_mapper=display_id_mapper,
-                            publisher=publisher
+                            publisher=publisher,
+                            overlay_publish_state=overlay_publish_state,
+                            frame_buffer=frame_buffer,
                         )
-                        self.state.update_frame(overlay, summary)
+                        if overlay is not None:
+                            self.state.update_frame(overlay, summary)
                         if self.args.max_frames > 0 and summary["frames_processed"] >= self.args.max_frames:
                             return
             except Exception as exc:
@@ -215,7 +393,7 @@ class OverlayWorker:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Serve a local MJPEG stream with AI bbox/keypoint/action overlays.")
+    parser = argparse.ArgumentParser(description="Publish AI metadata; optionally serve a debug MJPEG overlay stream.")
     parser.add_argument("--rtsp-url", default=os.getenv("RTSP_URL", "rtsp://localhost:8554/cam_01"))
     parser.add_argument("--camera-id", default="cam_01")
     parser.add_argument("--camera-login-id", default=None,
@@ -223,20 +401,26 @@ def main():
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8010)
     parser.add_argument("--mjpeg-fps", type=float, default=8.0)
+    parser.add_argument(
+        "--mjpeg-debug",
+        action=argparse.BooleanOptionalAction,
+        default=os.getenv("AI_MJPEG_DEBUG", "false").lower() in {"1", "true", "yes", "on"},
+        help="Expose annotated MJPEG only for local debugging.",
+    )
     parser.add_argument("--detector-mode", choices=["real", "mock"], default="mock")
     parser.add_argument("--yolo-model", default="yolo26n-pose.pt")
     parser.add_argument("--device", default="auto")
     parser.add_argument("--imgsz", type=int, default=640)
-    parser.add_argument("--detector-conf", type=float, default=0.10)
+    parser.add_argument("--detector-conf", type=float, default=0.15)
     parser.add_argument("--action-model", default=DEFAULT_ACTION_MODEL)
     parser.add_argument("--action-device", default="auto")
     parser.add_argument("--action-threshold", type=float, default=DEFAULT_FAINT_THRESHOLD)
     parser.add_argument("--min-consecutive-faint", type=int, default=DEFAULT_MIN_CONSECUTIVE_FAINT)
     parser.add_argument("--camera-cooldown-seconds", type=float, default=DEFAULT_CAMERA_COOLDOWN_SECONDS)
     parser.add_argument("--classifier-input", choices=["keypoints", "crops"], default="keypoints")
-    parser.add_argument("--sequence-length", type=int, default=8)
-    parser.add_argument("--sequence-stride", type=int, default=4)
-    parser.add_argument("--cheap-filter-enabled", action=argparse.BooleanOptionalAction, default=os.getenv("CHEAP_FILTER_ENABLED", "true").lower() in {"1", "true", "yes", "on"})
+    parser.add_argument("--sequence-length", type=int, default=DEFAULT_LSTM_SEQUENCE_LENGTH)
+    parser.add_argument("--sequence-stride", type=int, default=DEFAULT_LSTM_SEQUENCE_STRIDE)
+    parser.add_argument("--cheap-filter-enabled", action=argparse.BooleanOptionalAction, default=os.getenv("CHEAP_FILTER_ENABLED", "false").lower() in {"1", "true", "yes", "on"})
     parser.add_argument("--cheap-filter-slope-ratio", type=float, default=float(os.getenv("CHEAP_FILTER_SLOPE_RATIO", "1.3")))
     parser.add_argument("--cheap-filter-min-keypoint-conf", type=float, default=float(os.getenv("CHEAP_FILTER_MIN_KEYPOINT_CONF", "0.25")))
     parser.add_argument("--cheap-filter-min-bbox-area-ratio", type=float, default=float(os.getenv("CHEAP_FILTER_MIN_BBOX_AREA_RATIO", "0.005")))
@@ -253,10 +437,14 @@ def main():
     parser.add_argument("--track-max-missing-seconds", type=float, default=4.0)
     parser.add_argument("--center-match-ratio", type=float, default=0.70)
     parser.add_argument("--overlay-debug-tracks", action="store_true")
+    parser.add_argument("--frame-sync-debug", action=argparse.BooleanOptionalAction, default=os.getenv("FRAME_SYNC_DEBUG", "false").lower() in {"1", "true", "yes", "on"})
+    parser.add_argument("--frame-sync-buffer-size", type=int, default=int(os.getenv("FRAME_SYNC_BUFFER_SIZE", "60")))
+    parser.add_argument("--frame-sync-delay-warning-ms", type=int, default=int(os.getenv("FRAME_SYNC_DELAY_WARNING_MS", "300")))
     parser.add_argument("--max-frames", type=int, default=0)
     parser.add_argument("--reconnect-delay", type=float, default=2.0)
     parser.add_argument("--debug-every-n", type=int, default=30)
     parser.add_argument("--print-events", action="store_true")
+    parser.add_argument("--dry-run", action="store_true", help="Run in dry-run mode (do not publish events to MQTT)")
     
     # MQTT Options
     parser.add_argument("--publisher", choices=["mqtt", "console"], help="Event publisher mode (default: from env or console if dry-run)")
@@ -274,22 +462,30 @@ def main():
 
     state = OverlayState()
     worker = OverlayWorker(args, state)
-    server = create_overlay_server(args.host, args.port, state, args.camera_id, args.mjpeg_fps)
-
-    worker.start()
-    print(f"[ai-overlay] serving http://{args.host}:{args.port}/stream", flush=True)
-    print(f"[ai-overlay] input={redact_url(args.rtsp_url)} detector={args.detector_mode}", flush=True)
+    server = None
 
     def shutdown(_signum, _frame):
-        server.shutdown()
+        worker.stop()
+        if server is not None:
+            server.shutdown()
 
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
     try:
-        server.serve_forever()
+        worker.start()
+        print(f"[ai-overlay] input={redact_url(args.rtsp_url)} detector={args.detector_mode}", flush=True)
+        if mjpeg_debug_enabled(args):
+            server = create_overlay_server(args.host, args.port, state, args.camera_id, args.mjpeg_fps)
+            print(f"[ai-overlay] debug MJPEG serving http://{args.host}:{args.port}/stream", flush=True)
+            server.serve_forever()
+        else:
+            print("[ai-overlay] metadata-only mode; WebRTC stays on the MediaMTX stream", flush=True)
+            while worker.thread.is_alive():
+                worker.thread.join(timeout=1)
     finally:
         worker.stop()
-        server.server_close()
+        if server is not None:
+            server.server_close()
 
 
 if __name__ == "__main__":

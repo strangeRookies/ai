@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>실시간 관제 이벤트 연동 및 지연시간 측정 실험</title>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@1.4.12"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/stomp.js/2.3.3/stomp.min.js"></script>
+    <style>
+        :root {
+            --bg-color: #0b0c10;
+            --card-bg: rgba(22, 26, 40, 0.8);
+            --text-color: #c5c6c7;
+            --accent-color: #66fcf1;
+            --alert-color: #ff0055;
+            --success-color: #2ecc71;
+            --border-radius: 12px;
+        }
+
+        body {
+            font-family: 'Outfit', 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        h1 {
+            color: #fff;
+            margin-bottom: 5px;
+            font-size: 1.8rem;
+            letter-spacing: 1px;
+            text-shadow: 0 0 10px rgba(102, 252, 241, 0.3);
+        }
+
+        .subtitle {
+            font-size: 0.9rem;
+            color: #888;
+            margin-bottom: 20px;
+        }
+
+        .dashboard {
+            display: flex;
+            gap: 20px;
+            width: 100%;
+            max-width: 1200px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        .video-container {
+            position: relative;
+            background: #000;
+            border: 2px solid #1f2833;
+            border-radius: var(--border-radius);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.7);
+            overflow: hidden;
+            width: 800px;
+            height: 450px;
+        }
+
+        video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .overlay-card {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(11, 12, 16, 0.7);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            padding: 12px 18px;
+            font-size: 0.85rem;
+            pointer-events: none;
+            z-index: 10;
+        }
+
+        .overlay-card table {
+            border-collapse: collapse;
+        }
+
+        .overlay-card td {
+            padding: 2px 8px;
+        }
+
+        .status-dot {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 5px;
+            background-color: #888;
+        }
+
+        .status-dot.active {
+            background-color: var(--success-color);
+            box-shadow: 0 0 8px var(--success-color);
+        }
+
+        .status-dot.alerting {
+            background-color: var(--alert-color);
+            box-shadow: 0 0 8px var(--alert-color);
+            animation: pulse 1s infinite alternate;
+        }
+
+        @keyframes pulse {
+            from { transform: scale(1); opacity: 0.6; }
+            to { transform: scale(1.3); opacity: 1; }
+        }
+
+        /* Alert Overlay UI */
+        .alert-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            border: 4px solid var(--alert-color);
+            box-sizing: border-box;
+            background: rgba(255, 0, 85, 0.15);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.3s ease;
+            z-index: 20;
+        }
+
+        .alert-overlay.show {
+            opacity: 1;
+            animation: flashBorder 1s infinite alternate;
+        }
+
+        @keyframes flashBorder {
+            from { border-color: var(--alert-color); box-shadow: inset 0 0 20px rgba(255, 0, 85, 0.5); }
+            to { border-color: #ff66aa; box-shadow: inset 0 0 40px rgba(255, 0, 85, 0.8); }
+        }
+
+        .alert-box {
+            background: rgba(20, 10, 15, 0.95);
+            backdrop-filter: blur(12px);
+            border: 2px solid var(--alert-color);
+            border-radius: var(--border-radius);
+            padding: 25px 40px;
+            text-align: center;
+            max-width: 450px;
+            box-shadow: 0 15px 40px rgba(255, 0, 85, 0.4);
+            transform: scale(0.8);
+            transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+
+        .alert-overlay.show .alert-box {
+            transform: scale(1);
+        }
+
+        .alert-title {
+            color: #fff;
+            font-size: 2rem;
+            margin: 0 0 10px 0;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            animation: textPulse 1s infinite alternate;
+        }
+
+        @keyframes textPulse {
+            from { text-shadow: 0 0 10px var(--alert-color); }
+            to { text-shadow: 0 0 25px #ff66aa, 0 0 5px #fff; }
+        }
+
+        .alert-desc {
+            font-size: 1.1rem;
+            color: #eee;
+            margin-bottom: 20px;
+        }
+
+        /* Metric panel on the right */
+        .metrics-panel {
+            background: var(--card-bg);
+            border: 1px solid #1f2833;
+            border-radius: var(--border-radius);
+            padding: 20px;
+            width: 340px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .panel-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #fff;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            padding-bottom: 8px;
+            margin: 0;
+        }
+
+        .metric-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.9rem;
+        }
+
+        .metric-value {
+            font-family: monospace;
+            font-weight: bold;
+            color: var(--accent-color);
+        }
+
+        .latency-hops {
+            margin-top: 10px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 6px;
+            padding: 10px;
+            font-size: 0.8rem;
+        }
+
+        .hop {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 4px;
+        }
+
+        .hop-name { color: #888; }
+        .hop-val { font-family: monospace; color: #fff; }
+
+        #log {
+            width: 100%;
+            max-width: 1160px;
+            height: 120px;
+            background: rgba(0, 0, 0, 0.4);
+            border: 1px solid #1f2833;
+            border-radius: 8px;
+            margin-top: 20px;
+            padding: 10px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 0.8rem;
+        }
+    </style>
+</head>
+<body>
+    <h1>실시간 AI 관제 이벤트 연동 실험</h1>
+    <div class="subtitle">WebRTC 실시간 재생 중 MQTT -> Backend -> WebSocket 전송 지연 측정</div>
+
+    <div class="dashboard">
+        <!-- 비디오 재생 영역 -->
+        <div class="video-container">
+            <video id="videoPlayer" autoplay muted controls></video>
+            
+            <div class="overlay-card">
+                <table>
+                    <tr>
+                        <td><span id="webrtcDot" class="status-dot"></span>WebRTC 상태:</td>
+                        <td id="webrtcStatus" class="metric-value">Disconnected</td>
+                    </tr>
+                    <tr>
+                        <td><span id="wsDot" class="status-dot"></span>WebSocket:</td>
+                        <td id="wsStatus" class="metric-value">Disconnected</td>
+                    </tr>
+                    <tr>
+                        <td>FPS:</td>
+                        <td id="fpsVal" class="metric-value">0</td>
+                    </tr>
+                </table>
+            </div>
+
+            <!-- 위험 상황 경보 레이어 -->
+            <div id="alertOverlay" class="alert-overlay">
+                <div class="alert-box">
+                    <div class="alert-title">FALL DETECTED</div>
+                    <div class="alert-desc">cam_01 카메라에서 쓰러짐 이벤트 감지!</div>
+                    <button onclick="dismissAlert()" style="background: var(--alert-color); color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: bold;">확인 (Dismiss)</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 벤치마크 메트릭 패널 -->
+        <div class="metrics-panel">
+            <h3 class="panel-title">지연시간 측정 지표 (Latency)</h3>
+            
+            <div class="metric-row">
+                <span>WebRTC TTFF:</span>
+                <span id="ttffVal" class="metric-value">Waiting...</span>
+            </div>
+            
+            <div class="metric-row">
+                <span>총 전송 지연 (E2E Latency):</span>
+                <span id="e2eVal" class="metric-value" style="color:var(--alert-color); font-size:1.1rem;">Waiting...</span>
+            </div>
+
+            <div class="latency-hops">
+                <div style="font-weight: bold; margin-bottom: 6px; color: var(--accent-color);">상세 흐름 타임라인 (Hops)</div>
+                <div class="hop">
+                    <span class="hop-name">1. AI detected_at:</span>
+                    <span id="hop1" class="hop-val">-</span>
+                </div>
+                <div class="hop">
+                    <span class="hop-name">2. WebSocket Push:</span>
+                    <span id="hop2" class="hop-val">-</span>
+                </div>
+                <div class="hop">
+                    <span class="hop-name">3. Front Alert Rendered:</span>
+                    <span id="hop3" class="hop-val">-</span>
+                </div>
+                <div class="hop">
+                    <span class="hop-name">WebSocket 딜레이 (Front-Back):</span>
+                    <span id="wsDelay" class="hop-val" style="color:var(--accent-color); font-weight:bold;">-</span>
+                </div>
+            </div>
+            
+            <div style="font-size:0.75rem; color:#666; text-align:center; margin-top: 10px;">
+                * Python 스크립트가 MQTT 발행 시 백엔드 로그와 대조하여 마이크로 지연을 추가 정산합니다.
+            </div>
+        </div>
+    </div>
+
+    <div id="log"></div>
+
+    <script>
+        window.alertTestReady = false;
+        window.alertStats = {
+            webrtc_connected: false,
+            websocket_connected: false,
+            ttff_ms: null,
+            alert_received: false,
+            detected_at: null,
+            ws_push_time: null,
+            front_rendered_time: null,
+            e2e_latency_ms: null
+        };
+
+        const video = document.getElementById('videoPlayer');
+        const logEl = document.getElementById('log');
+        let startTime = null;
+        let webrtcPC = null;
+        let stompClient = null;
+
+        function log(msg) {
+            console.log(msg);
+            logEl.innerHTML += `<div>[${new Date().toISOString().split('T')[1].slice(0,-1)}] ${msg}</div>`;
+            logEl.scrollTop = logEl.scrollHeight;
+        }
+
+        // WebRTC stream URL & STOMP WebSocket setup
+        const params = new URLSearchParams(window.location.search);
+        const camera = params.get('camera') || 'cam_01';
+        const whepUrl = `http://localhost:8889/${camera}/whep`;
+
+        // 1. Start WebRTC WHEP
+        async function startWebRTC() {
+            log(`WebRTC WHEP 시작: ${whepUrl}`);
+            startTime = performance.now();
+            webrtcPC = new RTCPeerConnection();
+
+            webrtcPC.addEventListener('iceconnectionstatechange', () => {
+                const state = webrtcPC.iceConnectionState;
+                document.getElementById('webrtcStatus').innerText = state;
+                const dot = document.getElementById('webrtcDot');
+                if (state === 'connected' || state === 'completed') {
+                    dot.className = "status-dot active";
+                    window.alertStats.webrtc_connected = true;
+                } else {
+                    dot.className = "status-dot";
+                }
+                log(`WebRTC ICE Connection State: ${state}`);
+            });
+
+            webrtcPC.addTransceiver('video', { direction: 'recvonly' });
+
+            webrtcPC.ontrack = (event) => {
+                log('WebRTC track 수신 완료');
+                video.srcObject = event.streams[0];
+                video.play().catch(e => log(`Play Error: ${e.message}`));
+            };
+
+            video.addEventListener('playing', () => {
+                if (window.alertStats.ttff_ms === null && startTime !== null) {
+                    window.alertStats.ttff_ms = performance.now() - startTime;
+                    document.getElementById('ttffVal').innerText = `${Math.round(window.alertStats.ttff_ms)} ms`;
+                    log(`[TTFF] 첫 프레임 렌더링 완료: ${Math.round(window.alertStats.ttff_ms)} ms`);
+                }
+            });
+
+            try {
+                const offer = await webrtcPC.createOffer();
+                await webrtcPC.setLocalDescription(offer);
+
+                // Wait for ICE
+                await new Promise((resolve) => {
+                    if (webrtcPC.iceGatheringState === 'complete') resolve();
+                    else {
+                        const check = () => {
+                            if (webrtcPC.iceGatheringState === 'complete') {
+                                webrtcPC.removeEventListener('icegatheringstatechange', check);
+                                resolve();
+                            }
+                        };
+                        webrtcPC.addEventListener('icegatheringstatechange', check);
+                        setTimeout(resolve, 2000);
+                    }
+                });
+
+                const res = await fetch(whepUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/sdp' },
+                    body: webrtcPC.localDescription.sdp
+                });
+
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const answer = await res.text();
+                await webrtcPC.setRemoteDescription({ type: 'answer', sdp: answer });
+                log('WebRTC Negotiation 완료');
+            } catch (err) {
+                log(`WebRTC 연결 실패: ${err.message}`);
+                document.getElementById('webrtcStatus').innerText = "FAILED";
+            }
+        }
+
+        // 2. Connect WebSocket STOMP
+        function connectWebSocket() {
+            log("WebSocket STOMP 연결 시도...");
+            const socketUrl = "ws://localhost:8080/ws";
+            stompClient = Stomp.client(socketUrl);
+            
+            // disable console debug logs from stomp.js to keep log clean
+            stompClient.debug = null;
+
+            stompClient.connect({}, 
+                (frame) => {
+                    log("WebSocket 연결 성공!");
+                    document.getElementById('wsStatus').innerText = "Connected";
+                    document.getElementById('wsDot').className = "status-dot active";
+                    window.alertStats.websocket_connected = true;
+                    window.alertTestReady = true;
+
+                    // Subscribe to /topic/alerts
+                    stompClient.subscribe('/topic/alerts', (message) => {
+                        const now = new Date();
+                        const renderedTimeStr = now.toISOString();
+                        const renderedEpoch = now.getTime();
+                        
+                        log(`[Alert WebSocket] 메시지 수신: ${message.body}`);
+                        
+                        try {
+                            const data = JSON.parse(message.body);
+                            
+                            // Check if alert belongs to this camera
+                            if (data.camera_id === camera || data.cameraId === camera) {
+                                triggerAlertUI(data, renderedTimeStr, renderedEpoch);
+                            }
+                        } catch (e) {
+                            log(`메시지 파싱 에러: ${e.message}`);
+                        }
+                    });
+                },
+                (error) => {
+                    log(`WebSocket 에러: ${error}`);
+                    document.getElementById('wsStatus').innerText = "Disconnected";
+                    document.getElementById('wsDot').className = "status-dot";
+                    // Retry connection after 3 seconds
+                    setTimeout(connectWebSocket, 3000);
+                }
+            );
+        }
+
+        // 3. UI Alert Trigger
+        function triggerAlertUI(data, renderedTimeStr, renderedEpoch) {
+            // Update stats
+            window.alertStats.alert_received = true;
+            window.alertStats.front_rendered_time = renderedTimeStr;
+            
+            // Parse detected_at
+            let detectedStr = data.detected_at || data.timestamp;
+            let detectedEpoch = 0;
+            if (detectedStr) {
+                if (typeof detectedStr === 'number') {
+                    // Unix epoch float
+                    detectedEpoch = Math.round(detectedStr * 1000);
+                    detectedStr = new Date(detectedEpoch).toISOString();
+                } else {
+                    detectedEpoch = new Date(detectedStr).getTime();
+                }
+            } else {
+                detectedEpoch = renderedEpoch; // fallback
+                detectedStr = renderedTimeStr;
+            }
+            window.alertStats.detected_at = detectedStr;
+            
+            // Calc E2E latency on front-end
+            const e2eVal = renderedEpoch - detectedEpoch;
+            window.alertStats.e2e_latency_ms = e2eVal;
+
+            // Update UI
+            document.getElementById('alertOverlay').className = "alert-overlay show";
+            document.getElementById('wsDot').className = "status-dot alerting";
+            
+            document.getElementById('e2eVal').innerText = `${e2eVal} ms`;
+            document.getElementById('hop1').innerText = detectedStr.split('T')[1].slice(0,-1);
+            document.getElementById('hop3').innerText = renderedTimeStr.split('T')[1].slice(0,-1);
+            
+            log(`[E2E Latency] AI -> Front Alert: ${e2eVal} ms`);
+
+            // Check if there is websocket header/timestamp we can use
+            document.getElementById('hop2').innerText = "Pending Sync...";
+            document.getElementById('wsDelay').innerText = "Pending Sync...";
+        }
+
+        function dismissAlert() {
+            document.getElementById('alertOverlay').className = "alert-overlay";
+            document.getElementById('wsDot').className = "status-dot active";
+        }
+
+        // FPS check loop
+        let lastDecoded = 0;
+        let lastFpsTime = performance.now();
+        setInterval(async () => {
+            if (webrtcPC) {
+                try {
+                    const stats = await webrtcPC.getStats();
+                    stats.forEach(report => {
+                        if (report.type === 'inbound-rtp' && report.kind === 'video') {
+                            const currentDecoded = report.framesDecoded || 0;
+                            const now = performance.now();
+                            const durationSec = (now - lastFpsTime) / 1000;
+                            if (durationSec > 0) {
+                                const fps = Math.round((currentDecoded - lastDecoded) / durationSec * 10) / 10;
+                                document.getElementById('fpsVal').innerText = fps;
+                            }
+                            lastDecoded = currentDecoded;
+                            lastFpsTime = now;
+                        }
+                    });
+                } catch (e) {}
+            }
+        }, 1000);
+
+        // Start
+        startWebRTC();
+        connectWebSocket();
+    </script>
+</body>
+</html>
