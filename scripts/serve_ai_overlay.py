@@ -444,6 +444,7 @@ def main():
     parser.add_argument("--reconnect-delay", type=float, default=2.0)
     parser.add_argument("--debug-every-n", type=int, default=30)
     parser.add_argument("--print-events", action="store_true")
+    parser.add_argument("--dry-run", action="store_true", help="Run in dry-run mode (do not publish events to MQTT)")
     
     # MQTT Options
     parser.add_argument("--publisher", choices=["mqtt", "console"], help="Event publisher mode (default: from env or console if dry-run)")
