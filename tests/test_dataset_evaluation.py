@@ -11,11 +11,11 @@ from scripts.run_rtsp_inference import create_detector
 
 
 class DatasetEvaluationTest(unittest.TestCase):
-    def test_parse_args_defaults_to_sequence_8_stride_4(self):
+    def test_parse_args_defaults_to_sequence_30_stride_15(self):
         args = parse_args([])
 
-        self.assertEqual(args.sequence_length, 8)
-        self.assertEqual(args.sequence_stride, 4)
+        self.assertEqual(args.sequence_length, 30)
+        self.assertEqual(args.sequence_stride, 15)
 
     def test_reads_dataset_rows_and_resolves_video_path(self):
         with tempfile.TemporaryDirectory() as tmp:

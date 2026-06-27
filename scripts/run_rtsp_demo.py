@@ -8,6 +8,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from ai.action.classifier import MockActionClassifier
+from ai.action.lstm_contract import DEFAULT_LSTM_SEQUENCE_LENGTH, DEFAULT_LSTM_SEQUENCE_STRIDE
 from ai.action.sequence_buffer import CropSequenceBuffer
 from ai.detection.yolo_person_detector import MockPersonDetector, YoloPersonDetector
 from ai.publishers.event_publisher import build_event_payload
@@ -190,8 +191,8 @@ def main():
     parser.add_argument("--yolo-conf", type=float, default=0.25)
     parser.add_argument("--yolo-iou", type=float, default=0.5)
     parser.add_argument("--imgsz", type=int, default=640)
-    parser.add_argument("--sequence-length", type=int, default=30)
-    parser.add_argument("--sequence-stride", type=int, default=15)
+    parser.add_argument("--sequence-length", type=int, default=DEFAULT_LSTM_SEQUENCE_LENGTH)
+    parser.add_argument("--sequence-stride", type=int, default=DEFAULT_LSTM_SEQUENCE_STRIDE)
     parser.add_argument("--resize-size", type=int, default=224)
     parser.add_argument("--start-rtsp-publishers", action="store_true")
     parser.add_argument("--read-from-rtsp", action="store_true")

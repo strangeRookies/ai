@@ -16,6 +16,7 @@ from ai.registered_cameras import (
     RunnerConfig,
     load_active_cameras,
 )
+from ai.action.lstm_contract import DEFAULT_LSTM_SEQUENCE_LENGTH, DEFAULT_LSTM_SEQUENCE_STRIDE, DEFAULT_KEYPOINT_INPUT_SIZE, log_lstm_config
 from ai.registered_camera_workers import run_camera_sync_loop
 
 
@@ -62,8 +63,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--action-device", default=os.getenv("ACTION_DEVICE", os.getenv("DEVICE", "auto")))
     parser.add_argument("--action-threshold", type=float, default=float(os.getenv("ACTION_THRESHOLD")) if os.getenv("ACTION_THRESHOLD") else None)
     parser.add_argument("--classifier-input", choices=["keypoints", "crops"], default=os.getenv("CLASSIFIER_INPUT", "keypoints"))
-    parser.add_argument("--sequence-length", type=int, default=int(os.getenv("SEQUENCE_LENGTH", "30")))
-    parser.add_argument("--sequence-stride", type=int, default=int(os.getenv("SEQUENCE_STRIDE", "15")))
+    parser.add_argument("--sequence-length", type=int, default=int(os.getenv("SEQUENCE_LENGTH", str(DEFAULT_LSTM_SEQUENCE_LENGTH))))
+    parser.add_argument("--sequence-stride", type=int, default=int(os.getenv("SEQUENCE_STRIDE", str(DEFAULT_LSTM_SEQUENCE_STRIDE))))
     parser.add_argument("--tracking-mode", choices=["auto", "simple", "supervision"], default=os.getenv("TRACKING_MODE", "supervision"))
     parser.add_argument("--print-events", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
@@ -119,9 +120,10 @@ def main(argv: list[str] | None = None) -> None:
         "[registered-cameras] sequence config: "
         f"sequence_length={config.sequence_length} "
         f"sequence_stride={config.sequence_stride} "
-        "defaults=8/4 stride_is_sequence_start_interval",
+        "defaults=30/15 stride_is_sequence_start_interval",
         flush=True,
     )
+    log_lstm_config("[lstm-config]", config.sequence_length, config.sequence_stride, DEFAULT_KEYPOINT_INPUT_SIZE, "config/cli")
     cameras = []
     while True:
         try:

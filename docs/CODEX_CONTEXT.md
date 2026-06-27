@@ -23,8 +23,9 @@
 * 일반 LSTM 입력 shape: `(Batch, sequence_length, input_size)`
 * 기본 학습 입력 가능성: `(Batch, 16, 1024)`
 * `ai/action/classifier.py`는 crop feature와 keypoint feature 모두 지원
-* checkpoint `model_config.input_size == 51`이면 keypoint feature 사용
-* keypoint feature: `17 keypoints x (x, y, confidence) = 51`
+* checkpoint `model_config.input_size == 51` 또는 `54`이면 keypoint feature 사용
+* keypoint feature 51: `17 keypoints x (x, y, confidence)`
+* keypoint feature 54: 51차원 keypoint feature + motion feature 3개
 
 ## 3. 실행 경로별 sequence 기준
 
@@ -43,13 +44,14 @@
 * `classifier.py` fallback class를 `["Normal", "Faint"]`로 변경
 * 기존 checkpoint에 `classes`가 있으면 그대로 유지
 * feature 선택 기준 정리:
-  * `input_size=51`이면 keypoint feature
+  * `input_size=51`이면 keypoint feature 17x3만 사용
+  * `input_size=54`이면 keypoint feature에 motion feature 3개 추가
   * crop sequence가 있고 keypoint checkpoint가 아니면 crop feature
 * crop feature dim은 `crop_feature_size x crop_feature_size`
 * 입력 shape 문서화:
   * 일반: `(Batch, sequence_length, input_size)`
   * crop 기본: `(Batch, 16, 1024)`
-  * keypoint: `input_size=51`일 때만 `(Batch, sequence_length, 51)`
+  * keypoint: checkpoint `input_size`에 맞춰 `(Batch, sequence_length, 51)` 또는 `(Batch, sequence_length, 54)`
 
 ## 5. 통과한 검증
 

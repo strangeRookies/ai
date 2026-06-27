@@ -70,8 +70,10 @@ strange_ai/ (GPU PC 분석 경로)
 
 ### 3. Keypoint Sequence Buffer 생성
 * 각 `track_id`에 할당된 포즈가 입력되면 `PerTrackKeypointSequenceBuffers` 및 `KeypointSequenceBuffer`에 17개 COCO 포즈 관절의 (x, y, confidence) 정보를 적재하여 LSTM 분류기 입력을 위한 시퀀스를 구성합니다.
-* **LSTM 입력 데이터 텐서 구조:** `(Batch, sequence_length, 54)`
-  * `54`: 17개 keypoints × 3채널(x, y, confidence)로 구성된 피처 벡터 51차원에 3차원 모션 피처(이동 속도, 중심 이동 등)가 추가된 차원수.
+* **LSTM 입력 데이터 텐서 구조:** `(Batch, sequence_length, checkpoint.model_config.input_size)`
+  * `51`: 17개 keypoints × 3채널(x, y, confidence).
+  * `54`: 51차원 keypoint feature에 3차원 motion feature(이동 속도, 중심 이동 등)를 추가한 구조.
+  * 실시간 추론은 checkpoint의 `model_config.input_size`를 기준으로 feature 차원을 맞춘다. 51차원 checkpoint에는 motion feature를 붙이지 않고, 54차원 checkpoint에는 motion feature를 포함한다.
 * **가변 설정 및 실행 경로별 기본값:**
   시스템은 학습 및 실제 가동 환경의 일치(Alignment)를 위해 기본 sequence_length=30, sequence_stride=15 설정을 공통 디폴트로 사용합니다.
 

@@ -2,6 +2,8 @@ import argparse
 import os
 from dataclasses import dataclass
 
+from ai.action.lstm_contract import DEFAULT_LSTM_SEQUENCE_LENGTH, DEFAULT_LSTM_SEQUENCE_STRIDE
+
 
 def env_float(name, default):
     return float(os.getenv(name, str(default)))
@@ -48,8 +50,8 @@ def parse_config():
     parser.add_argument("--yolo-model", default=os.getenv("YOLO_MODEL", "yolov8n.pt"))
     parser.add_argument("--yolo-conf", type=float, default=env_float("YOLO_CONF", 0.35))
     parser.add_argument("--yolo-iou", type=float, default=env_float("YOLO_IOU", 0.5))
-    parser.add_argument("--sequence-length", type=int, default=env_int("SEQUENCE_LENGTH", 30))
-    parser.add_argument("--sequence-stride", type=int, default=env_int("SEQUENCE_STRIDE", 15))
+    parser.add_argument("--sequence-length", type=int, default=env_int("SEQUENCE_LENGTH", DEFAULT_LSTM_SEQUENCE_LENGTH))
+    parser.add_argument("--sequence-stride", type=int, default=env_int("SEQUENCE_STRIDE", DEFAULT_LSTM_SEQUENCE_STRIDE))
     parser.add_argument("--resize-size", type=int, default=env_int("RESIZE_SIZE", 224))
     parser.add_argument("--output-video", default=os.getenv("OUTPUT_VIDEO"))
     parser.add_argument("--action-model", default=os.getenv("ACTION_MODEL"))

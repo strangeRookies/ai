@@ -40,6 +40,7 @@ class AiOverlayServerTest(unittest.TestCase):
             mqtt_camera_topic="camera",
             mqtt_event_topic="event",
             mqtt_topic=None,
+            mjpeg_debug=True,
         )
         detector = create_detector("mock", "yolov8n-pose.pt", "auto")
         classifier, _ = create_classifier(None, "auto")

@@ -27,7 +27,7 @@ class CheapFilterTest(unittest.TestCase):
     def test_horizontal_slope_1_3_keeps_faint_candidate(self):
         sequence = {"detections": [detection(horizontal=True) for _ in range(8)], "frame_shapes": [(100, 100, 3)] * 8}
 
-        decision = evaluate_sequence_candidate(sequence, CheapFilterConfig())
+        decision = evaluate_sequence_candidate(sequence, CheapFilterConfig(enabled=True))
 
         self.assertTrue(decision.keep)
         self.assertIn("slope_ratio_1.3", decision.reasons)
@@ -35,13 +35,13 @@ class CheapFilterTest(unittest.TestCase):
     def test_low_risk_upright_candidate_is_skipped_before_lstm(self):
         sequence = {"detections": [detection(horizontal=False) for _ in range(8)], "frame_shapes": [(100, 100, 3)] * 8}
 
-        decision = evaluate_sequence_candidate(sequence, CheapFilterConfig())
+        decision = evaluate_sequence_candidate(sequence, CheapFilterConfig(enabled=True))
 
         self.assertFalse(decision.keep)
         self.assertEqual(decision.reasons, ("keypoint_confidence", "bbox_size"))
 
     def test_per_track_buffer_counts_kept_and_skipped_sequences(self):
-        buffer = PerTrackKeypointSequenceBuffers(sequence_length=2, stride=1, cheap_filter_config=CheapFilterConfig())
+        buffer = PerTrackKeypointSequenceBuffers(sequence_length=2, stride=1, cheap_filter_config=CheapFilterConfig(enabled=True))
 
         skipped = buffer.add(0, [detection(horizontal=False)], (100, 100, 3))
         skipped += buffer.add(1, [detection(horizontal=False)], (100, 100, 3))

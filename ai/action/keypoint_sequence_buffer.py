@@ -6,8 +6,8 @@ class KeypointSequenceBuffer:
     예를 들어, 30/15 설정은 30프레임 크기의 시퀀스를 방출하고, 15프레임 뒤에 다음 시퀀스를 생성할 수 있게 합니다.
 
     키포인트 탐지 결과는 감지기(Detector)가 제공한 상태 그대로 보존됩니다.
-    하류(Downstream)의 LSTM 피처 변환부에서는 이를 (sequence_length, 54) 형태의 텐서로 변환합니다.
-    여기서 54는 17개의 키포인트 x (x, y, 신뢰도) 조합인 51차원에 모션 피처 3개가 추가된 조합입니다.
+    하류(Downstream)의 LSTM 피처 변환부에서는 이를 기본 (sequence_length, 51) 형태의 텐서로 변환합니다.
+    여기서 51은 17개의 키포인트 x (x, y, 신뢰도) 조합입니다.
     """
 
     def __init__(self, sequence_length=30, stride=15):

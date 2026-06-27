@@ -1,8 +1,15 @@
 from pathlib import Path
 
+from ai.action.lstm_contract import (
+    DEFAULT_KEYPOINT_COUNT,
+    DEFAULT_KEYPOINT_INPUT_SIZE,
+    MOTION_KEYPOINT_INPUT_SIZE,
+)
+
 
 DEFAULT_CLASSES = ("Normal", "Faint")
-KEYPOINT_FEATURE_DIM = 54
+KEYPOINT_FEATURE_DIM = DEFAULT_KEYPOINT_INPUT_SIZE
+MOTION_KEYPOINT_FEATURE_DIM = MOTION_KEYPOINT_INPUT_SIZE
 
 
 class ActionClassifier:
@@ -62,11 +69,21 @@ class LSTMActionClassifier(ActionClassifier):
         self.input_size = int(model_cfg.get("input_size", checkpoint.get("feature_size", 32)))
         self.crop_feature_size = int(checkpoint.get("crop_feature_size", checkpoint.get("feature_size", 32)))
         self.feature_size = self.crop_feature_size
+        self.checkpoint_path = str(checkpoint_path)
+        self.checkpoint_sequence_length = optional_int(checkpoint.get("sequence_length"))
+        self.checkpoint_sequence_stride = optional_int(checkpoint.get("sequence_stride"))
 
     def predict(self, sequence):
         if not sequence:
             return None
         features = sequence_to_lstm_features(sequence, self.input_size, self.crop_feature_size)
+        if "detections" in sequence and int(features.shape[-1]) != self.input_size:
+            features = normalize_feature_width(
+                features,
+                self.input_size,
+                camera_login_id=sequence.get("camera_login_id"),
+                checkpoint_path=self.checkpoint_path,
+            )
         x = self.torch.from_numpy(features).unsqueeze(0).to(self.device)
         with self.torch.no_grad():
             logits = self.model(x)
@@ -117,21 +134,21 @@ def classes_from_checkpoint(checkpoint):
 def sequence_to_lstm_features(sequence, input_size=KEYPOINT_FEATURE_DIM, crop_feature_size=32):
     """Select features that match the loaded checkpoint input size.
 
-    `input_size=54` means keypoint features: 17 keypoints times x, y, and confidence (51 dimensions)
-    plus 3 motion features (velocity, centroid shift, etc.) computed from the tracking buffer.
+    `input_size=51` means 17 keypoints times x, y, and confidence.
+    `input_size=54` means the same keypoints plus 3 motion features.
     If a non-keypoint checkpoint receives crops, crop features are used instead.
     Crop feature dim is `crop_feature_size * crop_feature_size`.
     """
-    if "detections" in sequence and int(input_size) == KEYPOINT_FEATURE_DIM:
-        return keypoint_sequence_to_features(sequence)
+    if "detections" in sequence and int(input_size) in {KEYPOINT_FEATURE_DIM, MOTION_KEYPOINT_FEATURE_DIM}:
+        return keypoint_sequence_to_features(sequence, expected_input_size=int(input_size))
     if "crops" in sequence:
         return crops_to_features(sequence["crops"], crop_feature_size)
     if "detections" in sequence:
-        return keypoint_sequence_to_features(sequence)
+        return keypoint_sequence_to_features(sequence, expected_input_size=int(input_size))
     raise RuntimeError("sequence must contain keypoint detections or crops")
 
 
-def keypoint_sequence_to_features(sequence, keypoint_count=17):
+def keypoint_sequence_to_features(sequence, keypoint_count=DEFAULT_KEYPOINT_COUNT, expected_input_size=KEYPOINT_FEATURE_DIM):
     try:
         import numpy as np
     except ImportError as exc:
@@ -144,12 +161,15 @@ def keypoint_sequence_to_features(sequence, keypoint_count=17):
         shape = frame_shapes[index] if index < len(frame_shapes) else None
         rows.append(keypoints_to_feature(detection, shape, keypoint_count))
     base_features = np.stack(rows, axis=0).astype(np.float32)
-    
-    try:
-        from .motion_features import append_motion_features
-        return append_motion_features(base_features)
-    except ImportError:
+    if int(expected_input_size) == KEYPOINT_FEATURE_DIM:
         return base_features
+    if int(expected_input_size) == MOTION_KEYPOINT_FEATURE_DIM:
+        try:
+            from .motion_features import append_motion_features
+            return append_motion_features(base_features)
+        except ImportError:
+            return base_features
+    return normalize_feature_width(base_features, int(expected_input_size))
 
 
 def keypoints_to_feature(detection, frame_shape=None, keypoint_count=17):
@@ -174,6 +194,41 @@ def keypoints_to_feature(detection, frame_shape=None, keypoint_count=17):
             ]
         )
     return np.asarray(features, dtype=np.float32)
+
+
+def normalize_feature_width(features, expected_input_size, camera_login_id=None, checkpoint_path=None):
+    try:
+        import numpy as np
+    except ImportError as exc:
+        raise RuntimeError(f"numpy is required for LSTM feature normalization: {exc}") from exc
+
+    actual_input_size = int(features.shape[-1])
+    expected_input_size = int(expected_input_size)
+    if actual_input_size == expected_input_size:
+        return features.astype(np.float32)
+    print(
+        "[lstm-feature] "
+        f"camera_login_id={camera_login_id or ''} "
+        f"expected_input_size={expected_input_size} "
+        f"actual_input_size={actual_input_size} "
+        f"seq_shape={tuple(features.shape)} "
+        f"checkpoint={checkpoint_path or ''}",
+        flush=True,
+    )
+    if actual_input_size > expected_input_size:
+        normalized = features[..., :expected_input_size].astype(np.float32)
+        print(f"[lstm-feature] normalized keypoint feature: {actual_input_size} -> {expected_input_size}", flush=True)
+        return normalized
+    pad_width = expected_input_size - actual_input_size
+    normalized = np.pad(features, ((0, 0), (0, pad_width)), mode="constant").astype(np.float32)
+    print(f"[lstm-feature] normalized keypoint feature: {actual_input_size} -> {expected_input_size}", flush=True)
+    return normalized
+
+
+def optional_int(value):
+    if value in (None, ""):
+        return None
+    return int(value)
 
 
 def infer_frame_size(detection, frame_shape=None):

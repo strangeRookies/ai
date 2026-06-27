@@ -35,8 +35,8 @@ def fake_config(video_pool: Path) -> RunnerConfig:
         action_device="cuda:0",
         action_threshold=None,
         classifier_input="keypoints",
-        sequence_length=8,
-        sequence_stride=4,
+        sequence_length=30,
+        sequence_stride=15,
         tracking_mode="supervision",
         print_events=False,
         dry_run=True,
@@ -46,11 +46,11 @@ def fake_config(video_pool: Path) -> RunnerConfig:
 
 
 class RegisteredCameraDockerConfigTest(unittest.TestCase):
-    def test_parse_args_defaults_to_sequence_8_stride_4(self):
+    def test_parse_args_defaults_to_sequence_30_stride_15(self):
         config = config_from_args(parse_registered_args([]))
 
-        self.assertEqual(config.sequence_length, 8)
-        self.assertEqual(config.sequence_stride, 4)
+        self.assertEqual(config.sequence_length, 30)
+        self.assertEqual(config.sequence_stride, 15)
 
     def test_parse_args_reads_docker_environment_defaults(self):
         env = {

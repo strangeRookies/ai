@@ -22,22 +22,23 @@ def cache_path_candidates(row, cache_dir):
     return list(dict.fromkeys(candidates))
 
 
-_CACHE_INDEX = None
+_CACHE_INDEX_BY_DIR = {}
 
 
 def _get_cache_index(cache_dir):
-    global _CACHE_INDEX
-    if _CACHE_INDEX is None:
-        _CACHE_INDEX = {}
+    cache_key = str(Path(cache_dir).resolve())
+    if cache_key not in _CACHE_INDEX_BY_DIR:
+        index = {}
         for p in Path(cache_dir).rglob("*.np*"):
             if p.is_file():
-                _CACHE_INDEX[p.stem] = p
+                index[p.stem] = p
                 if "__" in p.stem:
                     # e.g., 'indoor_chromakey__clip1' -> 'clip1'
                     short_name = p.stem.split("__", 1)[-1]
-                    _CACHE_INDEX[short_name] = p
-        print(f"[DEBUG] Cache index built with {len(_CACHE_INDEX)} keys", flush=True)
-    return _CACHE_INDEX
+                    index[short_name] = p
+        _CACHE_INDEX_BY_DIR[cache_key] = index
+        print(f"[DEBUG] Cache index built with {len(index)} keys", flush=True)
+    return _CACHE_INDEX_BY_DIR[cache_key]
 
 
 def resolve_keypoint_cache_path(row, cache_dir):
@@ -130,7 +131,9 @@ def cached_keypoints_to_detection(keypoints):
 
 
 def cached_keypoints_to_points(keypoints):
-    if not keypoints:
+    if keypoints is None:
+        return []
+    if len(keypoints) == 0:
         return []
     if isinstance(keypoints[0], dict):
         return list(keypoints)
@@ -145,7 +148,9 @@ def cached_keypoints_to_points(keypoints):
 
 
 def infer_frame_shape(keypoints):
-    if not keypoints:
+    if keypoints is None:
+        return (1, 1, 3)
+    if len(keypoints) == 0:
         return (1, 1, 3)
     if isinstance(keypoints[0], dict):
         return (1, 1, 3)

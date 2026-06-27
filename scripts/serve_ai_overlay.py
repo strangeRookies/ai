@@ -10,6 +10,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from ai.action.per_track_sequence_buffer import PerTrackCropSequenceBuffers, PerTrackKeypointSequenceBuffers
+from ai.action.lstm_contract import DEFAULT_KEYPOINT_INPUT_SIZE, DEFAULT_LSTM_SEQUENCE_LENGTH, DEFAULT_LSTM_SEQUENCE_STRIDE, log_lstm_config
 from ai.inference.rtsp_runtime import build_inference_event_payload, cheap_filter_config_from_args, create_detection_postprocessor, ensure_mock_keypoints
 from ai.inference.rtsp_runtime import maybe_log_debug, normalize_detections, update_detections_with_postprocessor, update_prediction_counts, update_tracking_summary
 from ai.overlay_http import OverlayState, create_overlay_server
@@ -117,6 +118,7 @@ def process_frame(packet, detector, classifier, sequence_buffer, summary, args, 
     triggered_track_ids = set()
     consecutive_by_track = {}
     for sequence in sequences:
+        sequence["camera_login_id"] = getattr(args, "camera_login_id", None) or args.camera_id
         prediction = classifier.predict(sequence)
         track_id = sequence.get("track_id")
         if track_id is not None:
@@ -202,6 +204,15 @@ class OverlayWorker:
         classifier, _classifier_mode = create_classifier(self.args.action_model, self.args.action_device, self.args.action_threshold)
         publisher, publisher_mode = create_event_publisher(self.args)
         print(f"[ai-overlay] initialized event publisher: {publisher_mode}", flush=True)
+        log_lstm_config(
+            "[lstm-config]",
+            self.args.sequence_length,
+            self.args.sequence_stride,
+            getattr(classifier, "input_size", DEFAULT_KEYPOINT_INPUT_SIZE),
+            f"checkpoint/config/cli:{_classifier_mode}",
+            getattr(classifier, "checkpoint_sequence_length", None),
+            getattr(classifier, "checkpoint_sequence_stride", None),
+        )
 
         # 카메라 연결 상태 퍼블리셔 (safety/cameras/status 토픽)
         camera_login_id = getattr(self.args, "camera_login_id", self.args.camera_id)
@@ -297,8 +308,8 @@ def main():
     parser.add_argument("--min-consecutive-faint", type=int, default=DEFAULT_MIN_CONSECUTIVE_FAINT)
     parser.add_argument("--camera-cooldown-seconds", type=float, default=DEFAULT_CAMERA_COOLDOWN_SECONDS)
     parser.add_argument("--classifier-input", choices=["keypoints", "crops"], default="keypoints")
-    parser.add_argument("--sequence-length", type=int, default=30)
-    parser.add_argument("--sequence-stride", type=int, default=15)
+    parser.add_argument("--sequence-length", type=int, default=DEFAULT_LSTM_SEQUENCE_LENGTH)
+    parser.add_argument("--sequence-stride", type=int, default=DEFAULT_LSTM_SEQUENCE_STRIDE)
     parser.add_argument("--cheap-filter-enabled", action=argparse.BooleanOptionalAction, default=os.getenv("CHEAP_FILTER_ENABLED", "false").lower() in {"1", "true", "yes", "on"})
     parser.add_argument("--cheap-filter-slope-ratio", type=float, default=float(os.getenv("CHEAP_FILTER_SLOPE_RATIO", "1.3")))
     parser.add_argument("--cheap-filter-min-keypoint-conf", type=float, default=float(os.getenv("CHEAP_FILTER_MIN_KEYPOINT_CONF", "0.25")))
