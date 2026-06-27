@@ -16,7 +16,7 @@ FrameShape: TypeAlias = tuple[int, int] | tuple[int, int, int] | list[int]
 
 @dataclass(frozen=True, slots=True)
 class CheapFilterConfig:
-    enabled: bool = True
+    enabled: bool = False
     slope_ratio_threshold: float = 1.3
     min_avg_keypoint_confidence: float = 0.25
     min_bbox_area_ratio: float = 0.005
