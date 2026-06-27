@@ -111,7 +111,7 @@ def mqtt_settings_from_env():
 
 
 def create_event_publisher(args):
-    publisher_mode = getattr(args, "publisher", None) or ("console" if args.dry_run else "mqtt")
+    publisher_mode = getattr(args, "publisher", None) or ("console" if getattr(args, "dry_run", False) else "mqtt")
     if publisher_mode == "console":
         return ConsoleEventPublisher(), "console"
     settings = mqtt_settings_from_env()
