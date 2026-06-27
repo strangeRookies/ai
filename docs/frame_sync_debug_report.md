@@ -125,9 +125,29 @@
 
 ---
 
-## 7. 결론 및 후속 과제
+## 7. Supervision 제약 및 51차원 스키마 정합성 검증
+
+사용자의 요구에 따른 Supervision 라이브러리 사용 제약 및 데이터 정합성 검증 결과는 다음과 같습니다.
+
+1.  **51차원 Keypoint Feature 스키마 독립성 보장**:
+    *   **검증 결과**: `supervision`은 단순히 디텍션 및 바운딩 박스 추적(Tracking) 보조용으로만 사용되며, LSTM 모델 추론에 주입되는 Keypoint Feature 생성과는 완전히 분리되어 작동합니다.
+    *   **코드 확인**: `classifier.py`와 `keypoint_sequence_buffer.py`는 `supervision` 객체에 전혀 의존하지 않으며, 기존 정의된 **17 Keypoints × 3 = 51차원** 원본 YOLO pose 데이터를 순수하게 보존하여 LSTM 모델 텐서로 주입합니다.
+2.  **YOLO Pose Keypoints 소실 방지 장치**:
+    *   **검증 결과**: YOLO pose keypoint 데이터가 `supervision.ByteTrack` 추적기 변환 과정(xyxy, confidence만 전달)에서 잃어버리는 현상을 막기 위해, 추적이 끝난 후 원본 Pose 디텍션 결과와 IoU 기반으로 매칭하는 예외 보호 코드가 구현되어 있습니다.
+    *   **코드 확인**: [supervision_postprocessor.py](file:///c:/Users/user/Documents/최종%20쉴더스/strange_ai/ai/postprocess/supervision_postprocessor.py)의 `match_keypoints_by_iou` 함수를 통해 추적 데이터와 원래의 Keypoint 데이터를 분리 결합하여 데이터 정합성을 항시 유지하고 있습니다.
+3.  **오버레이 텍스트 드로잉의 독립성**:
+    *   **검증 결과**: `frameId`, `capturedAtMs`, `processedAtMs`, `publishedAtMs`, `aiLatencyMs` 등의 디버깅 텍스트는 `supervision`의 `Annotator`에 의존하지 않고, 반투명 배경 패널 상에 **`cv2.putText`를 이용해 기존 debug overlay 방식**으로 견고하게 직접 그려집니다.
+    *   **코드 확인**: [action_overlay.py](file:///c:/Users/user/Documents/최종%20쉴더스/strange_ai/ai/visualization/action_overlay.py)의 `draw_metrics_panel` 함수에서 `cv2.putText`로 화면 상단에 Frame Sync 지표를 직접 렌더링하고 있습니다.
+4.  **MQTT Payload Schema의 독립성**:
+    *   **검증 결과**: `safety/cameras/overlay` 및 `safety/events` 토픽으로 송출되는 메타데이터는 `supervision`의 내부 직렬화 객체에 의존하지 않으며, **`schemaVersion 1.1`** 표준 스키마 딕셔너리로 순수하게 직렬화되어 발행됩니다.
+    *   **코드 확인**: `rtsp_runtime.py` 및 `event_publisher.py` 에서 기본 파이썬 dict를 조합해 직접 빌드하므로 외부 시각화 라이브러리에 종속되지 않습니다.
+
+---
+
+## 8. 결론 및 후속 과제
 *   Frame Sync Debug 기능이 성공적으로 구축 및 실가동 환경에 통합되었음을 확인했습니다.
 *   각 카메라 채널별로 고유하게 순증하는 `frameId`와 captured/processed/published 정밀 지향 타임스탬프를 통해 패킷 손실 및 오버레이 싱크 밀림을 수치적으로 감지할 수 있습니다.
 *   **향후 작업**:
     1.  웹 화면 상에 표출되는 WebRTC 스트림의 디코딩 프레임 ID와 MQTT로 받는 메타데이터의 `frameId`를 연계 비교하는 프론트엔드 동기화 로직 연계.
     2.  개발 및 실가동 중 오버헤드를 막기 위해, 실제 상용 배포 모드에서는 디버그 오버레이(`--frame-sync-debug`, `--mjpeg-debug`)를 가급적 비활성화하여 리소스를 보존할 것을 권장합니다.
+
