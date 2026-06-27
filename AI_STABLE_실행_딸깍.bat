@@ -3,14 +3,17 @@ setlocal
 chcp 65001 >nul
 
 set "LOCAL_CONFIG=%~dp0AI_DEV_LOCAL_CONFIG.bat"
-if not exist "%LOCAL_CONFIG%" (
-  echo [ERROR] Missing AI_DEV_LOCAL_CONFIG.bat
-  echo Copy AI_DEV_LOCAL_CONFIG.example.bat to AI_DEV_LOCAL_CONFIG.bat and set local values.
-  pause
-  exit /b 1
-)
+if not exist "%LOCAL_CONFIG%" goto CONFIG_ERROR
 call "%LOCAL_CONFIG%"
+goto CONFIG_OK
 
+:CONFIG_ERROR
+echo [ERROR] Missing AI_DEV_LOCAL_CONFIG.bat
+echo Copy AI_DEV_LOCAL_CONFIG.example.bat to AI_DEV_LOCAL_CONFIG.bat and set local values.
+pause
+exit /b 1
+
+:CONFIG_OK
 if not defined GPU_HOST exit /b 1
 if not defined GPU_USER exit /b 1
 if not defined STABLE_ROOT exit /b 1
@@ -28,11 +31,11 @@ echo MQTT: %MQTT_HOST%:%MQTT_PORT% topic=safety/events
 echo ========================================================
 echo.
 echo ========================================================
-echo 실행 모드를 선택해 주세요:
-echo   [1] AI 프로세스 최초 구동 (내가 처음 켤 때)
-echo   [2] SSH 터널링만 연결    (다른 사람이 켜둔 영상 공유용)
+echo Select running mode:
+echo   [1] Full restart and run AI processes (First run)
+echo   [2] SSH Tunnels only (For sharing running streams)
 echo ========================================================
-set /p "MODE=선택 (1 또는 2): "
+set /p "MODE=Choose (1 or 2): "
 
 if "%MODE%"=="2" (
   goto MODE_TUNNEL
