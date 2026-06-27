@@ -1,5 +1,6 @@
 @echo off
 setlocal
+chcp 65001 >nul
 
 set "LOCAL_CONFIG=%~dp0AI_DEV_LOCAL_CONFIG.bat"
 if not exist "%LOCAL_CONFIG%" (
@@ -37,7 +38,7 @@ if errorlevel 1 (
 
 echo.
 echo [2/5] Stopping previous AI runtime processes...
-ssh %GPU_USER%@%GPU_HOST% "pkill -f '[s]cripts/run_registered_cameras.py' 2>/dev/null || true; pkill -f '[s]cripts/start_simulated_rtsp_from_folder.py' 2>/dev/null || true; pkill -f '[s]cripts/serve_ai_overlay.py' 2>/dev/null || true; pkill -f '[r]tsp://127.0.0.1:8554' 2>/dev/null || true; fuser -k 8010/tcp 8011/tcp 8012/tcp 8013/tcp 8014/tcp 8015/tcp 8016/tcp 8017/tcp 8018/tcp 8019/tcp 8020/tcp 8021/tcp 2>/dev/null || true; docker rm -f mediamtx 2>/dev/null || true"
+ssh %GPU_USER%@%GPU_HOST% "pkill -f '%REMOTE_ROOT%/scripts/run_registered_cameras.py' 2>/dev/null || true; pkill -f '%REMOTE_ROOT%/scripts/start_simulated_rtsp_from_folder.py' 2>/dev/null || true; pkill -f '%REMOTE_ROOT%/scripts/serve_ai_overlay.py' 2>/dev/null || true"
 if errorlevel 1 (
   echo [ERROR] Failed while stopping old GPU runtime.
   pause
@@ -46,7 +47,7 @@ if errorlevel 1 (
 
 echo.
 echo [3/5] Starting SSH tunnel in a new window...
-start "AI STABLE SSH Tunnel - keep open" cmd /k ssh -o ExitOnForwardFailure=yes -N -L 8888:127.0.0.1:8888 -L 8889:127.0.0.1:8889 -L 8189:127.0.0.1:8189 -L 8010:127.0.0.1:8010 -L 8011:127.0.0.1:8011 -L 8012:127.0.0.1:8012 -L 8013:127.0.0.1:8013 -R 18080:127.0.0.1:8080 %GPU_USER%@%GPU_HOST%
+start "AI STABLE SSH Tunnel - keep open" cmd /k ssh -o ExitOnForwardFailure=yes -N -L 8888:127.0.0.1:8888 -L 8889:127.0.0.1:8889 -L 8189:127.0.0.1:8189 -R 18080:127.0.0.1:8080 %GPU_USER%@%GPU_HOST%
 
 echo Enter the SSH password in the tunnel window and keep it open.
 pause
@@ -63,7 +64,7 @@ if errorlevel 1 (
 
 echo.
 echo [5/5] Starting MediaMTX, RTSP publisher, then AI runner on GPU stable repo...
-ssh %GPU_USER%@%GPU_HOST% "cd %REMOTE_ROOT% && ( nohup bash scripts/run_rtsp_server.sh > rtsp_server.log 2>&1 </dev/null & ) && sleep 3 && source .venv/bin/activate && ( nohup python scripts/start_simulated_rtsp_from_folder.py --video-dir /home/%GPU_USER%/yolo_training/ai_fall_experiments/data/raw/indoor_chromakey/videos --backend-url http://127.0.0.1:18080 --rtsp-host 127.0.0.1 --rtsp-port 8554 --poll-interval 30 --ffmpeg-mode nvenc > publisher.log 2>&1 </dev/null & ) && sleep 8 && ( nohup python scripts/run_registered_cameras.py --backend-base-url http://127.0.0.1:18080 --rtsp-base-url rtsp://127.0.0.1:8554 --video-pool /home/%GPU_USER%/yolo_training/ai_fall_experiments/data/raw/indoor_chromakey/videos --overlay-base-port 8010 --overlay-report-enabled --detector-mode real --yolo-model yolo26n-pose.pt --publisher mqtt --mqtt-host %MQTT_HOST% --mqtt-port %MQTT_PORT% --mqtt-topic safety/events --skip-simulated-ffmpeg > ai_runner.log 2>&1 </dev/null & )"
+ssh %GPU_USER%@%GPU_HOST% "cd %REMOTE_ROOT% && ( docker ps --filter 'name=^mediamtx$' --format '{{.Names}}' | grep -q '^mediamtx$' || nohup bash scripts/run_rtsp_server.sh > rtsp_server.log 2>&1 </dev/null & ) && sleep 3 && source .venv/bin/activate && ( nohup python scripts/start_simulated_rtsp_from_folder.py --video-dir /home/%GPU_USER%/yolo_training/ai_fall_experiments/data/raw/indoor_chromakey/videos --backend-url http://127.0.0.1:18080 --rtsp-host 127.0.0.1 --rtsp-port 8554 --poll-interval 30 --ffmpeg-mode nvenc > publisher.log 2>&1 </dev/null & ) && sleep 8 && ( nohup python scripts/run_registered_cameras.py --backend-base-url http://127.0.0.1:18080 --rtsp-base-url rtsp://127.0.0.1:8554 --video-pool /home/%GPU_USER%/yolo_training/ai_fall_experiments/data/raw/indoor_chromakey/videos --overlay-report-enabled --detector-mode real --yolo-model yolo26n-pose.pt --publisher mqtt --mqtt-host %MQTT_HOST% --mqtt-port %MQTT_PORT% --mqtt-topic safety/events --skip-simulated-ffmpeg > ai_runner.log 2>&1 </dev/null & )"
 if errorlevel 1 (
   echo [ERROR] Failed to start GPU stable runtime.
   pause
