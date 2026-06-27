@@ -11,7 +11,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from ai.action.per_track_sequence_buffer import PerTrackCropSequenceBuffers, PerTrackKeypointSequenceBuffers
 from ai.action.lstm_contract import DEFAULT_KEYPOINT_INPUT_SIZE, DEFAULT_LSTM_SEQUENCE_LENGTH, DEFAULT_LSTM_SEQUENCE_STRIDE, log_lstm_config
-from ai.frame_sync import FrameMetadataBuffer
+from ai.frame_sync import FrameMetadataBuffer, FramePacket, CameraFrameQueue
 from ai.inference.rtsp_runtime import build_inference_event_payload, cheap_filter_config_from_args, create_detection_postprocessor, ensure_mock_keypoints
 from ai.inference.rtsp_runtime import maybe_log_debug, normalize_detections, update_detections_with_postprocessor, update_prediction_counts, update_tracking_summary
 from ai.overlay_http import OverlayState, create_overlay_server
@@ -25,7 +25,7 @@ from stream.rtsp_reader import redact_url
 from tracking.display_id_mapper import DisplayIdMapper
 from ai.publishers.event_publisher import create_event_publisher, mqtt_topic_settings_from_args
 from ai.publishers.camera_status_publisher import CameraStatusPublisher
-from ai.publishers.mqtt_payloads import build_overlay_payload, current_timestamp_ms, frame_size_from_shape
+from ai.publishers.mqtt_payloads import build_overlay_payload, current_timestamp_ms, frame_size_from_shape, build_frame_sync_payload
 
 
 def initial_summary():
@@ -80,7 +80,7 @@ def mjpeg_debug_enabled(args: argparse.Namespace) -> bool:
 
 
 def process_frame(
-    packet,
+    frame_packet,
     detector,
     classifier,
     sequence_buffer,
@@ -97,15 +97,16 @@ def process_frame(
     stream_id = getattr(args, "camera_login_id", None) or args.camera_id
     frame_metadata = None
     if frame_buffer is not None:
-        frame_metadata = frame_buffer.record_capture(stream_id, packet, packet.frame.shape)
-        summary["latest_frame_id"] = frame_metadata.frame_id
-        summary["latest_captured_at_ms"] = frame_metadata.captured_at_ms
-        summary["frame_sync_buffer_size"] = frame_buffer.size(stream_id)
-    detections = detector.detect(packet.frame)
+        frame_metadata = frame_buffer.get_by_frame_id(stream_id, frame_packet.frame_id)
+        if frame_metadata is not None:
+            summary["latest_frame_id"] = frame_metadata.frame_id
+            summary["latest_captured_at_ms"] = frame_metadata.captured_at_ms
+            summary["frame_sync_buffer_size"] = frame_buffer.size(stream_id)
+    detections = detector.detect(frame_packet.frame)
     if args.detector_mode == "mock":
         detections = ensure_mock_keypoints(detections)
     if tracker is not None:
-        detections = update_detections_with_postprocessor(tracker, detections, packet.frame, packet.timestamp)
+        detections = update_detections_with_postprocessor(tracker, detections, frame_packet.frame, frame_packet.timestamp)
     boxes = normalize_detections(detections)
     frame_keypoint_count = sum(1 for item in detections if item.get("keypoints"))
     active_tracks = len({int(item["track_id"]) for item in detections if item.get("track_id") is not None})
@@ -139,19 +140,19 @@ def process_frame(
     captured_at_ms = frame_metadata.captured_at_ms if frame_metadata is not None else None
     if classifier_input == "crops":
         sequences = sequence_buffer.add(
-            packet.frame_idx,
-            packet.frame,
+            frame_packet.frame_idx,
+            frame_packet.frame,
             boxes,
-            now=packet.timestamp,
+            now=frame_packet.timestamp,
             frame_id=frame_id,
             captured_at_ms=captured_at_ms,
         )
     else:
         sequences = sequence_buffer.add(
-            packet.frame_idx,
+            frame_packet.frame_idx,
             detections,
-            packet.frame.shape,
-            now=packet.timestamp,
+            frame_packet.frame.shape,
+            now=frame_packet.timestamp,
             frame_id=frame_id,
             captured_at_ms=captured_at_ms,
         )
@@ -179,7 +180,7 @@ def process_frame(
     for track_id, track_prediction in predictions_by_track.items():
         event_triggered = False
         if post_processor is not None:
-            event_triggered = post_processor.should_trigger(args.camera_id, track_prediction, packet.timestamp, track_id=track_id)
+            event_triggered = post_processor.should_trigger(args.camera_id, track_prediction, frame_packet.timestamp, track_id=track_id)
             consecutive_by_track[track_id] = post_processor.consecutive_count(args.camera_id, track_id=track_id)
         elif track_prediction and track_prediction.get("label") != "Normal":
             event_triggered = True
@@ -191,7 +192,7 @@ def process_frame(
     summary["latest_consecutive_faint"] = max(consecutive_by_track.values(), default=0)
     annotate_boxes_with_track_actions(boxes, predictions_by_track, consecutive_by_track, triggered_track_ids, args)
     topic_settings = mqtt_topic_settings_from_args(args)
-    frame_width, frame_height = frame_size_from_shape(packet.frame.shape)
+    frame_width, frame_height = frame_size_from_shape(frame_packet.frame.shape)
     if frame_buffer is not None and frame_metadata is not None:
         frame_metadata = frame_buffer.mark_processed(stream_id, frame_metadata.frame_id)
         summary["latest_processed_at_ms"] = frame_metadata.processed_at_ms
@@ -227,7 +228,7 @@ def process_frame(
         sequence = sequences_by_track[track_id]
         payload = build_inference_event_payload(
             args,
-            packet,
+            frame_packet,
             track_prediction,
             boxes,
             sequence,
@@ -242,13 +243,13 @@ def process_frame(
             print(f"[ai-overlay-event] {json.dumps(payload, ensure_ascii=False)}", flush=True)
         if publisher is not None:
             publisher.publish(payload, topic=topic_settings["event_topic"])
-    maybe_log_debug(packet, boxes, summary, prediction, args, prefix="[ai-overlay-debug]")
+    maybe_log_debug(frame_packet, boxes, summary, prediction, args, prefix="[ai-overlay-debug]")
 
     update_overlay_runtime(summary)
     if not mjpeg_debug_enabled(args):
         return None
-    overlay_frame_id = frame_metadata.frame_id if frame_metadata is not None else packet.frame_idx
-    overlay = draw_overlay(packet.frame, boxes, prediction, overlay_frame_id)
+    overlay_frame_id = frame_metadata.frame_id if frame_metadata is not None else frame_packet.frame_idx
+    overlay = draw_overlay(frame_packet.frame, boxes, prediction, overlay_frame_id)
     draw_metrics_panel(overlay, summary, args, prediction)
     return overlay
 
@@ -299,19 +300,92 @@ class OverlayWorker:
         self.state = state
         self.stop_event = threading.Event()
         self.thread = threading.Thread(target=self._run, name="ai-overlay-worker", daemon=True)
+        self.reader_thread = None
+        self.camera_login_id = getattr(self.args, "camera_login_id", self.args.camera_id) or self.args.camera_id
+        self.queue = CameraFrameQueue(self.camera_login_id, maxsize=getattr(self.args, "frame_queue_maxsize", 3))
+        self.frame_buffer = FrameMetadataBuffer(maxlen=self.args.frame_sync_buffer_size)
 
     def start(self):
+        self.reader_thread = threading.Thread(target=self._reader_run, name="ai-overlay-reader", daemon=True)
+        self.reader_thread.start()
         self.thread.start()
 
     def stop(self):
         self.stop_event.set()
+        if self.reader_thread is not None:
+            self.reader_thread.join(timeout=3)
         self.thread.join(timeout=3)
+
+    def _reader_run(self):
+        publisher = None
+        status_publisher = None
+        try:
+            publisher, publisher_mode = create_event_publisher(self.args)
+            status_publisher = CameraStatusPublisher(
+                mqtt_publisher=publisher,
+                camera_login_id=self.camera_login_id,
+                rtsp_url=self.args.rtsp_url,
+            )
+            while not self.stop_event.is_set():
+                try:
+                    with VideoReader(self.args.rtsp_url) as reader:
+                        print(f"[ai-overlay-reader] connected: {redact_url(self.args.rtsp_url)}", flush=True)
+                        status_publisher.notify_connected()
+                        while not self.stop_event.is_set():
+                            packet = reader.read()
+                            if packet is None:
+                                status_publisher.notify_disconnected(reason="STREAM_ENDED")
+                                break
+                            
+                            frame_metadata = self.frame_buffer.record_capture(
+                                self.camera_login_id,
+                                packet,
+                                packet.frame.shape
+                            )
+                            packet_wrapped = FramePacket(
+                                camera_login_id=self.camera_login_id,
+                                frame_id=frame_metadata.frame_id,
+                                captured_at_ms=frame_metadata.captured_at_ms,
+                                frame=packet.frame,
+                                width=frame_metadata.width,
+                                height=frame_metadata.height,
+                                frame_idx=packet.frame_idx,
+                                timestamp=packet.timestamp,
+                                fps=getattr(packet, "fps", 0.0)
+                            )
+                            self.queue.put_latest(packet_wrapped)
+                            
+                            every_n = max(0, int(getattr(self.args, "debug_every_n", 30)))
+                            if every_n > 0 and frame_metadata.frame_id % every_n == 0:
+                                now_ms = time.time_ns() // 1_000_000
+                                lag = now_ms - frame_metadata.captured_at_ms
+                                print(
+                                    f"[rtsp-buffer] {self.camera_login_id} "
+                                    f"frame_id={frame_metadata.frame_id} "
+                                    f"queue_lag_ms={lag} "
+                                    f"dropped={self.queue.dropped_frame_count}",
+                                    flush=True
+                                )
+                except Exception as exc:
+                    message = f"Reader error {type(exc).__name__}: {exc}"
+                    print(f"[ai-overlay-reader] {message}", file=sys.stderr, flush=True)
+                    if status_publisher is not None:
+                        status_publisher.notify_error(reason=type(exc).__name__)
+                
+                if not self.stop_event.is_set():
+                    if status_publisher is not None:
+                        status_publisher.notify_reconnecting()
+                    time.sleep(self.args.reconnect_delay)
+        finally:
+            close = getattr(publisher, "close", None) if publisher is not None else None
+            if close:
+                close()
 
     def _run(self):
         detector = create_detector(self.args.detector_mode, self.args.yolo_model, self.args.device, self.args.imgsz, conf=self.args.detector_conf)
         classifier, _classifier_mode = create_classifier(self.args.action_model, self.args.action_device, self.args.action_threshold)
         publisher, publisher_mode = create_event_publisher(self.args)
-        print(f"[ai-overlay] initialized event publisher: {publisher_mode}", flush=True)
+        print(f"[ai-overlay-inference] initialized event publisher: {publisher_mode}", flush=True)
         log_lstm_config(
             "[lstm-config]",
             self.args.sequence_length,
@@ -322,13 +396,6 @@ class OverlayWorker:
             getattr(classifier, "checkpoint_sequence_stride", None),
         )
 
-        # 카메라 연결 상태 퍼블리셔 (safety/cameras/status 토픽)
-        camera_login_id = getattr(self.args, "camera_login_id", self.args.camera_id)
-        status_publisher = CameraStatusPublisher(
-            mqtt_publisher=publisher,
-            camera_login_id=camera_login_id,
-            rtsp_url=self.args.rtsp_url,
-        )
         summary = initial_summary()
         post_processor = FaintEventPostProcessor(
             min_consecutive_faint=self.args.min_consecutive_faint,
@@ -336,60 +403,90 @@ class OverlayWorker:
         )
         tracker, postprocessing_mode = create_detection_postprocessor(self.args)
         cheap_filter_config = cheap_filter_config_from_args(self.args)
-        print(f"[ai-overlay] tracking postprocessor: {postprocessing_mode}", flush=True)
+        print(f"[ai-overlay-inference] tracking postprocessor: {postprocessing_mode}", flush=True)
         display_id_mapper = DisplayIdMapper()
         overlay_publish_state = OverlayPublishState()
-        frame_buffer = FrameMetadataBuffer(maxlen=self.args.frame_sync_buffer_size)
-        while not self.stop_event.is_set():
+        
+        camera_ids = [self.camera_login_id]
+        camera_index = 0
+        
+        sequence_buffers = {}
+        for cid in camera_ids:
             if self.args.classifier_input == "crops":
-                sequence_buffer = PerTrackCropSequenceBuffers(
+                sequence_buffers[cid] = PerTrackCropSequenceBuffers(
                     self.args.sequence_length,
                     self.args.sequence_stride,
                     self.args.resize_size,
                     max_track_age_seconds=self.args.track_max_missing_seconds,
                 )
             else:
-                sequence_buffer = PerTrackKeypointSequenceBuffers(
+                sequence_buffers[cid] = PerTrackKeypointSequenceBuffers(
                     self.args.sequence_length,
                     self.args.sequence_stride,
                     max_track_age_seconds=self.args.track_max_missing_seconds,
                     cheap_filter_config=cheap_filter_config,
                 )
-            # Reset display ID mapping on each camera reconnect so IDs restart from 1
-            display_id_mapper.reset()
-            try:
-                with VideoReader(self.args.rtsp_url) as reader:
-                    print(f"[ai-overlay] connected: {redact_url(self.args.rtsp_url)}", flush=True)
-                    # RTSP 연결 성공 → MQTT 상태 이벤트 발행
-                    status_publisher.notify_connected()
-                    while not self.stop_event.is_set():
-                        packet = reader.read()
-                        if packet is None:
-                            # 스트림 종료 (프레임 없음) → 연결 끊김으로 판단
-                            status_publisher.notify_disconnected(reason="STREAM_ENDED")
-                            break
-                        overlay = process_frame(
-                            packet, detector, classifier, sequence_buffer, summary, self.args,
-                            post_processor=post_processor, tracker=tracker,
-                            state=self.state, display_id_mapper=display_id_mapper,
-                            publisher=publisher,
-                            overlay_publish_state=overlay_publish_state,
-                            frame_buffer=frame_buffer,
-                        )
-                        if overlay is not None:
-                            self.state.update_frame(overlay, summary)
-                        if self.args.max_frames > 0 and summary["frames_processed"] >= self.args.max_frames:
-                            return
-            except Exception as exc:
-                message = f"{type(exc).__name__}: {exc}"
-                print(f"[ai-overlay] {message}", file=sys.stderr, flush=True)
-                self.state.update_error(message)
-                # 연결 오류 → MQTT 상태 이벤트 발행
-                status_publisher.notify_error(reason=type(exc).__name__)
-            # 재연결 대기 → MQTT 상태 이벤트 발행
-            if not self.stop_event.is_set():
-                status_publisher.notify_reconnecting()
-            time.sleep(self.args.reconnect_delay)
+
+        while not self.stop_event.is_set():
+            if not camera_ids:
+                time.sleep(0.01)
+                continue
+            current_cam_id = camera_ids[camera_index]
+            camera_index = (camera_index + 1) % len(camera_ids)
+            
+            if current_cam_id != self.camera_login_id:
+                continue
+                
+            frame_packet = self.queue.get_latest()
+            if frame_packet is None:
+                time.sleep(0.005)
+                continue
+                
+            inference_start = time.perf_counter()
+            overlay = process_frame(
+                frame_packet, detector, classifier, sequence_buffers[current_cam_id], summary, self.args,
+                post_processor=post_processor, tracker=tracker,
+                state=self.state, display_id_mapper=display_id_mapper,
+                publisher=publisher,
+                overlay_publish_state=overlay_publish_state,
+                frame_buffer=self.frame_buffer,
+            )
+            
+            now_ms = time.time_ns() // 1_000_000
+            queue_lag_ms = now_ms - frame_packet.captured_at_ms
+            published_at_ms = now_ms
+            
+            fs_payload = build_frame_sync_payload(
+                camera_login_id=current_cam_id,
+                frame_id=frame_packet.frame_id,
+                captured_at_ms=frame_packet.captured_at_ms,
+                published_at_ms=published_at_ms,
+                queue_lag_ms=queue_lag_ms,
+                dropped_frame_count=self.queue.dropped_frame_count,
+            )
+            topic_settings = mqtt_topic_settings_from_args(self.args)
+            if publisher is not None:
+                publisher.publish(fs_payload, topic=topic_settings["camera_topic"])
+                
+            inference_ms = (time.perf_counter() - inference_start) * 1000.0
+            every_n = max(0, int(getattr(self.args, "debug_every_n", 30)))
+            if every_n > 0 and frame_packet.frame_id % every_n == 0:
+                print(
+                    f"[ai-worker] {current_cam_id} "
+                    f"frame_id={frame_packet.frame_id} "
+                    f"inference_ms={inference_ms:.1f} "
+                    f"queue_lag_ms={queue_lag_ms}",
+                    flush=True
+                )
+                
+            if overlay is not None:
+                self.state.update_frame(overlay, summary)
+            if self.args.max_frames > 0 and summary["frames_processed"] >= self.args.max_frames:
+                break
+                
+        close = getattr(publisher, "close", None) if publisher is not None else None
+        if close:
+            close()
 
 
 def main():
@@ -440,6 +537,7 @@ def main():
     parser.add_argument("--frame-sync-debug", action=argparse.BooleanOptionalAction, default=os.getenv("FRAME_SYNC_DEBUG", "false").lower() in {"1", "true", "yes", "on"})
     parser.add_argument("--frame-sync-buffer-size", type=int, default=int(os.getenv("FRAME_SYNC_BUFFER_SIZE", "60")))
     parser.add_argument("--frame-sync-delay-warning-ms", type=int, default=int(os.getenv("FRAME_SYNC_DELAY_WARNING_MS", "300")))
+    parser.add_argument("--frame-queue-maxsize", type=int, default=int(os.getenv("FRAME_QUEUE_MAXSIZE", "3")))
     parser.add_argument("--max-frames", type=int, default=0)
     parser.add_argument("--reconnect-delay", type=float, default=2.0)
     parser.add_argument("--debug-every-n", type=int, default=30)

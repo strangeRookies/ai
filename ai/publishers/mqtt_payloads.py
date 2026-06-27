@@ -54,6 +54,27 @@ def build_overlay_payload(
     return payload
 
 
+def build_frame_sync_payload(
+    camera_login_id: str,
+    frame_id: int,
+    captured_at_ms: int,
+    published_at_ms: int,
+    queue_lag_ms: int,
+    dropped_frame_count: int,
+) -> dict[str, JsonValue]:
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "messageType": "frame_sync",
+        "type": "frame_sync",
+        "cameraLoginId": camera_login_id,
+        "frameId": int(frame_id),
+        "capturedAtMs": int(captured_at_ms),
+        "publishedAtMs": int(published_at_ms),
+        "queueLagMs": int(queue_lag_ms),
+        "droppedFrameCount": int(dropped_frame_count),
+    }
+
+
 def build_confirmed_event_payload(
     stream_id: str,
     frame_width: int,

@@ -1,9 +1,54 @@
 from __future__ import annotations
 
 import time
+import threading
 from collections import defaultdict, deque
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
+import numpy as np
+
+
+@dataclass(frozen=True, slots=True)
+class FramePacket:
+    camera_login_id: str
+    frame_id: int
+    captured_at_ms: int
+    frame: np.ndarray
+    width: int
+    height: int
+    frame_idx: int
+    timestamp: float
+    fps: float = 0.0
+
+
+class CameraFrameQueue:
+    def __init__(self, camera_login_id: str, maxsize: int = 5):
+        self.camera_login_id = str(camera_login_id)
+        self.maxlen = max(1, int(maxsize))
+        self.queue: deque[FramePacket] = deque(maxlen=self.maxlen)
+        self.dropped_frame_count = 0
+        self._lock = threading.Lock()
+
+    def put_latest(self, packet: FramePacket) -> None:
+        with self._lock:
+            if len(self.queue) >= self.maxlen:
+                self.dropped_frame_count += 1
+            self.queue.append(packet)
+
+    def get_latest(self) -> FramePacket | None:
+        with self._lock:
+            if not self.queue:
+                return None
+            dropped = len(self.queue) - 1
+            if dropped > 0:
+                self.dropped_frame_count += dropped
+                for _ in range(dropped):
+                    self.queue.popleft()
+            return self.queue.popleft()
+
+    def size(self) -> int:
+        with self._lock:
+            return len(self.queue)
 
 
 @dataclass(frozen=True, slots=True)

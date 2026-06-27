@@ -54,6 +54,7 @@ def parse_args(argv=None):
     parser.add_argument("--camera-cooldown-seconds", type=float, default=env_float("CAMERA_COOLDOWN_SECONDS", DEFAULT_CAMERA_COOLDOWN_SECONDS), help="Per-camera event cooldown after a Faint event.")
     parser.add_argument("--event-severity", default="HIGH")
     parser.add_argument("--debug-every-n", type=int, default=30)
+    parser.add_argument("--frame-queue-maxsize", type=int, default=env_int("FRAME_QUEUE_MAXSIZE", 3))
     parser.add_argument("--classifier-input", choices=["keypoints", "crops"], default="keypoints")
     parser.add_argument("--sequence-length", type=int, default=env_int("SEQUENCE_LENGTH", DEFAULT_LSTM_SEQUENCE_LENGTH))
     parser.add_argument("--sequence-stride", type=int, default=env_int("SEQUENCE_STRIDE", DEFAULT_LSTM_SEQUENCE_STRIDE))
