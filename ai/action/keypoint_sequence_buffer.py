@@ -22,7 +22,7 @@ class KeypointSequenceBuffer:
         self._frames = []          # 프레임 데이터를 저장할 링 버퍼
         self._last_emit_frame = -1 # 가장 최근에 시퀀스를 방출했을 때의 프레임 인덱스
 
-    def add(self, frame_idx, detections, frame_shape=None):
+    def add(self, frame_idx, detections, frame_shape=None, frame_id=None, captured_at_ms=None):
         """새로운 프레임의 감지 결과(detections)를 버퍼에 추가하고, 
         조건을 만족하면 시퀀스 데이터를 반환합니다.
         
@@ -41,7 +41,15 @@ class KeypointSequenceBuffer:
             return None
             
         # 프레임 정보를 버퍼에 기록
-        self._frames.append({"frame_idx": int(frame_idx), "detection": detection, "frame_shape": frame_shape})
+        self._frames.append(
+            {
+                "frame_idx": int(frame_idx),
+                "frame_id": int(frame_id) if frame_id is not None else int(frame_idx),
+                "captured_at_ms": int(captured_at_ms) if captured_at_ms is not None else None,
+                "detection": detection,
+                "frame_shape": frame_shape,
+            }
+        )
         # 버퍼 크기가 sequence_length를 초과하지 않도록 최신 데이터만 유지
         self._frames = self._frames[-self.sequence_length :]
         
@@ -58,6 +66,10 @@ class KeypointSequenceBuffer:
         return {
             "start_frame": self._frames[0]["frame_idx"],
             "end_frame": self._frames[-1]["frame_idx"],
+            "sequence_start_frame_id": self._frames[0]["frame_id"],
+            "sequence_end_frame_id": self._frames[-1]["frame_id"],
+            "sequence_start_at_ms": self._frames[0]["captured_at_ms"],
+            "sequence_end_at_ms": self._frames[-1]["captured_at_ms"],
             "detections": [item["detection"] for item in self._frames],
             "frame_shapes": [item["frame_shape"] for item in self._frames],
             "bbox": self._frames[-1]["detection"].get("bbox"),

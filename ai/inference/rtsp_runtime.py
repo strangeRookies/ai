@@ -139,6 +139,10 @@ def maybe_log_debug(packet, boxes, summary, prediction, args, prefix="[rtsp-infe
     print(
         f"{prefix} "
         f"frame={packet.frame_idx} "
+        f"frame_id={summary.get('latest_frame_id', '')} "
+        f"captured_at_ms={summary.get('latest_captured_at_ms', '')} "
+        f"ai_latency_ms={summary.get('latest_ai_latency_ms', '')} "
+        f"publish_latency_ms={summary.get('latest_publish_latency_ms', '')} "
         f"bbox={len(boxes)} "
         f"keypoints={summary.get('latest_frame_keypoints', 0)} "
         f"active_tracks={summary.get('active_tracks', 0)} "
@@ -149,7 +153,15 @@ def maybe_log_debug(packet, boxes, summary, prediction, args, prefix="[rtsp-infe
     )
 
 
-def build_inference_event_payload(args, packet, prediction, boxes, sequence):
+def build_inference_event_payload(
+    args,
+    packet,
+    prediction,
+    boxes,
+    sequence,
+    frame_metadata=None,
+    published_at_ms=None,
+):
     camera_login_id = getattr(args, "camera_login_id", None) or args.camera_id
     frame = getattr(packet, "frame", None)
     frame_width, frame_height = frame_size_from_shape(frame.shape) if frame is not None else (0, 0)
@@ -160,8 +172,26 @@ def build_inference_event_payload(args, packet, prediction, boxes, sequence):
         prediction=prediction,
         sequence=sequence,
         boxes=boxes,
-        timestamp_ms=int(_time.time() * 1000),
+        timestamp_ms=published_at_ms or int(_time.time() * 1000),
+        frame_id=getattr(frame_metadata, "frame_id", None),
+        captured_at_ms=getattr(frame_metadata, "captured_at_ms", None),
+        processed_at_ms=getattr(frame_metadata, "processed_at_ms", None),
+        published_at_ms=published_at_ms,
+        sequence_metadata=sequence_metadata(sequence, args),
     )
+
+
+def sequence_metadata(sequence, args):
+    if not sequence:
+        return None
+    return {
+        "sequenceLength": int(getattr(args, "sequence_length", 0)),
+        "sequenceStride": int(getattr(args, "sequence_stride", 0)),
+        "sequenceStartFrameId": int(sequence.get("sequence_start_frame_id", sequence.get("start_frame", 0))),
+        "sequenceEndFrameId": int(sequence.get("sequence_end_frame_id", sequence.get("end_frame", 0))),
+        "sequenceStartAtMs": sequence.get("sequence_start_at_ms"),
+        "sequenceEndAtMs": sequence.get("sequence_end_at_ms"),
+    }
 
 
 def build_inference_event_log(args, packet, prediction, boxes, sequence):

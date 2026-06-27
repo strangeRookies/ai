@@ -32,6 +32,7 @@ from ai.inference.rtsp_runtime import (
     update_tracking_summary,
 )
 from ai.evaluation.prediction_log import append_prediction_jsonl, build_prediction_log_row
+from ai.frame_sync import FrameMetadataBuffer
 from ai.publishers.event_publisher import create_event_publisher, mqtt_topic_settings_from_args
 from ai.runtime_metrics import RuntimeMetrics
 from ai.streams.video_reader import VideoReader
@@ -69,6 +70,7 @@ def run(args):
     publisher_mode = "preflight" if getattr(args, "preflight_only", False) else None
     topic_settings = mqtt_topic_settings_from_args(args)
     metrics = RuntimeMetrics()
+    frame_buffer = FrameMetadataBuffer(maxlen=int(getattr(args, "frame_sync_buffer_size", 60)))
     writer = None
     summary = {
         "rtsp_url": args.rtsp_url,
@@ -167,6 +169,11 @@ def run(args):
                 metrics.add_read_ms((time.perf_counter() - read_started_at) * 1000.0)
                 if packet is None:
                     break
+                camera_login_id = getattr(args, "camera_login_id", None) or args.camera_id
+                frame_metadata = frame_buffer.record_capture(camera_login_id, packet, packet.frame.shape)
+                summary["latest_frame_id"] = frame_metadata.frame_id
+                summary["latest_captured_at_ms"] = frame_metadata.captured_at_ms
+                summary["frame_sync_buffer_size"] = frame_buffer.size(camera_login_id)
 
                 yolo_started_at = time.perf_counter()
                 detections = detector.detect(packet.frame)
@@ -188,11 +195,29 @@ def run(args):
                 summary["keypoints_extracted"] += frame_keypoint_count
                 summary["latest_frame_keypoints"] = frame_keypoint_count
 
-                keypoint_sequences = keypoint_buffers.add(packet.frame_idx, detections, packet.frame.shape, now=packet.timestamp)
+                keypoint_sequences = keypoint_buffers.add(
+                    packet.frame_idx,
+                    detections,
+                    packet.frame.shape,
+                    now=packet.timestamp,
+                    frame_id=frame_metadata.frame_id,
+                    captured_at_ms=frame_metadata.captured_at_ms,
+                )
                 summary["cheap_filter_sequences_kept"] = keypoint_buffers.sequences_kept_by_filter
                 summary["cheap_filter_sequences_skipped"] = keypoint_buffers.sequences_skipped_by_filter
                 summary["cheap_filter_reasons"] = dict(keypoint_buffers.cheap_filter_reasons)
-                crop_sequences = crop_buffers.add(packet.frame_idx, packet.frame, boxes, now=packet.timestamp) if crop_buffers else []
+                crop_sequences = (
+                    crop_buffers.add(
+                        packet.frame_idx,
+                        packet.frame,
+                        boxes,
+                        now=packet.timestamp,
+                        frame_id=frame_metadata.frame_id,
+                        captured_at_ms=frame_metadata.captured_at_ms,
+                    )
+                    if crop_buffers
+                    else []
+                )
                 classifier_sequences = crop_sequences if crop_sequences else keypoint_sequences
                 prediction = None
                 predictions_by_track = {}
@@ -216,7 +241,10 @@ def run(args):
                 if crop_buffers:
                     summary["per_track_sequences_generated"].update(
                         {str(track_id): count for track_id, count in crop_buffers.sequences_generated_by_track.items()}
-                )
+                    )
+                frame_metadata = frame_buffer.mark_processed(camera_login_id, frame_metadata.frame_id)
+                summary["latest_processed_at_ms"] = frame_metadata.processed_at_ms
+                summary["latest_ai_latency_ms"] = frame_metadata.ai_latency_ms
                 for track_id, track_prediction in predictions_by_track.items():
                     cooldown_was_active = post_processor.cooldown_active(args.camera_id, packet.timestamp, track_id=track_id)
                     event_emitted = post_processor.should_trigger(args.camera_id, track_prediction, packet.timestamp, track_id=track_id)
@@ -237,12 +265,17 @@ def run(args):
                         )
                     if event_emitted:
                         sequence = sequences_by_track.get(track_id)
+                        frame_metadata = frame_buffer.mark_published(camera_login_id, frame_metadata.frame_id)
+                        summary["latest_published_at_ms"] = frame_metadata.published_at_ms
+                        summary["latest_publish_latency_ms"] = frame_metadata.publish_latency_ms
                         payload = build_inference_event_payload(
                             args,
                             packet,
                             track_prediction,
                             boxes,
                             sequence,
+                            frame_metadata=frame_metadata,
+                            published_at_ms=frame_metadata.published_at_ms,
                         )
                         event_log = build_inference_event_log(args, packet, track_prediction, boxes, sequence)
                         if getattr(args, "event_log_dir", None):

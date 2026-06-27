@@ -33,7 +33,7 @@ class PerTrackKeypointSequenceBuffers:
         self.sequences_skipped_by_filter = 0       # 필터에 의해 연산이 생략된 총 시퀀스 수
         self.cheap_filter_reasons = {}            # 필터링 제외 사유별 카운트
 
-    def add(self, frame_idx, detections, frame_shape=None, now=None):
+    def add(self, frame_idx, detections, frame_shape=None, now=None, frame_id=None, captured_at_ms=None):
         """현재 프레임의 추적 객체 탐지 결과를 각 트랙의 버퍼에 분배하고,
         시퀀스가 완성되면 경량 필터를 평가한 뒤 통과한 시퀀스들만 수집해 반환합니다.
         
@@ -62,7 +62,7 @@ class PerTrackKeypointSequenceBuffers:
             # 해당 트랙 고유의 KeypointSequenceBuffer가 없으면 생성하여 초기화
             buffer = self._buffers.setdefault(track_id, KeypointSequenceBuffer(self.sequence_length, self.stride))
             # 프레임을 추가하고 시퀀스 완성 여부 확인
-            sequence = buffer.add(frame_idx, [detection], frame_shape)
+            sequence = buffer.add(frame_idx, [detection], frame_shape, frame_id=frame_id, captured_at_ms=captured_at_ms)
             
             if sequence:
                 # 시퀀스가 방출된 경우, 경량 필터(Cheap Filter)를 적용하여 무의미한 연산(정지 상태 등) 배제 여부 판정
@@ -129,7 +129,7 @@ class PerTrackCropSequenceBuffers:
         self._last_seen_at = {}
         self.sequences_generated_by_track = {}
 
-    def add(self, frame_idx, frame, boxes, now=None):
+    def add(self, frame_idx, frame, boxes, now=None, frame_id=None, captured_at_ms=None):
         """현재 원본 이미지 프레임과 트랙별 박스 좌표를 받아 
         해당 박스 영역을 크롭/리사이즈하여 저장하고, 시퀀스가 차면 반환합니다.
         
@@ -155,7 +155,7 @@ class PerTrackCropSequenceBuffers:
             
             # 크롭 버퍼 셋업 및 이미지 자르기 연산 수행
             buffer = self._buffers.setdefault(track_id, CropSequenceBuffer(self.sequence_length, self.stride, self.resize_size))
-            sequence = buffer.add(frame_idx, frame, [box])
+            sequence = buffer.add(frame_idx, frame, [box], frame_id=frame_id, captured_at_ms=captured_at_ms)
             
             if sequence:
                 sequence["track_id"] = track_id

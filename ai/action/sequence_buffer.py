@@ -13,12 +13,20 @@ class CropSequenceBuffer:
         self._crops = []
         self._last_emit_frame = -1
 
-    def add(self, frame_idx, frame, boxes):
+    def add(self, frame_idx, frame, boxes, frame_id=None, captured_at_ms=None):
         box = largest_box(boxes)
         if box is None:
             return None
         crop = crop_person(frame, box, self.resize_size)
-        self._crops.append({"frame_idx": frame_idx, "crop": crop, "box": box})
+        self._crops.append(
+            {
+                "frame_idx": frame_idx,
+                "frame_id": int(frame_id) if frame_id is not None else int(frame_idx),
+                "captured_at_ms": int(captured_at_ms) if captured_at_ms is not None else None,
+                "crop": crop,
+                "box": box,
+            }
+        )
         self._crops = self._crops[-self.sequence_length :]
         if len(self._crops) < self.sequence_length:
             return None
@@ -28,6 +36,10 @@ class CropSequenceBuffer:
         return {
             "start_frame": self._crops[0]["frame_idx"],
             "end_frame": self._crops[-1]["frame_idx"],
+            "sequence_start_frame_id": self._crops[0]["frame_id"],
+            "sequence_end_frame_id": self._crops[-1]["frame_id"],
+            "sequence_start_at_ms": self._crops[0]["captured_at_ms"],
+            "sequence_end_at_ms": self._crops[-1]["captured_at_ms"],
             "crops": [item["crop"] for item in self._crops],
             "box": self._crops[-1]["box"],
         }

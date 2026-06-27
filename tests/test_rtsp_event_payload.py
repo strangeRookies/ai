@@ -27,7 +27,7 @@ class RtspEventPayloadTest(unittest.TestCase):
 
         payload = build_inference_event_payload(args, packet, prediction, boxes=[], sequence=sequence)
 
-        self.assertEqual(payload["schemaVersion"], "1.0")
+        self.assertEqual(payload["schemaVersion"], "1.1")
         self.assertEqual(payload["messageType"], "event")
         self.assertEqual(payload["streamId"], "cam_01")
         self.assertEqual(payload["type"], "faint")
