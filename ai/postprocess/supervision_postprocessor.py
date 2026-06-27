@@ -57,16 +57,45 @@ class SupervisionByteTrackAdapter:
 
         sv_detections = self._to_supervision_detections(detections)
         tracked = self._tracker.update_with_detections(sv_detections)
-        track_ids = getattr(tracked, "tracker_id", None)
-        output: list[dict] = []
+
+        # supervision's update_with_detections may FILTER low-confidence detections
+        # and may REORDER them relative to the input.  A simple index-based
+        # track_ids[i] -> detections[i] mapping is therefore UNSAFE and can
+        # silently assign the wrong track_id (and thus corrupt keypoint data).
+        # We match each tracked bbox back to the nearest original detection by
+        # IoU so the assignment is always correct regardless of supervision's
+        # internal filtering or sorting behaviour.
+        tracker_bboxes: list[tuple[list[float], int]] = []
+        track_ids_arr = getattr(tracked, "tracker_id", None)
+        tracked_xyxy = getattr(tracked, "xyxy", None)
+        if track_ids_arr is not None and tracked_xyxy is not None:
+            for t_idx in range(len(track_ids_arr)):
+                tid = track_ids_arr[t_idx]
+                if tid is None:
+                    continue
+                bbox = [float(v) for v in tracked_xyxy[t_idx]]
+                tracker_bboxes.append((bbox, int(tid)))
+
+        # Build output preserving ALL original fields (including keypoints)
+        output: list[dict] = [dict(d) for d in detections]
+        assigned: set[int] = set()
         self._active_track_ids = set()
-        for index, detection in enumerate(detections):
-            item = dict(detection)
-            track_id = _track_id_at(track_ids, index)
-            if track_id is not None:
-                item["track_id"] = track_id
+
+        for tracked_bbox, track_id in tracker_bboxes:
+            best_det_idx: int | None = None
+            best_iou = 0.0
+            for det_idx, detection in enumerate(detections):
+                if det_idx in assigned:
+                    continue
+                iou = _bbox_iou(tracked_bbox, _bbox_xyxy(detection))
+                if iou > best_iou:
+                    best_iou = iou
+                    best_det_idx = det_idx
+            if best_det_idx is not None and best_iou > 0.0:
+                output[best_det_idx]["track_id"] = track_id
                 self._active_track_ids.add(track_id)
-            output.append(item)
+                assigned.add(best_det_idx)
+
         return output
 
     def diagnostics(self) -> dict:
