@@ -47,6 +47,7 @@ class MqttPayloadsTest(unittest.TestCase):
                     {
                         "type": "faint",
                         "confidence": 0.72,
+                        "eventTriggered": False,
                         "trackingId": 3,
                         "frameId": 123,
                         "bbox": {"x": 120, "y": 80, "width": 200, "height": 150},
@@ -57,7 +58,10 @@ class MqttPayloadsTest(unittest.TestCase):
             },
         )
 
-    def test_overlay_payload_publishes_empty_events_when_no_lstm_signal(self):
+    def test_overlay_payload_includes_tracking_type_when_no_lstm_signal(self):
+        """Boxes with valid bbox but no LSTM signal (faint_probability=None) must
+        now be included in overlay events as type='tracking' so the frontend
+        can always draw every detected person."""
         payload = build_overlay_payload(
             stream_id="cam_01",
             frame_width=640,
@@ -66,7 +70,12 @@ class MqttPayloadsTest(unittest.TestCase):
             boxes=[{"x1": 1, "y1": 2, "x2": 3, "y2": 4, "score": 0.9}],
         )
 
-        self.assertEqual(payload["events"], [])
+        # One box present → one event in payload with type 'tracking'
+        self.assertEqual(len(payload["events"]), 1)
+        self.assertEqual(payload["events"][0]["type"], "tracking")
+        # No faint signal → confidence derived from box score
+        self.assertAlmostEqual(payload["events"][0]["confidence"], 0.9)
+        self.assertFalse(payload["events"][0]["eventTriggered"])
 
     def test_overlay_payload_clamps_bbox_to_frame_bounds(self):
         payload = build_overlay_payload(
