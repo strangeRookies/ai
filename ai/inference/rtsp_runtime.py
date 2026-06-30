@@ -82,7 +82,15 @@ def create_detection_postprocessor(args):
     if tracking_mode == "supervision" or (
         tracking_mode == "auto" and env_flag("ENABLE_SUPERVISION_POSTPROCESSING", False)
     ):
-        return SupervisionPostProcessor(), "supervision"
+        from ai.postprocess.supervision_postprocessor import SupervisionPostProcessorConfig
+        config = SupervisionPostProcessorConfig(
+            track_thresh=getattr(args, "track_thresh", 0.10),
+            track_buffer=getattr(args, "track_buffer", 90),
+            match_thresh=getattr(args, "match_thresh", 0.20),
+            frame_rate=getattr(args, "frame_rate", 30),
+            bbox_smoothing_alpha=getattr(args, "bbox_smoothing_alpha", 1.0),
+        )
+        return SupervisionPostProcessor(config=config), "supervision"
     return SimpleTrackAssigner(
         track_thresh=getattr(args, "track_thresh", 0.10),
         match_thresh=getattr(args, "match_thresh", 0.20),
