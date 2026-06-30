@@ -15,6 +15,7 @@ from ai.frame_sync import FrameMetadataBuffer
 from ai.inference.rtsp_runtime import build_inference_event_payload, cheap_filter_config_from_args, create_detection_postprocessor, ensure_mock_keypoints
 from ai.inference.rtsp_runtime import maybe_log_debug, normalize_detections, update_detections_with_postprocessor, update_prediction_counts, update_tracking_summary
 from ai.overlay_http import OverlayState, create_overlay_server
+from ai.roi import apply_roi_mask, combine_roi_masks
 from ai.streams.video_reader import VideoReader
 from ai.visualization.action_overlay import annotate_boxes_with_action, annotate_boxes_with_track_actions, draw_metrics_panel, faint_probability
 from ai.visualization.action_overlay import format_action_overlay_text, initial_overlay_summary, update_overlay_runtime
@@ -93,6 +94,7 @@ def process_frame(
     publisher=None,
     overlay_publish_state=None,
     frame_buffer=None,
+    roi_mask=None,
 ):
     stream_id = getattr(args, "camera_login_id", None) or args.camera_id
     frame_metadata = None
@@ -101,7 +103,8 @@ def process_frame(
         summary["latest_frame_id"] = frame_metadata.frame_id
         summary["latest_captured_at_ms"] = frame_metadata.captured_at_ms
         summary["frame_sync_buffer_size"] = frame_buffer.size(stream_id)
-    detections = detector.detect(packet.frame)
+    inference_frame = apply_roi_mask(packet.frame, roi_mask)
+    detections = detector.detect(inference_frame)
     if args.detector_mode == "mock":
         detections = ensure_mock_keypoints(detections)
     if tracker is not None:
@@ -340,6 +343,9 @@ class OverlayWorker:
         display_id_mapper = DisplayIdMapper()
         overlay_publish_state = OverlayPublishState()
         frame_buffer = FrameMetadataBuffer(maxlen=self.args.frame_sync_buffer_size)
+        roi_configs = getattr(self.args, "roi_configs_parsed", [])
+        cached_roi_mask = None
+        cached_roi_frame_shape = None
         while not self.stop_event.is_set():
             if self.args.classifier_input == "crops":
                 sequence_buffer = PerTrackCropSequenceBuffers(
@@ -368,6 +374,16 @@ class OverlayWorker:
                             # 스트림 종료 (프레임 없음) → 연결 끊김으로 판단
                             status_publisher.notify_disconnected(reason="STREAM_ENDED")
                             break
+                        if roi_configs:
+                            h, w = packet.frame.shape[:2]
+                            if cached_roi_mask is None or cached_roi_frame_shape != (h, w):
+                                cached_roi_mask = combine_roi_masks(roi_configs, h, w)
+                                cached_roi_frame_shape = (h, w)
+                                roi_count = len(roi_configs)
+                                print(
+                                    f"[ai-overlay][roi] mask built: {roi_count} region(s) frame={w}x{h}",
+                                    flush=True,
+                                )
                         overlay = process_frame(
                             packet, detector, classifier, sequence_buffer, summary, self.args,
                             post_processor=post_processor, tracker=tracker,
@@ -375,6 +391,7 @@ class OverlayWorker:
                             publisher=publisher,
                             overlay_publish_state=overlay_publish_state,
                             frame_buffer=frame_buffer,
+                            roi_mask=cached_roi_mask,
                         )
                         if overlay is not None:
                             self.state.update_frame(overlay, summary)
@@ -445,6 +462,11 @@ def main():
     parser.add_argument("--debug-every-n", type=int, default=30)
     parser.add_argument("--print-events", action="store_true")
     parser.add_argument("--dry-run", action="store_true", help="Run in dry-run mode (do not publish events to MQTT)")
+    parser.add_argument(
+        "--roi-configs",
+        default=None,
+        help="JSON array of active ROI config objects (polygonPoints in 0~1 normalized coords)",
+    )
     
     # MQTT Options
     parser.add_argument("--publisher", choices=["mqtt", "console"], help="Event publisher mode (default: from env or console if dry-run)")
@@ -459,6 +481,16 @@ def main():
     
     args = parser.parse_args()
     args.camera_login_id = args.camera_login_id or args.camera_id
+
+    args.roi_configs_parsed = []
+    if args.roi_configs:
+        try:
+            parsed = json.loads(args.roi_configs)
+            if isinstance(parsed, list):
+                args.roi_configs_parsed = parsed
+                print(f"[ai-overlay][roi] loaded {len(parsed)} ROI config(s)", flush=True)
+        except json.JSONDecodeError:
+            print("[ai-overlay][roi] warning: failed to parse --roi-configs JSON", flush=True)
 
     state = OverlayState()
     worker = OverlayWorker(args, state)

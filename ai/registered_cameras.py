@@ -5,7 +5,8 @@ import re
 import sys
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+import dataclasses
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final, Literal, TypedDict, assert_never
 
@@ -26,6 +27,13 @@ DEFAULT_VIDEO_POOL: Final = "video_pool"
 CameraSourceType = Literal["REAL_RTSP", "SIMULATED_RTSP"]
 
 
+class RawRoiConfig(TypedDict, total=False):
+    roiConfigId: int
+    scenarioId: int
+    scenarioType: str
+    polygonPoints: str
+
+
 class RawCamera(TypedDict, total=False):
     cameraId: int
     cameraLoginId: str
@@ -34,6 +42,7 @@ class RawCamera(TypedDict, total=False):
     assignedVideoPath: str | None
     aiEnabled: bool
     status: str
+    roiConfigs: list[RawRoiConfig]
 
 
 class ApiEnvelope(TypedDict, total=False):
@@ -49,6 +58,7 @@ class RegisteredCamera:
     rtsp_url: str | None
     source_type: CameraSourceType
     assigned_video_path: str | None
+    roi_configs: tuple[dict, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,12 +146,25 @@ def parse_camera(raw: RawCamera) -> RegisteredCamera | None:
             )
             return None
 
+    raw_rois = raw.get("roiConfigs") or []
+    roi_configs = tuple(
+        {
+            "roiConfigId": r.get("roiConfigId"),
+            "scenarioId": r.get("scenarioId"),
+            "scenarioType": r.get("scenarioType"),
+            "polygonPoints": r.get("polygonPoints", ""),
+        }
+        for r in raw_rois
+        if isinstance(r, dict) and r.get("polygonPoints")
+    )
+
     return RegisteredCamera(
         camera_id=str(raw.get("cameraId") or login_id),
         camera_login_id=login_id,
         rtsp_url=raw.get("rtspUrl"),
         source_type=source_type,
         assigned_video_path=raw.get("assignedVideoPath"),
+        roi_configs=roi_configs,
     )
 
 
@@ -260,6 +283,8 @@ def build_overlay_command(
             command.extend([key, value])
     if config.print_events:
         command.append("--print-events")
+    if camera.roi_configs:
+        command.extend(["--roi-configs", json.dumps(list(camera.roi_configs))])
     return command
 
 
