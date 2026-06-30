@@ -82,7 +82,15 @@ def create_detection_postprocessor(args):
     if tracking_mode == "supervision" or (
         tracking_mode == "auto" and env_flag("ENABLE_SUPERVISION_POSTPROCESSING", False)
     ):
-        return SupervisionPostProcessor(), "supervision"
+        from ai.postprocess.supervision_postprocessor import SupervisionPostProcessorConfig
+        config = SupervisionPostProcessorConfig(
+            track_thresh=getattr(args, "track_thresh", 0.10),
+            track_buffer=getattr(args, "track_buffer", 90),
+            match_thresh=getattr(args, "match_thresh", 0.20),
+            frame_rate=getattr(args, "frame_rate", 30),
+            bbox_smoothing_alpha=getattr(args, "bbox_smoothing_alpha", 1.0),
+        )
+        return SupervisionPostProcessor(config=config), "supervision"
     return SimpleTrackAssigner(
         track_thresh=getattr(args, "track_thresh", 0.10),
         match_thresh=getattr(args, "match_thresh", 0.20),
@@ -161,6 +169,9 @@ def build_inference_event_payload(
     sequence,
     frame_metadata=None,
     published_at_ms=None,
+    dropped_frame_count=None,
+    snapshot_path=None,
+    clip_path=None,
 ):
     camera_login_id = getattr(args, "camera_login_id", None) or args.camera_id
     frame = getattr(packet, "frame", None)
@@ -178,6 +189,9 @@ def build_inference_event_payload(
         processed_at_ms=getattr(frame_metadata, "processed_at_ms", None),
         published_at_ms=published_at_ms,
         sequence_metadata=sequence_metadata(sequence, args),
+        dropped_frame_count=dropped_frame_count,
+        snapshot_path=snapshot_path,
+        clip_path=clip_path,
     )
 
 

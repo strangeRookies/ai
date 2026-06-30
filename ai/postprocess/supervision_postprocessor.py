@@ -17,6 +17,11 @@ class ByteTrackAdapter(Protocol):
 @dataclass(frozen=True, slots=True)
 class SupervisionPostProcessorConfig:
     min_iou: float = 0.30
+    track_thresh: float = 0.10
+    track_buffer: int = 90
+    match_thresh: float = 0.20
+    frame_rate: int = 30
+    bbox_smoothing_alpha: float = 1.0  # 1.0 means disabled (raw bbox)
 
 
 class SupervisionPostProcessor:
@@ -26,19 +31,32 @@ class SupervisionPostProcessor:
         byte_tracker: ByteTrackAdapter | None = None,
     ) -> None:
         self.config = config or SupervisionPostProcessorConfig()
-        self._tracker = byte_tracker or SupervisionByteTrackAdapter()
+        self._tracker = byte_tracker or SupervisionByteTrackAdapter(
+            track_thresh=self.config.track_thresh,
+            track_buffer=self.config.track_buffer,
+            match_thresh=self.config.match_thresh,
+            frame_rate=self.config.frame_rate,
+            bbox_smoothing_alpha=self.config.bbox_smoothing_alpha,
+        )
 
     def process(self, detections: list[dict], frame: np.ndarray) -> list[dict]:
         del frame
-        tracked = self._tracker.update(detections)
-        return match_keypoints_by_iou(tracked, detections, min_iou=self.config.min_iou)
+        # Returns the tracked list directly which already has keypoints and track_id assigned properly
+        return self._tracker.update(detections)
 
     def diagnostics(self) -> dict:
         return self._tracker.diagnostics()
 
 
 class SupervisionByteTrackAdapter:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        track_thresh: float = 0.10,
+        track_buffer: int = 90,
+        match_thresh: float = 0.20,
+        frame_rate: int = 30,
+        bbox_smoothing_alpha: float = 1.0,
+    ) -> None:
         try:
             import supervision as sv
         except ImportError as exc:
@@ -47,21 +65,28 @@ class SupervisionByteTrackAdapter:
             ) from exc
 
         self._sv = sv
-        self._tracker = sv.ByteTrack()
+        # Initialize ByteTrack using correct argument names for supervision package
+        self._tracker = sv.ByteTrack(
+            track_activation_threshold=track_thresh,
+            lost_track_buffer=track_buffer,
+            minimum_matching_threshold=match_thresh,
+            frame_rate=frame_rate
+        )
         self._active_track_ids: set[int] = set()
+        self._bbox_smoothing_alpha = bbox_smoothing_alpha
+        self._previous_bboxes: dict[int, list[float]] = {}
 
     def update(self, detections: list[dict]) -> list[dict]:
         if not detections:
             self._active_track_ids = set()
+            self._previous_bboxes.clear()
             return []
 
         sv_detections = self._to_supervision_detections(detections)
         tracked = self._tracker.update_with_detections(sv_detections)
 
         # supervision's update_with_detections may FILTER low-confidence detections
-        # and may REORDER them relative to the input.  A simple index-based
-        # track_ids[i] -> detections[i] mapping is therefore UNSAFE and can
-        # silently assign the wrong track_id (and thus corrupt keypoint data).
+        # and may REORDER them relative to the input.
         # We match each tracked bbox back to the nearest original detection by
         # IoU so the assignment is always correct regardless of supervision's
         # internal filtering or sorting behaviour.
@@ -80,6 +105,7 @@ class SupervisionByteTrackAdapter:
         output: list[dict] = [dict(d) for d in detections]
         assigned: set[int] = set()
         self._active_track_ids = set()
+        current_active_tids = set()
 
         for tracked_bbox, track_id in tracker_bboxes:
             best_det_idx: int | None = None
@@ -92,9 +118,26 @@ class SupervisionByteTrackAdapter:
                     best_iou = iou
                     best_det_idx = det_idx
             if best_det_idx is not None and best_iou > 0.0:
+                # Optionally apply exponential moving average bounding box smoothing
+                raw_box = output[best_det_idx]["bbox"]
+                if self._bbox_smoothing_alpha < 1.0 and track_id in self._previous_bboxes:
+                    prev_box = self._previous_bboxes[track_id]
+                    smoothed_box = [
+                        round(self._bbox_smoothing_alpha * raw_box[i] + (1.0 - self._bbox_smoothing_alpha) * prev_box[i], 2)
+                        for i in range(4)
+                    ]
+                    output[best_det_idx]["bbox"] = smoothed_box
+                
+                self._previous_bboxes[track_id] = output[best_det_idx]["bbox"]
                 output[best_det_idx]["track_id"] = track_id
                 self._active_track_ids.add(track_id)
+                current_active_tids.add(track_id)
                 assigned.add(best_det_idx)
+
+        # Clear previous records for lost tracks to avoid memory leaks
+        for tid in list(self._previous_bboxes.keys()):
+            if tid not in current_active_tids:
+                del self._previous_bboxes[tid]
 
         return output
 
@@ -112,6 +155,25 @@ class SupervisionByteTrackAdapter:
         confidence = np.asarray([float(item.get("confidence", 0.0)) for item in detections], dtype=np.float32)
         class_id = np.zeros(len(detections), dtype=int)
         return self._sv.Detections(xyxy=xyxy, confidence=confidence, class_id=class_id)
+
+
+def _bbox_xyxy(detection: dict) -> list[float]:
+    bbox = detection.get("bbox") or [0.0, 0.0, 0.0, 0.0]
+    return [float(value) for value in bbox[:4]]
+
+
+def _bbox_iou(first: list[float], second: list[float]) -> float:
+    x1 = max(first[0], second[0])
+    y1 = max(first[1], second[1])
+    x2 = min(first[2], second[2])
+    y2 = min(first[3], second[3])
+    intersection = max(x2 - x1, 0.0) * max(y2 - y1, 0.0)
+    first_area = max(first[2] - first[0], 0.0) * max(first[3] - first[1], 0.0)
+    second_area = max(second[2] - second[0], 0.0) * max(second[3] - second[1], 0.0)
+    union = first_area + second_area - intersection
+    if union <= 0.0:
+        return 0.0
+    return intersection / union
 
 
 def match_keypoints_by_iou(
@@ -153,29 +215,3 @@ def _best_iou_source_index(
     return best_index
 
 
-def _track_id_at(track_ids, index: int) -> int | None:
-    if track_ids is None or index >= len(track_ids):
-        return None
-    value = track_ids[index]
-    if value is None:
-        return None
-    return int(value)
-
-
-def _bbox_xyxy(detection: dict) -> list[float]:
-    bbox = detection.get("bbox") or [0.0, 0.0, 0.0, 0.0]
-    return [float(value) for value in bbox[:4]]
-
-
-def _bbox_iou(first: list[float], second: list[float]) -> float:
-    x1 = max(first[0], second[0])
-    y1 = max(first[1], second[1])
-    x2 = min(first[2], second[2])
-    y2 = min(first[3], second[3])
-    intersection = max(x2 - x1, 0.0) * max(y2 - y1, 0.0)
-    first_area = max(first[2] - first[0], 0.0) * max(first[3] - first[1], 0.0)
-    second_area = max(second[2] - second[0], 0.0) * max(second[3] - second[1], 0.0)
-    union = first_area + second_area - intersection
-    if union <= 0.0:
-        return 0.0
-    return intersection / union

@@ -35,15 +35,16 @@ class CameraFrameQueue:
                 self.dropped_frame_count += 1
             self.queue.append(packet)
 
-    def get_latest(self) -> FramePacket | None:
+    def get_latest(self, drop_stale: bool = True) -> FramePacket | None:
         with self._lock:
             if not self.queue:
                 return None
-            dropped = len(self.queue) - 1
-            if dropped > 0:
-                self.dropped_frame_count += dropped
-                for _ in range(dropped):
-                    self.queue.popleft()
+            if drop_stale:
+                dropped = len(self.queue) - 1
+                if dropped > 0:
+                    self.dropped_frame_count += dropped
+                    for _ in range(dropped):
+                        self.queue.popleft()
             return self.queue.popleft()
 
     def size(self) -> int:
