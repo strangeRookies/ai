@@ -14,6 +14,13 @@ from ai.action.lstm_contract import DEFAULT_KEYPOINT_INPUT_SIZE, DEFAULT_LSTM_SE
 from ai.frame_sync import FrameMetadataBuffer, FramePacket, CameraFrameQueue
 from ai.inference.rtsp_runtime import build_inference_event_payload, cheap_filter_config_from_args, create_detection_postprocessor, ensure_mock_keypoints
 from ai.inference.rtsp_runtime import maybe_log_debug, normalize_detections, update_detections_with_postprocessor, update_prediction_counts, update_tracking_summary
+from ai.inference.rtsp_runtime import (
+    log_detection_stage,
+    log_tracking_stage,
+    log_classification_stage,
+    log_payload_stage,
+    update_quantitative_summary,
+)
 from ai.overlay_http import OverlayState, create_overlay_server
 from ai.streams.video_reader import VideoReader
 from ai.visualization.action_overlay import annotate_boxes_with_action, annotate_boxes_with_track_actions, draw_metrics_panel, faint_probability
@@ -110,8 +117,42 @@ def process_frame(
     detections = detector.detect(frame_packet.frame)
     if args.detector_mode == "mock":
         detections = ensure_mock_keypoints(detections)
+
+    # Stage 1: Detection log
+    _log_frame_id = frame_metadata.frame_id if frame_metadata is not None else getattr(frame_packet, "frame_idx", 0)
+    _log_ts = frame_metadata.captured_at_ms if frame_metadata is not None else None
+    log_detection_stage(stream_id, _log_frame_id, _log_ts, detections)
+
+    _pre_track_detections = detections
     if tracker is not None:
         detections = update_detections_with_postprocessor(tracker, detections, frame_packet.frame, frame_packet.timestamp)
+
+    # Stage 2: Tracking log
+    _tracker_diag = tracker.diagnostics() if tracker is not None else {}
+    log_tracking_stage(stream_id, _log_frame_id, _pre_track_detections, detections, _tracker_diag)
+    if os.getenv("TRACKING_DEBUG", "false").lower() in {"1", "true", "yes", "on"}:
+        frame_id = frame_metadata.frame_id if frame_metadata is not None else getattr(frame_packet, "frame_idx", 0)
+        det_cnt = len(detections)
+        tracked_cnt = sum(1 for item in detections if item.get("track_id") is not None)
+        active_tids = sorted(list({int(item["track_id"]) for item in detections if item.get("track_id") is not None}))
+        confs = [float(item.get("confidence", 0.0)) for item in detections]
+        min_conf = min(confs) if confs else 0.0
+        max_conf = max(confs) if confs else 0.0
+        conf_range = f"{min_conf:.2f}-{max_conf:.2f}"
+        matched_details = [f"det_{idx}->tid_{item.get('track_id')}" for idx, item in enumerate(detections)]
+        diag = _tracker_diag
+        new_cnt = diag.get("new_tracks", 0)
+        lost_cnt = diag.get("lost_tracks", 0)
+        print(
+            f"[Tracking Debug] camera: {stream_id} | frameId: {frame_id} | "
+            f"detections: {det_cnt} | tracked: {tracked_cnt} | "
+            f"new_tracks: {new_cnt} | lost_tracks: {lost_cnt} | "
+            f"active_ids: {active_tids} | conf_range: {conf_range} | "
+            f"mapping: {matched_details}",
+            flush=True
+        )
+
+
     boxes = normalize_detections(detections)
     frame_keypoint_count = sum(1 for item in detections if item.get("keypoints"))
     active_tracks = len({int(item["track_id"]) for item in detections if item.get("track_id") is not None})
@@ -194,6 +235,17 @@ def process_frame(
             triggered_track_ids.add(track_id)
             track_key = str(track_id)
             summary["events_generated_by_track"][track_key] = summary["events_generated_by_track"].get(track_key, 0) + 1
+        # Stage 3: Classification log per track
+        log_classification_stage(
+            stream_id,
+            _log_frame_id,
+            track_id,
+            track_prediction,
+            faint_threshold=getattr(args, "action_threshold", 0.5),
+            consecutive_count=consecutive_by_track.get(track_id, 0),
+            event_triggered=event_triggered,
+        )
+
     summary["latest_consecutive_faint"] = max(consecutive_by_track.values(), default=0)
     annotate_boxes_with_track_actions(boxes, predictions_by_track, consecutive_by_track, triggered_track_ids, args)
     topic_settings = mqtt_topic_settings_from_args(args)
@@ -227,6 +279,10 @@ def process_frame(
         published_at_ms=published_at_ms,
         dropped_frame_count=dropped_frame_count,
     )
+    # Stage 4: Payload log + quantitative metrics update
+    _payload_frame_id = getattr(frame_metadata, "frame_id", None) or _log_frame_id
+    log_payload_stage(stream_id, _payload_frame_id, overlay_payload)
+    update_quantitative_summary(summary, boxes, _tracker_diag if tracker is not None else None)
     summary["latest_overlay_event_count"] = len(overlay_payload["events"])
     if publisher is not None:
         publisher.publish(overlay_payload, topic=topic_settings["camera_topic"])

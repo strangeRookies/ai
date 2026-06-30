@@ -263,3 +263,178 @@ def update_tracking_summary(summary, tracker_diagnostics):
     summary["lost_tracks"] += int(tracker_diagnostics.get("lost_tracks", 0))
     summary["id_switch_like_events"] += int(tracker_diagnostics.get("id_switch_like_events", 0))
     summary["track_diagnostics"] = tracker_diagnostics.get("tracks", {})
+
+
+# ---------------------------------------------------------------------------
+# 4단계 정량 검증 로그 함수 (TRACKING_DEBUG=true 일 때만 출력)
+# Stage 1: Detection, Stage 2: Tracking, Stage 3: Classification, Stage 4: Payload
+# ---------------------------------------------------------------------------
+
+def _tracking_debug_enabled() -> bool:
+    return os.getenv("TRACKING_DEBUG", "false").lower() in {"1", "true", "yes", "on"}
+
+
+def log_detection_stage(
+    camera_login_id: str,
+    frame_id,
+    timestamp_ms,
+    raw_detections: list,
+) -> None:
+    """Stage 1: YOLO detection 직후 — raw bbox와 confidence를 frameId별로 기록."""
+    if not _tracking_debug_enabled():
+        return
+    entries = []
+    for d in raw_detections:
+        bbox = d.get("bbox") or []
+        entries.append({
+            "bbox": [round(float(v), 2) for v in bbox[:4]] if bbox else [],
+            "confidence": round(float(d.get("confidence", 0.0)), 4),
+            "hasKeypoints": bool(d.get("keypoints")),
+        })
+    record = {
+        "stage": "detection",
+        "cameraLoginId": camera_login_id,
+        "frameId": frame_id,
+        "timestampMs": timestamp_ms,
+        "detectionCount": len(raw_detections),
+        "detections": entries,
+    }
+    print(f"[stage-log] {json.dumps(record, ensure_ascii=False)}", flush=True)
+
+
+def log_tracking_stage(
+    camera_login_id: str,
+    frame_id,
+    pre_detections: list,
+    post_detections: list,
+    diagnostics: dict,
+) -> None:
+    """Stage 2: ByteTrack 적용 직후 — trackId 부여 여부, new/lost tracks 기록."""
+    if not _tracking_debug_enabled():
+        return
+    tracked_count = sum(1 for d in post_detections if d.get("track_id") is not None)
+    missing_track_count = len(post_detections) - tracked_count
+    active_ids = sorted({int(d["track_id"]) for d in post_detections if d.get("track_id") is not None})
+    track_details = []
+    for d in post_detections:
+        bbox = d.get("bbox") or []
+        track_details.append({
+            "trackId": d.get("track_id"),
+            "bbox": [round(float(v), 2) for v in bbox[:4]] if bbox else [],
+            "confidence": round(float(d.get("confidence", 0.0)), 4),
+            "fallbackRisk": d.get("track_id") is None,
+        })
+    record = {
+        "stage": "tracking",
+        "cameraLoginId": camera_login_id,
+        "frameId": frame_id,
+        "detectionCount": len(pre_detections),
+        "trackedCount": tracked_count,
+        "missingTrackCount": missing_track_count,
+        "activeTrackIds": active_ids,
+        "newTracks": diagnostics.get("new_tracks", 0),
+        "lostTracks": diagnostics.get("lost_tracks", 0),
+        "idSwitchLike": diagnostics.get("id_switch_like_events", 0),
+        "trackDetails": track_details,
+    }
+    print(f"[stage-log] {json.dumps(record, ensure_ascii=False)}", flush=True)
+
+
+def log_classification_stage(
+    camera_login_id: str,
+    frame_id,
+    track_id,
+    prediction: dict,
+    faint_threshold: float,
+    consecutive_count: int = 0,
+    event_triggered: bool = False,
+) -> None:
+    """Stage 3: LSTM 분류 직후 — trackId별 faintProbability와 threshold 통과 여부 기록."""
+    if not _tracking_debug_enabled():
+        return
+    fp = faint_probability(prediction) if prediction else None
+    record = {
+        "stage": "classification",
+        "cameraLoginId": camera_login_id,
+        "frameId": frame_id,
+        "trackId": track_id,
+        "predictionLabel": prediction.get("label") if prediction else None,
+        "faintProbability": round(float(fp), 4) if fp is not None else None,
+        "faintThreshold": faint_threshold,
+        "thresholdPassed": (fp is not None and fp >= faint_threshold),
+        "consecutiveCount": consecutive_count,
+        "isFaintEvent": event_triggered,
+    }
+    print(f"[stage-log] {json.dumps(record, ensure_ascii=False)}", flush=True)
+
+
+def log_payload_stage(
+    camera_login_id: str,
+    frame_id,
+    overlay_payload: dict,
+) -> None:
+    """Stage 4: build_overlay_payload 직후 — 실제 publish될 이벤트 목록 기록."""
+    if not _tracking_debug_enabled():
+        return
+    events = overlay_payload.get("events", [])
+    event_summaries = []
+    for e in events:
+        bbox = e.get("bbox") or e.get("boundingBox") or {}
+        event_summaries.append({
+            "trackId": e.get("trackId") or e.get("track_id") or e.get("trackingId"),
+            "type": e.get("type"),
+            "confidence": e.get("confidence"),
+            "eventTriggered": e.get("eventTriggered", False),
+            "bbox": bbox,
+        })
+    record = {
+        "stage": "payload",
+        "cameraLoginId": camera_login_id,
+        "frameId": frame_id,
+        "timestampMs": overlay_payload.get("timestampMs"),
+        "capturedAtMs": overlay_payload.get("capturedAtMs"),
+        "processedAtMs": overlay_payload.get("processedAtMs"),
+        "publishedAtMs": overlay_payload.get("publishedAtMs"),
+        "droppedFrameCount": overlay_payload.get("droppedFrameCount"),
+        "eventCount": len(events),
+        "events": event_summaries,
+    }
+    print(f"[stage-log] {json.dumps(record, ensure_ascii=False)}", flush=True)
+
+
+def initial_quantitative_summary() -> dict:
+    """서버 시작 시 정량 지표 summary 항목 초기화."""
+    return {
+        "total_frames": 0,
+        "detected_frames": 0,
+        "tracked_frames": 0,
+        "missing_bbox_frames": 0,
+        "fallback_track_id_frames": 0,
+        "track_switch_like_events": 0,
+    }
+
+
+def update_quantitative_summary(summary: dict, boxes: list, tracker_diagnostics: dict | None = None) -> None:
+    """매 프레임마다 정량 지표를 갱신한다."""
+    summary["total_frames"] = summary.get("total_frames", 0) + 1
+    det_count = len(boxes)
+    tracked_count = sum(1 for b in boxes if b.get("track_id") is not None)
+    missing_track_count = det_count - tracked_count
+
+    if det_count > 0:
+        summary["detected_frames"] = summary.get("detected_frames", 0) + 1
+    else:
+        summary["missing_bbox_frames"] = summary.get("missing_bbox_frames", 0) + 1
+
+    if tracked_count > 0:
+        summary["tracked_frames"] = summary.get("tracked_frames", 0) + 1
+
+    if missing_track_count > 0:
+        summary["fallback_track_id_frames"] = summary.get("fallback_track_id_frames", 0) + 1
+
+    if tracker_diagnostics:
+        summary["track_switch_like_events"] = (
+            summary.get("track_switch_like_events", 0)
+            + int(tracker_diagnostics.get("id_switch_like_events", 0))
+        )
+

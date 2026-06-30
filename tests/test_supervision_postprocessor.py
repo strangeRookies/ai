@@ -40,6 +40,77 @@ class SupervisionPostProcessorTest(unittest.TestCase):
         self.assertEqual(output[0]["keypoints"], detections[0]["keypoints"])
         self.assertEqual(processor.diagnostics()["active_tracks"], 1)
 
+    def test_camera_tracker_isolation(self):
+        # Create SupervisionByteTrackAdapter and inject FakeRoboflowByteTrack toCam 1 & Cam 2
+        from ai.postprocess.supervision_postprocessor import SupervisionByteTrackAdapter
+        adapter1 = SupervisionByteTrackAdapter()
+        adapter1._tracker = FakeRoboflowByteTrack(track_ids=[1])
+        adapter2 = SupervisionByteTrackAdapter()
+        adapter2._tracker = FakeRoboflowByteTrack(track_ids=[1])
+
+        proc1 = SupervisionPostProcessor(byte_tracker=adapter1)
+        proc2 = SupervisionPostProcessor(byte_tracker=adapter2)
+
+        dets1 = [{"bbox": [10, 10, 50, 50], "confidence": 0.9}]
+        dets2 = [{"bbox": [100, 100, 150, 150], "confidence": 0.9}]
+
+        out1 = proc1.process(dets1, np.zeros((200, 200, 3), dtype=np.uint8))
+        out2 = proc2.process(dets2, np.zeros((200, 200, 3), dtype=np.uint8))
+
+        # Both should get ID 1 independently
+        self.assertEqual(out1[0]["track_id"], 1)
+        self.assertEqual(out2[0]["track_id"], 1)
+
+        # Update Cam 1
+        dets1_next = [{"bbox": [12, 12, 52, 52], "confidence": 0.9}]
+        out1_next = proc1.process(dets1_next, np.zeros((200, 200, 3), dtype=np.uint8))
+        self.assertEqual(out1_next[0]["track_id"], 1)
+
+        self.assertEqual(proc1.diagnostics()["active_tracks"], 1)
+        self.assertEqual(proc2.diagnostics()["active_tracks"], 1)
+
+    def test_consecutive_detections_maintain_track_id(self):
+        from ai.postprocess.supervision_postprocessor import SupervisionByteTrackAdapter
+        adapter = SupervisionByteTrackAdapter()
+        adapter._tracker = FakeRoboflowByteTrack(track_ids=[3])
+        proc = SupervisionPostProcessor(byte_tracker=adapter)
+
+        dets = [{"bbox": [20, 20, 60, 60], "confidence": 0.85}]
+        out = proc.process(dets, np.zeros((200, 200, 3), dtype=np.uint8))
+        self.assertEqual(out[0]["track_id"], 3)
+
+    def test_bbox_smoothing_filters_out_noise(self):
+        # Configure postprocessor config with 0.6 smoothing alpha
+        from ai.postprocess.supervision_postprocessor import SupervisionPostProcessorConfig, SupervisionByteTrackAdapter
+        config = SupervisionPostProcessorConfig(
+            track_thresh=0.10,
+            track_buffer=30,
+            match_thresh=0.20,
+            frame_rate=30,
+            bbox_smoothing_alpha=0.60
+        )
+        adapter = SupervisionByteTrackAdapter(
+            track_thresh=config.track_thresh,
+            track_buffer=config.track_buffer,
+            match_thresh=config.match_thresh,
+            frame_rate=config.frame_rate,
+            bbox_smoothing_alpha=config.bbox_smoothing_alpha
+        )
+        adapter._tracker = FakeRoboflowByteTrack(track_ids=[7])
+        proc = SupervisionPostProcessor(config=config, byte_tracker=adapter)
+
+        # Frame 1
+        dets = [{"bbox": [10.0, 10.0, 50.0, 50.0], "confidence": 0.90}]
+        out = proc.process(dets, np.zeros((200, 200, 3), dtype=np.uint8))
+        self.assertEqual(out[0]["bbox"], [10.0, 10.0, 50.0, 50.0])
+
+        # Frame 2 (Noisy jump to [20, 20, 60, 60])
+        # Smoothed box = alpha * current + (1 - alpha) * previous
+        # x1 = 0.6 * 20.0 + 0.4 * 10.0 = 16.0
+        dets_next = [{"bbox": [20.0, 20.0, 60.0, 60.0], "confidence": 0.90}]
+        out_next = proc.process(dets_next, np.zeros((200, 200, 3), dtype=np.uint8))
+        self.assertEqual(out_next[0]["bbox"], [16.0, 16.0, 56.0, 56.0])
+
 
 class FakeByteTrackAdapter:
     def __init__(self, track_ids):
@@ -55,6 +126,23 @@ class FakeByteTrackAdapter:
 
     def diagnostics(self):
         return {"active_tracks": len(self.track_ids), "tracks": {}}
+
+
+class FakeRoboflowByteTrack:
+    def __init__(self, track_ids):
+        self.track_ids = track_ids
+
+    def update_with_detections(self, detections):
+        import supervision as sv
+        tids = []
+        for i in range(len(detections.xyxy)):
+            tids.append(self.track_ids[i] if i < len(self.track_ids) else 1)
+        return sv.Detections(
+            xyxy=detections.xyxy,
+            confidence=detections.confidence,
+            class_id=detections.class_id,
+            tracker_id=np.array(tids, dtype=int)
+        )
 
 
 if __name__ == "__main__":

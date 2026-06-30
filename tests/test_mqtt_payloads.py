@@ -49,6 +49,8 @@ class MqttPayloadsTest(unittest.TestCase):
                         "confidence": 0.72,
                         "eventTriggered": False,
                         "trackingId": 3,
+                        "trackId": 3,
+                        "track_id": 3,
                         "frameId": 123,
                         "bbox": {"x": 120, "y": 80, "width": 200, "height": 150},
                         "boundingBox": {"x": 120, "y": 80, "width": 200, "height": 150},
