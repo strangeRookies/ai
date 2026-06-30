@@ -93,11 +93,16 @@ def process_frame(
     publisher=None,
     overlay_publish_state=None,
     frame_buffer=None,
+    dropped_frame_count=None,
 ):
     stream_id = getattr(args, "camera_login_id", None) or args.camera_id
     frame_metadata = None
     if frame_buffer is not None:
-        frame_metadata = frame_buffer.get_by_frame_id(stream_id, frame_packet.frame_id)
+        packet_frame_id = getattr(frame_packet, "frame_id", None)
+        if packet_frame_id is None:
+            frame_metadata = frame_buffer.record_capture(stream_id, frame_packet, frame_packet.frame.shape)
+        else:
+            frame_metadata = frame_buffer.get_by_frame_id(stream_id, packet_frame_id)
         if frame_metadata is not None:
             summary["latest_frame_id"] = frame_metadata.frame_id
             summary["latest_captured_at_ms"] = frame_metadata.captured_at_ms
@@ -208,7 +213,8 @@ def process_frame(
         timestamp_ms = published_at_ms
         summary["latest_published_at_ms"] = published_at_ms
         summary["latest_publish_latency_ms"] = frame_metadata.publish_latency_ms
-        log_frame_sync(args, stream_id, frame_metadata, frame_buffer)
+        log_frame_sync(args, stream_id, frame_metadata, frame_buffer, int(dropped_frame_count or 0))
+        summary["latest_evidence_id"] = f"{stream_id}-{frame_metadata.frame_id}-{frame_metadata.captured_at_ms}"
     overlay_payload = build_overlay_payload(
         stream_id=stream_id,
         frame_width=frame_width,
@@ -219,6 +225,7 @@ def process_frame(
         captured_at_ms=getattr(frame_metadata, "captured_at_ms", None),
         processed_at_ms=getattr(frame_metadata, "processed_at_ms", None),
         published_at_ms=published_at_ms,
+        dropped_frame_count=dropped_frame_count,
     )
     summary["latest_overlay_event_count"] = len(overlay_payload["events"])
     if publisher is not None:
@@ -234,6 +241,7 @@ def process_frame(
             sequence,
             frame_metadata=frame_metadata,
             published_at_ms=published_at_ms,
+            dropped_frame_count=dropped_frame_count,
         )
         log_lstm_event(args, stream_id, sequence, track_prediction)
         summary["events_generated"] += 1
@@ -254,10 +262,21 @@ def process_frame(
     return overlay
 
 
-def log_frame_sync(args, stream_id, frame_metadata, frame_buffer):
+def log_frame_sync(args, stream_id, frame_metadata, frame_buffer, dropped_frame_count=0):
     every_n = max(0, int(getattr(args, "debug_every_n", 30)))
     warning_ms = max(0, int(getattr(args, "frame_sync_delay_warning_ms", 300)))
     publish_latency_ms = frame_metadata.publish_latency_ms
+    if not frame_metadata.latency_order_valid:
+        print(
+            "[frame-sync] warning "
+            f"{stream_id} "
+            f"latency_order_invalid=true "
+            f"frame_id={frame_metadata.frame_id} "
+            f"captured_at_ms={frame_metadata.captured_at_ms} "
+            f"processed_at_ms={frame_metadata.processed_at_ms} "
+            f"published_at_ms={frame_metadata.published_at_ms}",
+            flush=True,
+        )
     if publish_latency_ms is not None and warning_ms > 0 and publish_latency_ms > warning_ms:
         print(
             "[frame-sync] warning "
@@ -275,6 +294,8 @@ def log_frame_sync(args, stream_id, frame_metadata, frame_buffer):
         f"captured_at_ms={frame_metadata.captured_at_ms} "
         f"ai_latency_ms={frame_metadata.ai_latency_ms} "
         f"publish_latency_ms={frame_metadata.publish_latency_ms} "
+        f"dropped_frame_count={int(dropped_frame_count)} "
+        f"evidence_id={stream_id}-{frame_metadata.frame_id}-{frame_metadata.captured_at_ms} "
         f"buffer_size={frame_buffer.size(stream_id)}",
         flush=True,
     )
@@ -450,6 +471,7 @@ class OverlayWorker:
                 publisher=publisher,
                 overlay_publish_state=overlay_publish_state,
                 frame_buffer=self.frame_buffer,
+                dropped_frame_count=self.queue.dropped_frame_count,
             )
             
             now_ms = time.time_ns() // 1_000_000

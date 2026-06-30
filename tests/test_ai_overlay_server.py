@@ -136,6 +136,67 @@ class AiOverlayServerTest(unittest.TestCase):
         self.assertEqual(event_payload["sequence"]["sequenceEndFrameId"], 2)
         self.assertIn("boundingBox", event_payload)
 
+    def test_process_frame_keeps_overlay_and_event_on_same_evidence_id(self):
+        args = Namespace(
+            detector_mode="mock",
+            camera_id="legacy_cam",
+            camera_login_id="cam_01",
+            print_events=False,
+            classifier_input="crops",
+            mqtt_camera_topic="camera",
+            mqtt_event_topic="event",
+            mqtt_topic=None,
+            frame_queue_maxsize=2,
+        )
+        detector = create_detector("mock", "yolov8n-pose.pt", "auto")
+        classifier, _ = create_classifier(None, "auto")
+        buffer = PerTrackCropSequenceBuffers(sequence_length=2, stride=1, resize_size=32)
+        tracker = SimpleTrackAssigner()
+        summary = initial_summary()
+        publisher = FakePublisher()
+        now_values = iter([1000, 1010, 1015, 1100, 1125, 1130])
+        frame_buffer = FrameMetadataBuffer(now_ms=lambda: next(now_values))
+
+        frame = np.zeros((64, 64, 3), dtype=np.uint8)
+        for frame_idx in range(2):
+            source_packet = FramePacket(frame_idx=frame_idx, fps=10.0, timestamp=frame_idx / 10.0, frame=frame)
+            metadata = frame_buffer.record_capture("cam_01", source_packet, frame.shape)
+            sync_packet = Namespace(
+                camera_login_id="cam_01",
+                frame_id=metadata.frame_id,
+                captured_at_ms=metadata.captured_at_ms,
+                frame=frame,
+                width=64,
+                height=64,
+                frame_idx=frame_idx,
+                timestamp=frame_idx / 10.0,
+                fps=10.0,
+            )
+            process_frame(
+                sync_packet,
+                detector,
+                classifier,
+                buffer,
+                summary,
+                args,
+                tracker=tracker,
+                publisher=publisher,
+                frame_buffer=frame_buffer,
+                dropped_frame_count=4,
+            )
+
+        overlay_topic, overlay_payload = publisher.published[-2]
+        event_topic, event_payload = publisher.published[-1]
+        self.assertEqual(overlay_topic, "camera")
+        self.assertEqual(event_topic, "event")
+        self.assertEqual(overlay_payload["frameId"], 2)
+        self.assertEqual(event_payload["frameId"], 2)
+        self.assertEqual(overlay_payload["evidenceId"], "cam_01-2-1100")
+        self.assertEqual(event_payload["evidenceId"], overlay_payload["evidenceId"])
+        self.assertEqual(event_payload["evidence"]["frameId"], overlay_payload["evidence"]["frameId"])
+        self.assertEqual(event_payload["evidence"]["droppedFrameCount"], 4)
+        self.assertEqual(summary["latest_evidence_id"], "cam_01-2-1100")
+
     def test_overlay_publish_state_reuses_latest_signal_for_active_track(self):
         state = OverlayPublishState()
         boxes = [{"x1": 10, "y1": 20, "x2": 30, "y2": 40, "track_id": 7, "faint_probability": 0.63}]
