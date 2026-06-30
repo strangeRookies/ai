@@ -161,6 +161,9 @@ def build_inference_event_payload(
     sequence,
     frame_metadata=None,
     published_at_ms=None,
+    dropped_frame_count=None,
+    snapshot_path=None,
+    clip_path=None,
 ):
     camera_login_id = getattr(args, "camera_login_id", None) or args.camera_id
     frame = getattr(packet, "frame", None)
@@ -178,6 +181,9 @@ def build_inference_event_payload(
         processed_at_ms=getattr(frame_metadata, "processed_at_ms", None),
         published_at_ms=published_at_ms,
         sequence_metadata=sequence_metadata(sequence, args),
+        dropped_frame_count=dropped_frame_count,
+        snapshot_path=snapshot_path,
+        clip_path=clip_path,
     )
 
 
