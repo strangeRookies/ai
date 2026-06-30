@@ -7,6 +7,8 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 import numpy as np
 
+from ai.evidence import evidence_id, latency_order_valid
+
 
 @dataclass(frozen=True, slots=True)
 class FramePacket:
@@ -75,6 +77,10 @@ class FrameMetadata:
             return None
         return max(0, self.published_at_ms - self.captured_at_ms)
 
+    @property
+    def latency_order_valid(self) -> bool:
+        return latency_order_valid(self.captured_at_ms, self.processed_at_ms, self.published_at_ms)
+
 
 class FrameMetadataBuffer:
     def __init__(self, maxlen: int = 60, now_ms: Callable[[], int] | None = None):
@@ -121,6 +127,37 @@ class FrameMetadataBuffer:
         if not frames:
             return None
         return min(frames, key=lambda item: abs(item.captured_at_ms - int(timestamp_ms)))
+
+    def evidence_context(
+        self,
+        camera_login_id: str,
+        frame_id: int,
+        dropped_frame_count: int = 0,
+        snapshot_path: str | None = None,
+        clip_path: str | None = None,
+    ) -> dict[str, int | str | bool | None]:
+        metadata = self.get_by_frame_id(camera_login_id, frame_id)
+        if metadata is None:
+            raise LookupError(f"frame metadata not found: camera_login_id={camera_login_id} frame_id={frame_id}")
+        context: dict[str, int | str | bool | None] = {
+            "cameraLoginId": metadata.camera_login_id,
+            "frameId": int(metadata.frame_id),
+            "timestampMs": int(metadata.captured_at_ms),
+            "capturedAtMs": int(metadata.captured_at_ms),
+            "processedAtMs": metadata.processed_at_ms,
+            "publishedAtMs": metadata.published_at_ms,
+            "aiLatencyMs": metadata.ai_latency_ms,
+            "publishLatencyMs": metadata.publish_latency_ms,
+            "droppedFrameCount": int(dropped_frame_count),
+            "evidenceId": evidence_id(metadata.camera_login_id, metadata.frame_id, metadata.captured_at_ms),
+            "traceId": evidence_id(metadata.camera_login_id, metadata.frame_id, metadata.captured_at_ms),
+            "latencyOrderValid": metadata.latency_order_valid,
+        }
+        if snapshot_path is not None:
+            context["snapshotPath"] = snapshot_path
+        if clip_path is not None:
+            context["clipPath"] = clip_path
+        return context
 
     def size(self, camera_login_id: str) -> int:
         return len(self._frames_by_camera.get(str(camera_login_id), ()))

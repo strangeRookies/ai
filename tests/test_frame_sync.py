@@ -1,6 +1,6 @@
 import unittest
 
-from ai.frame_sync import FrameMetadataBuffer
+from ai.frame_sync import CameraFrameQueue, FrameMetadataBuffer, FramePacket as SyncFramePacket
 from ai.streams.video_reader import FramePacket
 
 
@@ -34,6 +34,49 @@ class FrameSyncTest(unittest.TestCase):
         self.assertEqual(published.published_at_ms, 2062)
         self.assertEqual(published.ai_latency_ms, 55)
         self.assertEqual(published.publish_latency_ms, 62)
+
+    def test_latest_queue_evidence_context_uses_processed_frame_after_drop(self):
+        now_values = iter([1000, 1010, 1020, 1030, 1050, 1060])
+        buffer = FrameMetadataBuffer(maxlen=10, now_ms=lambda: next(now_values))
+        queue = CameraFrameQueue("cam_04", maxsize=2)
+
+        for index in range(4):
+            packet = FramePacket(frame_idx=index, fps=30.0, timestamp=index / 30.0, frame=None)
+            metadata = buffer.record_capture("cam_04", packet, (360, 640, 3))
+            queue.put_latest(
+                SyncFramePacket(
+                    camera_login_id="cam_04",
+                    frame_id=metadata.frame_id,
+                    captured_at_ms=metadata.captured_at_ms,
+                    frame=None,
+                    width=metadata.width,
+                    height=metadata.height,
+                    frame_idx=packet.frame_idx,
+                    timestamp=packet.timestamp,
+                    fps=packet.fps,
+                )
+            )
+
+        processed_packet = queue.get_latest()
+        self.assertIsNotNone(processed_packet)
+        self.assertEqual(processed_packet.frame_id, 4)
+        processed = buffer.mark_processed("cam_04", processed_packet.frame_id)
+        published = buffer.mark_published("cam_04", processed_packet.frame_id)
+        evidence = buffer.evidence_context("cam_04", processed_packet.frame_id, queue.dropped_frame_count)
+
+        self.assertEqual(queue.dropped_frame_count, 3)
+        self.assertEqual(evidence["cameraLoginId"], "cam_04")
+        self.assertEqual(evidence["frameId"], 4)
+        self.assertEqual(evidence["timestampMs"], 1030)
+        self.assertEqual(evidence["capturedAtMs"], 1030)
+        self.assertEqual(evidence["processedAtMs"], 1050)
+        self.assertEqual(evidence["publishedAtMs"], 1060)
+        self.assertEqual(evidence["aiLatencyMs"], 20)
+        self.assertEqual(evidence["publishLatencyMs"], 30)
+        self.assertEqual(evidence["droppedFrameCount"], 3)
+        self.assertEqual(evidence["evidenceId"], "cam_04-4-1030")
+        self.assertTrue(evidence["latencyOrderValid"])
+        self.assertEqual(processed.frame_id, published.frame_id)
 
 
 if __name__ == "__main__":

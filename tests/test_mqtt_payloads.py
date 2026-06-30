@@ -209,6 +209,47 @@ class MqttPayloadsTest(unittest.TestCase):
 
         self.assertEqual(payload["events"][0]["keypoints"], [{"x": 30.0, "y": 40.0, "confidence": 0.9}])
 
+    def test_payloads_include_additive_evidence_id_and_trace_fields(self):
+        overlay = build_overlay_payload(
+            stream_id="cam_01",
+            frame_width=640,
+            frame_height=360,
+            timestamp_ms=1782180000123,
+            frame_id=123,
+            captured_at_ms=1782180000100,
+            processed_at_ms=1782180000120,
+            published_at_ms=1782180000123,
+            boxes=[{"x1": 1, "y1": 2, "x2": 3, "y2": 4, "score": 0.7}],
+            dropped_frame_count=2,
+        )
+        event = build_confirmed_event_payload(
+            stream_id="cam_01",
+            frame_width=640,
+            frame_height=360,
+            timestamp_ms=1782180000123,
+            frame_id=123,
+            captured_at_ms=1782180000100,
+            processed_at_ms=1782180000120,
+            published_at_ms=1782180000123,
+            prediction={"label": "Faint", "score": 0.91, "probabilities": {"Faint": 0.91}},
+            sequence={"bbox": [1, 2, 3, 4], "track_id": 5},
+            boxes=[],
+            dropped_frame_count=2,
+            snapshot_path="snapshots/cam_01_123.jpg",
+            clip_path="clips/cam_01_123.mp4",
+        )
+
+        self.assertEqual(overlay["evidenceId"], "cam_01-123-1782180000100")
+        self.assertEqual(event["evidenceId"], overlay["evidenceId"])
+        self.assertEqual(event["traceId"], overlay["traceId"])
+        self.assertEqual(event["metadata"]["evidenceId"], event["evidenceId"])
+        self.assertEqual(event["metadata"]["snapshotPath"], "snapshots/cam_01_123.jpg")
+        self.assertEqual(event["metadata"]["clipPath"], "clips/cam_01_123.mp4")
+        self.assertEqual(event["evidence"]["latency"]["aiLatencyMs"], 20)
+        self.assertEqual(event["evidence"]["latency"]["publishLatencyMs"], 23)
+        self.assertEqual(event["evidence"]["droppedFrameCount"], 2)
+        self.assertTrue(event["evidence"]["latencyOrderValid"])
+
 
 if __name__ == "__main__":
     unittest.main()

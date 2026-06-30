@@ -322,6 +322,17 @@ def run(args):
                         frame_metadata = frame_buffer.mark_published(camera_login_id, frame_metadata.frame_id)
                         summary["latest_published_at_ms"] = frame_metadata.published_at_ms
                         summary["latest_publish_latency_ms"] = frame_metadata.publish_latency_ms
+                        if not frame_metadata.latency_order_valid:
+                            print(
+                                "[frame-sync] warning "
+                                f"{camera_login_id} "
+                                f"latency_order_invalid=true "
+                                f"frame_id={frame_metadata.frame_id} "
+                                f"captured_at_ms={frame_metadata.captured_at_ms} "
+                                f"processed_at_ms={frame_metadata.processed_at_ms} "
+                                f"published_at_ms={frame_metadata.published_at_ms}",
+                                flush=True,
+                            )
                     payload = build_inference_event_payload(
                         args,
                         frame_packet,
@@ -330,7 +341,12 @@ def run(args):
                         sequence,
                         frame_metadata=frame_metadata,
                         published_at_ms=frame_metadata.published_at_ms if frame_metadata else None,
+                        dropped_frame_count=queue.dropped_frame_count,
                     )
+                    if frame_metadata is not None:
+                        summary["latest_evidence_id"] = (
+                            f"{camera_login_id}-{frame_metadata.frame_id}-{frame_metadata.captured_at_ms}"
+                        )
                     event_log = build_inference_event_log(args, frame_packet, track_prediction, boxes, sequence)
                     if getattr(args, "event_log_dir", None):
                         save_inference_event_log(args.event_log_dir, event_log)
