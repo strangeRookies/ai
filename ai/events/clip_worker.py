@@ -46,7 +46,8 @@ def save_clip_to_mp4(task):
     output_dir = Path(task.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.fromtimestamp(task.created_at, tz=timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-    filename = f"{_safe(task.event_type)}_{_safe(task.camera_id)}_{timestamp}.mp4"
+    evidence_suffix = _evidence_suffix(task.metadata)
+    filename = f"{_safe(task.event_type)}_{_safe(task.camera_id)}_{timestamp}{evidence_suffix}.mp4"
     output_path = output_dir / filename
 
     writer = None
@@ -115,3 +116,12 @@ class ClipWriterWorker:
 
 def _safe(value):
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", str(value)).strip("_") or "unknown"
+
+
+def _evidence_suffix(metadata):
+    if not isinstance(metadata, dict):
+        return ""
+    evidence_id = metadata.get("evidenceId")
+    if evidence_id is None:
+        return ""
+    return f"_evidence-{_safe(evidence_id)}"

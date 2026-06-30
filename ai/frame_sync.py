@@ -185,6 +185,39 @@ def current_epoch_ms() -> int:
     return time.time_ns() // 1_000_000
 
 
+def evidence_context_from_packet(
+    packet: FramePacket,
+    processed_at_ms: int | None = None,
+    published_at_ms: int | None = None,
+    dropped_frame_count: int = 0,
+    snapshot_path: str | None = None,
+    clip_path: str | None = None,
+) -> dict[str, int | str | bool | None]:
+    context: dict[str, int | str | bool | None] = {
+        "cameraLoginId": packet.camera_login_id,
+        "frameId": int(packet.frame_id),
+        "timestampMs": int(packet.captured_at_ms),
+        "capturedAtMs": int(packet.captured_at_ms),
+        "processedAtMs": processed_at_ms,
+        "publishedAtMs": published_at_ms,
+        "aiLatencyMs": max(0, int(processed_at_ms) - int(packet.captured_at_ms))
+        if processed_at_ms is not None
+        else None,
+        "publishLatencyMs": max(0, int(published_at_ms) - int(packet.captured_at_ms))
+        if published_at_ms is not None
+        else None,
+        "droppedFrameCount": int(dropped_frame_count),
+        "evidenceId": evidence_id(packet.camera_login_id, packet.frame_id, packet.captured_at_ms),
+        "traceId": evidence_id(packet.camera_login_id, packet.frame_id, packet.captured_at_ms),
+        "latencyOrderValid": latency_order_valid(packet.captured_at_ms, processed_at_ms, published_at_ms),
+    }
+    if snapshot_path is not None:
+        context["snapshotPath"] = snapshot_path
+    if clip_path is not None:
+        context["clipPath"] = clip_path
+    return context
+
+
 def frame_size_from_shape(frame_shape: Sequence[int]) -> tuple[int, int]:
     if len(frame_shape) < 2:
         return 0, 0

@@ -76,6 +76,34 @@ class RtspEventPayloadTest(unittest.TestCase):
         self.assertNotIn("clip_path", payload)
         self.assertNotIn("clip_url", payload)
 
+    def test_inference_event_payload_falls_back_to_processed_packet_evidence(self):
+        args = Namespace(camera_id="legacy_cam", camera_login_id="cam_01")
+        packet = Namespace(
+            frame_idx=12,
+            frame_id=77,
+            captured_at_ms=1782180000100,
+            timestamp=123.5,
+            frame=np.zeros((360, 640, 3), dtype=np.uint8),
+        )
+        prediction = {"label": "Faint", "score": 0.81}
+        sequence = {"bbox": [1, 2, 201, 152], "track_id": 9, "start_frame": 4, "end_frame": 12}
+
+        payload = build_inference_event_payload(
+            args,
+            packet,
+            prediction,
+            boxes=[],
+            sequence=sequence,
+            frame_metadata=None,
+            published_at_ms=1782180000200,
+            dropped_frame_count=3,
+        )
+
+        self.assertEqual(payload["frameId"], 77)
+        self.assertEqual(payload["capturedAtMs"], 1782180000100)
+        self.assertEqual(payload["evidenceId"], "cam_01-77-1782180000100")
+        self.assertEqual(payload["evidence"]["droppedFrameCount"], 3)
+
     def test_inference_event_log_contains_debug_fields(self):
         args = Namespace(camera_id="cam_01", action_threshold=0.3, min_consecutive_faint=3, camera_cooldown_seconds=10)
         packet = Namespace(frame_idx=12, timestamp=123.5)
@@ -160,6 +188,17 @@ class RtspEventPayloadTest(unittest.TestCase):
         self.assertEqual(payload["messageType"], "event")
         self.assertEqual(payload["streamId"], "cam_01")
 
+    def test_run_summary_exposes_latest_frame_evidence(self):
+        summary = run_with_fake_rtsp(fake_run_args(event_log_dir=None))
+        sample_event = summary["sample_event"]
+
+        self.assertIsNotNone(sample_event)
+        self.assertEqual(sample_event["cameraLoginId"], "cam_01")
+        self.assertEqual(summary["latest_evidence_id"], sample_event["evidenceId"])
+        self.assertEqual(summary["latest_trace_id"], sample_event["traceId"])
+        self.assertEqual(summary["latest_dropped_frame_count"], sample_event["evidence"]["droppedFrameCount"])
+        self.assertTrue(summary["latest_latency_order_valid"])
+
     def test_cheap_filter_reduces_lstm_calls_for_low_risk_sequences(self):
         summary = run_with_fake_rtsp(fake_run_args(event_log_dir=None, cheap_filter_enabled=True))
 
@@ -174,6 +213,8 @@ def fake_run_args(event_log_dir, dry_run=True, cheap_filter_enabled=False):
         camera_id="cam_01",
         camera_login_id=None,
         max_frames=4,
+        frame_queue_maxsize=10,
+        frame_sync_buffer_size=60,
         detector_mode="mock",
         dry_run=dry_run,
         output=None,

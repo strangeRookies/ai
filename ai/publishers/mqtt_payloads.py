@@ -5,7 +5,7 @@ from collections.abc import Mapping, Sequence
 from typing import Final, TypeAlias
 
 from ai.action.faint_post_processing import faint_probability
-from ai.evidence import evidence_id, latency_order_valid
+from ai.publishers.evidence_fields import add_evidence_fields
 
 SCHEMA_VERSION: Final = "1.1"
 DEFAULT_EVENT_TYPE: Final = "faint"
@@ -53,7 +53,7 @@ def build_overlay_payload(
         ],
     }
     _add_frame_sync_fields(payload, frame_id, captured_at_ms, processed_at_ms, published_at_ms)
-    _add_evidence_fields(
+    add_evidence_fields(
         payload,
         stream_id,
         frame_id,
@@ -72,8 +72,9 @@ def build_frame_sync_payload(
     published_at_ms: int,
     queue_lag_ms: int,
     dropped_frame_count: int,
+    processed_at_ms: int | None = None,
 ) -> dict[str, JsonValue]:
-    return {
+    payload: dict[str, JsonValue] = {
         "schemaVersion": SCHEMA_VERSION,
         "messageType": "frame_sync",
         "type": "frame_sync",
@@ -84,6 +85,18 @@ def build_frame_sync_payload(
         "queueLagMs": int(queue_lag_ms),
         "droppedFrameCount": int(dropped_frame_count),
     }
+    if processed_at_ms is not None:
+        payload["processedAtMs"] = int(processed_at_ms)
+    add_evidence_fields(
+        payload,
+        camera_login_id,
+        frame_id,
+        captured_at_ms,
+        processed_at_ms,
+        published_at_ms,
+        dropped_frame_count=dropped_frame_count,
+    )
+    return payload
 
 
 def build_confirmed_event_payload(
@@ -151,7 +164,7 @@ def build_confirmed_event_payload(
         "events": [event],
     }
     _add_frame_sync_fields(payload, frame_id, captured_at_ms, processed_at_ms, published_at_ms)
-    _add_evidence_fields(
+    add_evidence_fields(
         payload,
         stream_id,
         frame_id,
@@ -249,60 +262,6 @@ def _add_frame_sync_fields(
         payload["aiLatencyMs"] = max(0, int(processed_at_ms) - int(captured_at_ms))
     if captured_at_ms is not None and published_at_ms is not None:
         payload["publishLatencyMs"] = max(0, int(published_at_ms) - int(captured_at_ms))
-
-
-def _add_evidence_fields(
-    payload: dict[str, JsonValue],
-    stream_id: str,
-    frame_id: int | None,
-    captured_at_ms: int | None,
-    processed_at_ms: int | None,
-    published_at_ms: int | None,
-    dropped_frame_count: int | None = None,
-    snapshot_path: str | None = None,
-    clip_path: str | None = None,
-) -> None:
-    if dropped_frame_count is None and snapshot_path is None and clip_path is None:
-        return
-    if frame_id is None or captured_at_ms is None:
-        return
-    eid = evidence_id(stream_id, int(frame_id), int(captured_at_ms))
-    order_valid = latency_order_valid(captured_at_ms, processed_at_ms, published_at_ms)
-    evidence: dict[str, JsonValue] = {
-        "evidenceId": eid,
-        "traceId": eid,
-        "cameraLoginId": stream_id,
-        "frameId": int(frame_id),
-        "timestampMs": int(captured_at_ms),
-        "capturedAtMs": int(captured_at_ms),
-        "processedAtMs": int(processed_at_ms) if processed_at_ms is not None else None,
-        "publishedAtMs": int(published_at_ms) if published_at_ms is not None else None,
-        "latency": {
-            "aiLatencyMs": max(0, int(processed_at_ms) - int(captured_at_ms))
-            if processed_at_ms is not None
-            else None,
-            "publishLatencyMs": max(0, int(published_at_ms) - int(captured_at_ms))
-            if published_at_ms is not None
-            else None,
-        },
-        "droppedFrameCount": int(dropped_frame_count or 0),
-        "latencyOrderValid": order_valid,
-    }
-    if snapshot_path is not None:
-        evidence["snapshotPath"] = snapshot_path
-    if clip_path is not None:
-        evidence["clipPath"] = clip_path
-    payload["evidenceId"] = eid
-    payload["traceId"] = eid
-    payload["evidence"] = evidence
-    metadata = dict(payload.get("metadata", {})) if isinstance(payload.get("metadata"), Mapping) else {}
-    metadata["evidenceId"] = eid
-    if snapshot_path is not None:
-        metadata["snapshotPath"] = snapshot_path
-    if clip_path is not None:
-        metadata["clipPath"] = clip_path
-    if metadata:
-        payload["metadata"] = metadata
 
 
 def _box_bbox(box: JsonMap, frame_width: int | None = None, frame_height: int | None = None) -> dict[str, JsonValue]:

@@ -1,12 +1,14 @@
 import unittest
+from contextlib import redirect_stdout
 from argparse import Namespace
+from io import StringIO
 
 import numpy as np
 
 from ai.streams.video_reader import FramePacket
 from ai.frame_sync import FrameMetadataBuffer
 from scripts.run_rtsp_inference import create_classifier, create_detector
-from scripts.serve_ai_overlay import OverlayPublishState, format_action_overlay_text, initial_summary, process_frame
+from scripts.serve_ai_overlay import OverlayPublishState, format_action_overlay_text, initial_summary, log_frame_sync, process_frame
 from ai.action.per_track_sequence_buffer import PerTrackCropSequenceBuffers
 from ai.visualization.action_overlay import annotate_boxes_with_action
 from tracking.simple_tracker import SimpleTrackAssigner
@@ -196,6 +198,30 @@ class AiOverlayServerTest(unittest.TestCase):
         self.assertEqual(event_payload["evidence"]["frameId"], overlay_payload["evidence"]["frameId"])
         self.assertEqual(event_payload["evidence"]["droppedFrameCount"], 4)
         self.assertEqual(summary["latest_evidence_id"], "cam_01-2-1100")
+        self.assertEqual(summary["latest_trace_id"], "cam_01-2-1100")
+        self.assertEqual(summary["latest_dropped_frame_count"], 4)
+        self.assertTrue(summary["latest_latency_order_valid"])
+
+    def test_log_frame_sync_warns_on_invalid_latency_order(self):
+        now_values = iter([1000, 900, 950])
+        frame_buffer = FrameMetadataBuffer(now_ms=lambda: next(now_values))
+        frame = np.zeros((64, 64, 3), dtype=np.uint8)
+        captured = frame_buffer.record_capture(
+            "cam_01",
+            FramePacket(frame_idx=0, fps=10.0, timestamp=0.0, frame=frame),
+            frame.shape,
+        )
+        processed = frame_buffer.mark_processed("cam_01", captured.frame_id)
+        published = frame_buffer.mark_published("cam_01", processed.frame_id)
+        output = StringIO()
+
+        with redirect_stdout(output):
+            log_frame_sync(Namespace(debug_every_n=0, frame_sync_delay_warning_ms=0), "cam_01", published, frame_buffer)
+
+        line = output.getvalue()
+        self.assertIn("[frame-sync] warning", line)
+        self.assertIn("latency_order_valid=false", line)
+        self.assertIn("frame_id=1", line)
 
     def test_overlay_publish_state_reuses_latest_signal_for_active_track(self):
         state = OverlayPublishState()

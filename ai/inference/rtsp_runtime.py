@@ -176,6 +176,13 @@ def build_inference_event_payload(
     camera_login_id = getattr(args, "camera_login_id", None) or args.camera_id
     frame = getattr(packet, "frame", None)
     frame_width, frame_height = frame_size_from_shape(frame.shape) if frame is not None else (0, 0)
+    frame_id = getattr(frame_metadata, "frame_id", None)
+    if frame_id is None:
+        frame_id = getattr(packet, "frame_id", None)
+    captured_at_ms = getattr(frame_metadata, "captured_at_ms", None)
+    if captured_at_ms is None:
+        captured_at_ms = getattr(packet, "captured_at_ms", None)
+    processed_at_ms = getattr(frame_metadata, "processed_at_ms", None)
     return build_confirmed_event_payload(
         stream_id=camera_login_id,
         frame_width=frame_width,
@@ -184,9 +191,9 @@ def build_inference_event_payload(
         sequence=sequence,
         boxes=boxes,
         timestamp_ms=published_at_ms or int(_time.time() * 1000),
-        frame_id=getattr(frame_metadata, "frame_id", None),
-        captured_at_ms=getattr(frame_metadata, "captured_at_ms", None),
-        processed_at_ms=getattr(frame_metadata, "processed_at_ms", None),
+        frame_id=frame_id,
+        captured_at_ms=captured_at_ms,
+        processed_at_ms=processed_at_ms,
         published_at_ms=published_at_ms,
         sequence_metadata=sequence_metadata(sequence, args),
         dropped_frame_count=dropped_frame_count,

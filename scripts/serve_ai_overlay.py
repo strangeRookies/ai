@@ -11,6 +11,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from ai.action.per_track_sequence_buffer import PerTrackCropSequenceBuffers, PerTrackKeypointSequenceBuffers
 from ai.action.lstm_contract import DEFAULT_KEYPOINT_INPUT_SIZE, DEFAULT_LSTM_SEQUENCE_LENGTH, DEFAULT_LSTM_SEQUENCE_STRIDE, log_lstm_config
+from ai.evidence import evidence_id
 from ai.frame_sync import FrameMetadataBuffer, FramePacket, CameraFrameQueue
 from ai.inference.rtsp_runtime import build_inference_event_payload, cheap_filter_config_from_args, create_detection_postprocessor, ensure_mock_keypoints
 from ai.inference.rtsp_runtime import maybe_log_debug, normalize_detections, update_detections_with_postprocessor, update_prediction_counts, update_tracking_summary
@@ -265,8 +266,12 @@ def process_frame(
         timestamp_ms = published_at_ms
         summary["latest_published_at_ms"] = published_at_ms
         summary["latest_publish_latency_ms"] = frame_metadata.publish_latency_ms
+        evidence_key = evidence_id(stream_id, frame_metadata.frame_id, frame_metadata.captured_at_ms)
         log_frame_sync(args, stream_id, frame_metadata, frame_buffer, int(dropped_frame_count or 0))
-        summary["latest_evidence_id"] = f"{stream_id}-{frame_metadata.frame_id}-{frame_metadata.captured_at_ms}"
+        summary["latest_evidence_id"] = evidence_key
+        summary["latest_trace_id"] = evidence_key
+        summary["latest_dropped_frame_count"] = int(dropped_frame_count or 0)
+        summary["latest_latency_order_valid"] = frame_metadata.latency_order_valid
     overlay_payload = build_overlay_payload(
         stream_id=stream_id,
         frame_width=frame_width,
@@ -327,6 +332,7 @@ def log_frame_sync(args, stream_id, frame_metadata, frame_buffer, dropped_frame_
             "[frame-sync] warning "
             f"{stream_id} "
             f"latency_order_invalid=true "
+            f"latency_order_valid=false "
             f"frame_id={frame_metadata.frame_id} "
             f"captured_at_ms={frame_metadata.captured_at_ms} "
             f"processed_at_ms={frame_metadata.processed_at_ms} "
@@ -532,7 +538,7 @@ class OverlayWorker:
             
             now_ms = time.time_ns() // 1_000_000
             queue_lag_ms = now_ms - frame_packet.captured_at_ms
-            published_at_ms = now_ms
+            published_at_ms = summary.get("latest_published_at_ms") or now_ms
             
             fs_payload = build_frame_sync_payload(
                 camera_login_id=current_cam_id,
@@ -541,6 +547,7 @@ class OverlayWorker:
                 published_at_ms=published_at_ms,
                 queue_lag_ms=queue_lag_ms,
                 dropped_frame_count=self.queue.dropped_frame_count,
+                processed_at_ms=summary.get("latest_processed_at_ms"),
             )
             topic_settings = mqtt_topic_settings_from_args(self.args)
             if publisher is not None:
