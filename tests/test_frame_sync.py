@@ -1,6 +1,11 @@
 import unittest
 
-from ai.frame_sync import CameraFrameQueue, FrameMetadataBuffer, FramePacket as SyncFramePacket
+from ai.frame_sync import (
+    CameraFrameQueue,
+    FrameMetadataBuffer,
+    FramePacket as SyncFramePacket,
+    evidence_context_from_packet,
+)
 from ai.streams.video_reader import FramePacket
 
 
@@ -77,6 +82,50 @@ class FrameSyncTest(unittest.TestCase):
         self.assertEqual(evidence["evidenceId"], "cam_04-4-1030")
         self.assertTrue(evidence["latencyOrderValid"])
         self.assertEqual(processed.frame_id, published.frame_id)
+
+    def test_evidence_context_from_packet_survives_metadata_eviction(self):
+        packet = SyncFramePacket(
+            camera_login_id="cam_04",
+            frame_id=7,
+            captured_at_ms=2000,
+            frame=None,
+            width=640,
+            height=360,
+            frame_idx=20,
+            timestamp=2.0,
+            fps=10.0,
+        )
+
+        evidence = evidence_context_from_packet(
+            packet,
+            processed_at_ms=2030,
+            published_at_ms=2045,
+            dropped_frame_count=5,
+        )
+
+        self.assertEqual(evidence["cameraLoginId"], "cam_04")
+        self.assertEqual(evidence["frameId"], 7)
+        self.assertEqual(evidence["timestampMs"], 2000)
+        self.assertEqual(evidence["evidenceId"], "cam_04-7-2000")
+        self.assertEqual(evidence["droppedFrameCount"], 5)
+        self.assertTrue(evidence["latencyOrderValid"])
+
+    def test_evidence_context_flags_invalid_latency_order(self):
+        packet = SyncFramePacket(
+            camera_login_id="cam_04",
+            frame_id=8,
+            captured_at_ms=3000,
+            frame=None,
+            width=640,
+            height=360,
+            frame_idx=21,
+            timestamp=2.1,
+            fps=10.0,
+        )
+
+        evidence = evidence_context_from_packet(packet, processed_at_ms=3100, published_at_ms=3090)
+
+        self.assertFalse(evidence["latencyOrderValid"])
 
 
 if __name__ == "__main__":

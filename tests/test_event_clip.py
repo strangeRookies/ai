@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 
-from ai.events.clip_worker import ClipWriterWorker, enqueue_event_clip
+from ai.events.clip_worker import ClipWriterWorker, enqueue_event_clip, save_clip_to_mp4
 from ai.events.event_clip import CircularFrameBuffer, EventClipBuffer, EventClipTask
 
 
@@ -54,6 +54,23 @@ class EventClipTest(unittest.TestCase):
         self.assertTrue(enqueue_event_clip(task_queue, task))
         self.assertEqual(task_queue.qsize(), 1)
 
+    def test_event_clip_task_preserves_evidence_metadata(self):
+        clip_buffer = EventClipBuffer(pre_event_frame_count=1, post_event_frame_count=1, cooldown_seconds=10)
+        clip_buffer.add_frame(dummy_frame(1))
+
+        self.assertTrue(
+            clip_buffer.trigger_event(
+                "Fall",
+                "cam_01",
+                metadata={"evidenceId": "cam_01-7-2000", "traceId": "cam_01-7-2000"},
+                now=100.0,
+            )
+        )
+        task = clip_buffer.add_frame(dummy_frame(2))
+
+        self.assertEqual(task.metadata["evidenceId"], "cam_01-7-2000")
+        self.assertEqual(task.metadata["traceId"], "cam_01-7-2000")
+
     def test_worker_creates_mp4_file(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             task_queue = queue.Queue(maxsize=2)
@@ -76,6 +93,44 @@ class EventClipTest(unittest.TestCase):
             clips = list(Path(temp_dir).glob("Fall_cam_01_*.mp4"))
             self.assertEqual(len(clips), 1)
             self.assertGreater(clips[0].stat().st_size, 0)
+
+    def test_worker_passes_evidence_metadata_and_safe_clip_name(self):
+        uploads = []
+        with tempfile.TemporaryDirectory() as temp_dir:
+            task_queue = queue.Queue(maxsize=2)
+            worker = ClipWriterWorker(task_queue, uploader=lambda path, metadata: uploads.append((path, metadata)))
+            worker.start()
+            task = EventClipTask(
+                event_type="Fall",
+                camera_id="cam_01",
+                frames=[dummy_frame(index) for index in range(10)],
+                fps=10.0,
+                output_dir=temp_dir,
+                metadata={"evidenceId": "cam_01-7-2000", "traceId": "cam_01-7-2000"},
+            )
+
+            self.assertTrue(enqueue_event_clip(task_queue, task))
+            task_queue.join()
+            worker.stop()
+
+        self.assertEqual(uploads[0][1]["evidenceId"], "cam_01-7-2000")
+        self.assertIn("evidence-cam_01-7-2000", uploads[0][0].name)
+
+    def test_save_clip_to_mp4_keeps_legacy_glob_with_evidence_suffix(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            task = EventClipTask(
+                event_type="Fall",
+                camera_id="cam_01",
+                frames=[dummy_frame(index) for index in range(10)],
+                fps=10.0,
+                output_dir=temp_dir,
+                metadata={"evidenceId": "cam_01-7-2000"},
+            )
+
+            output_path = save_clip_to_mp4(task)
+
+        self.assertTrue(output_path.name.startswith("Fall_cam_01_"))
+        self.assertIn("evidence-cam_01-7-2000", output_path.name)
 
     def test_worker_failure_does_not_stop_worker_thread(self):
         with tempfile.TemporaryDirectory() as temp_dir:
