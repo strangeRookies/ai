@@ -19,11 +19,12 @@ if not defined GPU_USER exit /b 1
 if not defined STABLE_ROOT exit /b 1
 
 set "REMOTE_ROOT=%STABLE_ROOT%"
+set "BRANCH=codex/ai-worker-flow-improvements"
 set "MQTT_HOST=15.165.248.37"
 set "MQTT_PORT=1883"
 
 echo ========================================================
-echo Starting STABLE AI environment from GPU develop branch
+echo Starting STABLE AI environment from GPU %BRANCH% branch
 echo ========================================================
 echo GPU: %GPU_USER%@%GPU_HOST%
 echo Remote repo: %REMOTE_ROOT%
@@ -57,8 +58,8 @@ goto DO_TUNNEL
 :MODE_FULL
 echo.
 echo === [Full Restart Mode] ===
-echo [1/5] Syncing GPU stable repo to origin/develop...
-ssh %GPU_USER%@%GPU_HOST% "cd %REMOTE_ROOT% && git stash push -u -m auto-stash-before-ai-stable-run || true && git fetch origin && git checkout develop && git pull --ff-only origin develop"
+echo [1/5] Syncing GPU stable repo to origin/%BRANCH%...
+ssh %GPU_USER%@%GPU_HOST% "cd %REMOTE_ROOT% && git stash push -u -m auto-stash-before-ai-stable-run || true && git fetch origin && git checkout %BRANCH% && git pull --ff-only origin %BRANCH%"
 if errorlevel 1 (
   echo [ERROR] Failed to sync GPU stable repo.
   pause
