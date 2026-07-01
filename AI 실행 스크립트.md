@@ -198,7 +198,7 @@ python scripts/start_simulated_rtsp_from_folder.py \
   --rtsp-host 127.0.0.1 \
   --rtsp-port 8554 \
   --poll-interval 30 \
-  --ffmpeg-mode copy
+  --ffmpeg-mode auto
 ```
 
 송출 확인:
@@ -501,7 +501,7 @@ nohup python scripts/start_simulated_rtsp_from_folder.py \
   --rtsp-host 127.0.0.1 \
   --rtsp-port 8554 \
   --poll-interval 30 \
-  --ffmpeg-mode copy \
+  --ffmpeg-mode auto \
   > publisher.log 2>&1 </dev/null &
 
 nohup python scripts/run_registered_cameras.py \
