@@ -6,7 +6,6 @@ from ai.action.lstm_contract import (
     MOTION_KEYPOINT_INPUT_SIZE,
 )
 
-
 DEFAULT_CLASSES = ("Normal", "Faint")
 KEYPOINT_FEATURE_DIM = DEFAULT_KEYPOINT_INPUT_SIZE
 MOTION_KEYPOINT_FEATURE_DIM = MOTION_KEYPOINT_INPUT_SIZE
@@ -72,18 +71,34 @@ class LSTMActionClassifier(ActionClassifier):
         self.checkpoint_path = str(checkpoint_path)
         self.checkpoint_sequence_length = optional_int(checkpoint.get("sequence_length"))
         self.checkpoint_sequence_stride = optional_int(checkpoint.get("sequence_stride"))
+        
+        # Load feature schema metadata
+        self.feature_schema = checkpoint.get("feature_schema_version", "keypoint51" if self.input_size == 51 else "keypoint_motion54")
+        self.feature_names = checkpoint.get("feature_names", [])
+
+        # Safeguard: validate checkpoint metadata consistency for keypoint schemas
+        if self.feature_schema in {"keypoint51", "keypoint_motion54", "keypoint_bbox54"}:
+            schema_dim = 54 if self.feature_schema in {"keypoint_motion54", "keypoint_bbox54"} else 51
+            if self.input_size != schema_dim:
+                raise ValueError(
+                    f"Checkpoint Metadata Mismatch: model input_size={self.input_size} "
+                    f"does not match feature_schema={self.feature_schema} (dimension {schema_dim})"
+                )
+
 
     def predict(self, sequence):
         if not sequence:
             return None
-        features = sequence_to_lstm_features(sequence, self.input_size, self.crop_feature_size)
-        if "detections" in sequence and int(features.shape[-1]) != self.input_size:
-            features = normalize_feature_width(
-                features,
-                self.input_size,
-                camera_login_id=sequence.get("camera_login_id"),
-                checkpoint_path=self.checkpoint_path,
-            )
+        features = sequence_to_lstm_features(sequence, self.input_size, self.crop_feature_size, getattr(self, "feature_schema", "keypoint51"))
+        
+        if "detections" in sequence:
+            actual_input_size = int(features.shape[-1])
+            if actual_input_size != self.input_size:
+                raise ValueError(
+                    f"LSTMActionClassifier Mismatch: model expected input_size={self.input_size}, "
+                    f"but sequence generated feature size={actual_input_size}. checkpoint={self.checkpoint_path}"
+                )
+                
         x = self.torch.from_numpy(features).unsqueeze(0).to(self.device)
         with self.torch.no_grad():
             logits = self.model(x)
@@ -131,24 +146,15 @@ def classes_from_checkpoint(checkpoint):
     return list(checkpoint.get("classes", DEFAULT_CLASSES))
 
 
-def sequence_to_lstm_features(sequence, input_size=KEYPOINT_FEATURE_DIM, crop_feature_size=32):
-    """Select features that match the loaded checkpoint input size.
-
-    `input_size=51` means 17 keypoints times x, y, and confidence.
-    `input_size=54` means the same keypoints plus 3 motion features.
-    If a non-keypoint checkpoint receives crops, crop features are used instead.
-    Crop feature dim is `crop_feature_size * crop_feature_size`.
-    """
-    if "detections" in sequence and int(input_size) in {KEYPOINT_FEATURE_DIM, MOTION_KEYPOINT_FEATURE_DIM}:
-        return keypoint_sequence_to_features(sequence, expected_input_size=int(input_size))
+def sequence_to_lstm_features(sequence, input_size=KEYPOINT_FEATURE_DIM, crop_feature_size=32, feature_schema="keypoint51"):
+    if "detections" in sequence:
+        return keypoint_sequence_to_features(sequence, expected_input_size=int(input_size), feature_schema=feature_schema)
     if "crops" in sequence:
         return crops_to_features(sequence["crops"], crop_feature_size)
-    if "detections" in sequence:
-        return keypoint_sequence_to_features(sequence, expected_input_size=int(input_size))
     raise RuntimeError("sequence must contain keypoint detections or crops")
 
 
-def keypoint_sequence_to_features(sequence, keypoint_count=DEFAULT_KEYPOINT_COUNT, expected_input_size=KEYPOINT_FEATURE_DIM):
+def keypoint_sequence_to_features(sequence, keypoint_count=DEFAULT_KEYPOINT_COUNT, expected_input_size=KEYPOINT_FEATURE_DIM, feature_schema="keypoint51"):
     try:
         import numpy as np
     except ImportError as exc:
@@ -161,15 +167,58 @@ def keypoint_sequence_to_features(sequence, keypoint_count=DEFAULT_KEYPOINT_COUN
         shape = frame_shapes[index] if index < len(frame_shapes) else None
         rows.append(keypoints_to_feature(detection, shape, keypoint_count))
     base_features = np.stack(rows, axis=0).astype(np.float32)
-    if int(expected_input_size) == KEYPOINT_FEATURE_DIM:
-        return base_features
-    if int(expected_input_size) == MOTION_KEYPOINT_FEATURE_DIM:
+    
+    expected_input_size = int(expected_input_size)
+    
+    if feature_schema == "keypoint_bbox54" or (expected_input_size == 54 and feature_schema == "keypoint_bbox54"):
+        return append_bbox_features(base_features, sequence)
+    elif feature_schema == "keypoint_motion54" or (expected_input_size == 54 and feature_schema == "keypoint_motion54"):
         try:
             from .motion_features import append_motion_features
             return append_motion_features(base_features)
         except ImportError:
             return base_features
-    return normalize_feature_width(base_features, int(expected_input_size))
+            
+    if expected_input_size == 51:
+        return base_features
+        
+    return normalize_feature_width(base_features, expected_input_size)
+
+
+def append_bbox_features(base_features, sequence):
+    try:
+        import numpy as np
+    except ImportError as exc:
+        raise RuntimeError(f"numpy is required for bbox features: {exc}") from exc
+
+    seq_len = base_features.shape[0]
+    detections = sequence.get("detections") or []
+    frame_shapes = sequence.get("frame_shapes") or []
+    
+    bbox_features = np.zeros((seq_len, 3), dtype=np.float32)
+    for idx in range(seq_len):
+        if idx >= len(detections):
+            continue
+        det = detections[idx]
+        if not det or "bbox" not in det or det["bbox"] is None:
+            continue
+        bbox = det["bbox"]
+        shape = frame_shapes[idx] if idx < len(frame_shapes) else None
+        w_frame, h_frame = infer_frame_size(det, shape)
+        
+        bx1, by1, bx2, by2 = [float(v) for v in bbox[:4]]
+        b_w = max(bx2 - bx1, 0.0)
+        b_h = max(by2 - by1, 0.0)
+        
+        w_norm = b_w / max(w_frame, 1.0)
+        h_norm = b_h / max(h_frame, 1.0)
+        area_norm = w_norm * h_norm
+        
+        bbox_features[idx, 0] = w_norm
+        bbox_features[idx, 1] = h_norm
+        bbox_features[idx, 2] = area_norm
+        
+    return np.concatenate([base_features, bbox_features], axis=1).astype(np.float32)
 
 
 def keypoints_to_feature(detection, frame_shape=None, keypoint_count=17):

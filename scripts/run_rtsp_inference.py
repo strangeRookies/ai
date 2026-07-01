@@ -162,7 +162,10 @@ def run(args):
 
     writer = None
     camera_login_id = getattr(args, "camera_login_id", None) or args.camera_id
-    queue = CameraFrameQueue(camera_login_id, maxsize=getattr(args, "frame_queue_maxsize", 3))
+    rtsp_url_str = str(getattr(args, "rtsp_url", "") or "")
+    is_offline_video = rtsp_url_str.endswith((".mp4", ".avi", ".mkv", ".mov")) or args.detector_mode == "mock" or getattr(args, "max_frames", 0) > 0
+    max_q_size = 10000 if is_offline_video else getattr(args, "frame_queue_maxsize", 3)
+    queue = CameraFrameQueue(camera_login_id, maxsize=max_q_size)
     stop_event = threading.Event()
     reader_exited = threading.Event()
 
@@ -214,8 +217,6 @@ def run(args):
             if args.max_frames > 0 and summary["frames_processed"] >= args.max_frames:
                 break
             
-            rtsp_url_str = str(getattr(args, "rtsp_url", "") or "")
-            is_offline_video = rtsp_url_str.endswith((".mp4", ".avi", ".mkv", ".mov")) or args.detector_mode == "mock" or getattr(args, "max_frames", 0) > 0
             drop_stale = not is_offline_video
             frame_packet = queue.get_latest(drop_stale=drop_stale)
             if frame_packet is None:

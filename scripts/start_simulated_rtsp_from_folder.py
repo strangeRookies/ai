@@ -184,6 +184,11 @@ def main() -> None:
             p.wait(timeout=5)
         except subprocess.TimeoutExpired:
             p.kill()
+        from ai.worker_registry import unregister_publisher_by_path
+        try:
+            unregister_publisher_by_path(stream_info['rtsp_url'])
+        except Exception:
+            pass
 
     def cleanup_all_streams() -> None:
         if not running_streams:
@@ -249,6 +254,8 @@ def main() -> None:
                     
                     if existing is None:
                         # Start new streaming process
+                        from ai.worker_registry import force_kill_existing_publisher, register_publisher
+                        force_kill_existing_publisher(target_rtsp_url)
                         cmd = build_ffmpeg_cmd(assigned_video, target_rtsp_url, loop_playback, args.ffmpeg_mode)
                         print(f"[simulated-rtsp] Mapping camera={cid} to video={assigned_video.name}", flush=True)
                         print(f"  CMD: {' '.join(cmd)}", flush=True)
@@ -261,6 +268,7 @@ def main() -> None:
                                 stderr=subprocess.DEVNULL,
                                 stdin=subprocess.DEVNULL
                             )
+                            register_publisher(target_rtsp_url, p.pid, str(assigned_video), cid)
                             running_streams[cid] = {
                                 'process': p,
                                 'video_path': assigned_video,
@@ -283,6 +291,8 @@ def main() -> None:
                 exit_code = p.poll()
                 if exit_code is not None:
                     print(f"[simulated-rtsp][warning] ffmpeg for camera={cid} (pid={p.pid}) exited with code {exit_code} in mode '{args.ffmpeg_mode}'. Restarting.", flush=True)
+                    from ai.worker_registry import force_kill_existing_publisher, register_publisher
+                    force_kill_existing_publisher(info['rtsp_url'])
                     cmd = build_ffmpeg_cmd(info['video_path'], info['rtsp_url'], loop_playback, args.ffmpeg_mode)
                     try:
                         new_p = subprocess.Popen(
@@ -291,12 +301,20 @@ def main() -> None:
                             stderr=subprocess.DEVNULL,
                             stdin=subprocess.DEVNULL
                         )
+                        register_publisher(info['rtsp_url'], new_p.pid, str(info['video_path']), cid)
                         running_streams[cid]['process'] = new_p
                         print(f"  Restarted process (pid={new_p.pid})", flush=True)
                     except Exception as ex:
                         print(f"[simulated-rtsp][error] Failed to restart ffmpeg for camera={cid}: {ex}", file=sys.stderr)
                         del running_streams[cid]
 
+            # Periodic status logging
+            from ai.worker_registry import get_active_worker_count, get_active_publisher_count
+            print(
+                f"[simulated-rtsp] Active camera workers: {get_active_worker_count()} "
+                f"| Active simulated publishers: {get_active_publisher_count()}",
+                flush=True
+            )
             time.sleep(poll_interval)
             
     except KeyboardInterrupt:

@@ -187,5 +187,13 @@ GPU PC에서 모든 평가 리포트 생성이 완료되면, 로컬 개발 환�
 ```bash
 # 로컬 개발 환경 터미널에서 실행
 scp GPU_USER@GPU_HOST:~/yolo_training/strange_ai_lstm/strange_ai/reports/retraining_manifest_v2_eval_real.md ./docs/retraining_gpu_eval_report.md
+
+---
+
+## 9. 51차원 vs 54차원 Feature 비교 학습 및 평가 가이드
+
+51차원 baseline keypoint feature와 54차원 feature(모션 또는 바운딩 박스) 간의 세부 비교 실험 방법, 차원별 정규화 메커니즘, 실행 커맨드 및 리포트 자동 생성 방법은 아래 문서에 정리되어 있습니다:
+
+👉 **[LSTM Feature Schema: 51-Dimensional vs 54-Dimensional](file:///c:/Users/user/Documents/최종%20쉴더스/strange_ai/docs/lstm_feature_schema_51_vs_54.md)**
 ```
 

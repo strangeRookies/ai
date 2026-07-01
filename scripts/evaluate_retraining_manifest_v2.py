@@ -45,6 +45,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--balance-labels", action="store_true", default=True, help="Enforce exact class balance (Normal/Faint)")
     parser.add_argument("--fixed-test-from-baseline", action="store_true", default=True, help="Enforce identical test split from baseline")
     
+    # Feature Schema and Input size options
+    parser.add_argument("--input-size", type=int, default=51, choices=[51, 54], help="Input dimension size (51 or 54)")
+    parser.add_argument("--feature-schema", default="keypoint51", choices=["keypoint51", "keypoint_motion54", "keypoint_bbox54"], help="Feature schema name")
+
     # Hidden args for argparse test discovery compatibility
     parser.add_argument("--no-per-class", action="store_false", dest="per_class")
     parser.add_argument("--no-balance-labels", action="store_false", dest="balance_labels")
@@ -72,17 +76,17 @@ def filter_approved_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
     return filtered
 
 
-def get_mock_features(label_name: str, num_sequences: int = 3, seq_length: int = 30) -> list[np.ndarray]:
+def get_mock_features(label_name: str, num_sequences: int = 3, seq_length: int = 30, input_size: int = 51) -> list[np.ndarray]:
     sequences = []
     for _ in range(num_sequences):
-        seq = np.random.normal(0.0, 0.1, (seq_length, 51)).astype(np.float32)
+        seq = np.random.normal(0.0, 0.1, (seq_length, input_size)).astype(np.float32)
         if label_name == "Faint":
             seq[:, :17] += 0.5
         sequences.append(seq)
     return sequences
 
 
-def load_npz_sequences(row: dict[str, str], seq_length: int = 30, seq_stride: int = 15) -> list[np.ndarray]:
+def load_npz_sequences(row: dict[str, str], seq_length: int = 30, seq_stride: int = 15, input_size: int = 51, feature_schema: str = "keypoint51") -> list[np.ndarray]:
     npz_path_str = row.get("npz_path", "")
     if not npz_path_str:
         return []
@@ -96,16 +100,43 @@ def load_npz_sequences(row: dict[str, str], seq_length: int = 30, seq_stride: in
             return []
         
         array = np.asarray(raw, dtype=np.float32)
-        if array.ndim == 3 and array.shape[-1] in {51, 54}:
-            return [array[i, :, :51] for i in range(array.shape[0])]
-        elif array.ndim == 2 and array.shape[-1] in {51, 54}:
-            return [array[start : start + seq_length, :51] for start in range(0, max(0, array.shape[0] - seq_length + 1), seq_stride)]
+        target_dim = int(input_size)
+        
+        if array.ndim == 3:
+            actual_dim = array.shape[-1]
+            if actual_dim == target_dim:
+                return [array[i] for i in range(array.shape[0])]
+            elif target_dim == 51:
+                return [array[i, :, :51] for i in range(array.shape[0])]
+            else: # target_dim == 54 and actual_dim == 51
+                if feature_schema == "keypoint_motion54":
+                    from ai.action.motion_features import append_motion_features
+                    return [append_motion_features(array[i]) for i in range(array.shape[0])]
+                else: # keypoint_bbox54 or unknown
+                    return [np.pad(array[i], ((0, 0), (0, 3)), mode="constant").astype(np.float32) for i in range(array.shape[0])]
+                    
+        elif array.ndim == 2:
+            actual_dim = array.shape[-1]
+            windows = []
+            for start in range(0, max(0, array.shape[0] - seq_length + 1), seq_stride):
+                window = array[start : start + seq_length]
+                if actual_dim == target_dim:
+                    windows.append(window)
+                elif target_dim == 51:
+                    windows.append(window[:, :51])
+                else: # target_dim == 54 and actual_dim == 51
+                    if feature_schema == "keypoint_motion54":
+                        from ai.action.motion_features import append_motion_features
+                        windows.append(append_motion_features(window))
+                    else: # keypoint_bbox54 or unknown
+                        windows.append(np.pad(window, ((0, 0), (0, 3)), mode="constant").astype(np.float32))
+            return windows
     except Exception:
         pass
     return []
 
 
-def collect_dataset_sequences(rows: list[dict[str, str]]) -> tuple[np.ndarray, np.ndarray, list[dict[str, str]]]:
+def collect_dataset_sequences(rows: list[dict[str, str]], input_size: int = 51, feature_schema: str = "keypoint51") -> tuple[np.ndarray, np.ndarray, list[dict[str, str]]]:
     x_list = []
     y_list = []
     seq_metadata = []
@@ -116,9 +147,9 @@ def collect_dataset_sequences(rows: list[dict[str, str]]) -> tuple[np.ndarray, n
         clip_id = row.get("clip_id", "")
         label_val = int(row.get("label", "0"))
         
-        sequences = load_npz_sequences(row)
+        sequences = load_npz_sequences(row, input_size=input_size, feature_schema=feature_schema)
         if not sequences:
-            sequences = get_mock_features(label_name)
+            sequences = get_mock_features(label_name, input_size=input_size)
 
         for idx, seq in enumerate(sequences):
             x_list.append(seq)
@@ -133,7 +164,7 @@ def collect_dataset_sequences(rows: list[dict[str, str]]) -> tuple[np.ndarray, n
             })
 
     if not x_list:
-        x_list = [np.zeros((30, 51), dtype=np.float32), np.ones((30, 51), dtype=np.float32)]
+        x_list = [np.zeros((30, input_size), dtype=np.float32), np.ones((30, input_size), dtype=np.float32)]
         y_list = [0, 1]
         seq_metadata = [
             {"clip_id": "dummy_0", "label_name": "Normal", "split": "train", "sequence_index": 0, "scenario_tag": "", "augmentation_type": ""},
@@ -208,7 +239,7 @@ def print_split_distributions(split_name: str, rows: list[dict[str, str]]):
         print(f"    {src}: {count}")
 
 
-def train_lstm(train_x: np.ndarray, train_y: np.ndarray, val_x: np.ndarray, val_y: np.ndarray, epochs: int, batch_size: int, device_str: str, seed: int, model_name: str, output_dir: Path) -> object:
+def train_lstm(train_x: np.ndarray, train_y: np.ndarray, val_x: np.ndarray, val_y: np.ndarray, epochs: int, batch_size: int, device_str: str, seed: int, model_name: str, output_dir: Path, input_size: int = 51, feature_schema: str = "keypoint51") -> object:
     import torch
     from torch import nn
     from torch.utils.data import DataLoader, TensorDataset
@@ -225,7 +256,7 @@ def train_lstm(train_x: np.ndarray, train_y: np.ndarray, val_x: np.ndarray, val_
         device = torch.device(device_str)
 
     model_config = {
-        "input_size": 51,
+        "input_size": int(train_x.shape[-1]),
         "hidden_size": 128,
         "num_layers": 1,
         "num_classes": 2,
@@ -281,13 +312,28 @@ def train_lstm(train_x: np.ndarray, train_y: np.ndarray, val_x: np.ndarray, val_
         print(f"Epoch {epoch:02d}/{epochs:02d} | Train Loss: {train_loss:.4f} - Train Acc: {train_acc:.2%} | Val Loss: {val_loss:.4f} - Val Acc: {val_acc:.2%}")
 
         # Save checkpoints
+        payload = {
+            "model_state": model.state_dict(),
+            "model_config": model_config,
+            "classes": ["Normal", "Faint"],
+            "input_size": model_config["input_size"],
+            "feature_schema_version": feature_schema,
+            "feature_names": [f"kp{i}_{coord}" for i in range(17) for coord in ("x", "y", "conf")] + (
+                ["bbox_width_norm", "bbox_height_norm", "bbox_area_norm"] if model_config["input_size"] == 54 and feature_schema == "keypoint_bbox54"
+                else ["center_drop", "velocity", "torso_angle_norm"] if model_config["input_size"] == 54
+                else []
+            ),
+            "sequence_length": 30,
+            "sequence_stride": 15,
+            "best_val_acc": val_acc,
+        }
         epoch_ckpt_path = output_dir / f"{model_name}_epoch_{epoch}.pt"
-        torch.save(model.state_dict(), epoch_ckpt_path)
+        torch.save(payload, epoch_ckpt_path)
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             best_ckpt_path = output_dir / f"{model_name}_best.pt"
-            torch.save(model.state_dict(), best_ckpt_path)
+            torch.save(payload, best_ckpt_path)
             print(f"  [SAVED BEST] New best validation loss: {val_loss:.4f} -> Saved to {best_ckpt_path}")
 
     return model
@@ -321,10 +367,10 @@ def evaluate_lstm(model: object, test_x: np.ndarray, test_y: np.ndarray, device_
     return y_pred, faint_probs
 
 
-def run_experiment(train_x, train_y, val_x, val_y, test_x, test_y, epochs, batch_size, device, seed, model_name, output_dir):
+def run_experiment(train_x, train_y, val_x, val_y, test_x, test_y, epochs, batch_size, device, seed, model_name, output_dir, input_size=51, feature_schema="keypoint51"):
     try:
         import torch
-        model = train_lstm(train_x, train_y, val_x, val_y, epochs, batch_size, device, seed, model_name, output_dir)
+        model = train_lstm(train_x, train_y, val_x, val_y, epochs, batch_size, device, seed, model_name, output_dir, input_size, feature_schema)
         preds, probs = evaluate_lstm(model, test_x, test_y, device)
         return preds, probs
     except ImportError:
@@ -698,25 +744,27 @@ def main():
 
     # Collect sequences
     print("\nCollecting baseline train sequences...")
-    train_base_x, train_base_y, _ = collect_dataset_sequences(train_rows_base)
+    train_base_x, train_base_y, _ = collect_dataset_sequences(train_rows_base, input_size=args.input_size, feature_schema=args.feature_schema)
     print("Collecting retrained train sequences...")
-    train_ret_x, train_ret_y, _ = collect_dataset_sequences(train_rows_ret)
+    train_ret_x, train_ret_y, _ = collect_dataset_sequences(train_rows_ret, input_size=args.input_size, feature_schema=args.feature_schema)
     print("Collecting val / test sequences...")
-    val_base_x, val_base_y, _ = collect_dataset_sequences(val_rows_base)
-    val_ret_x, val_ret_y, _ = collect_dataset_sequences(val_rows_ret)
-    test_x, test_y, test_meta = collect_dataset_sequences(test_rows)
+    val_base_x, val_base_y, _ = collect_dataset_sequences(val_rows_base, input_size=args.input_size, feature_schema=args.feature_schema)
+    val_ret_x, val_ret_y, _ = collect_dataset_sequences(val_rows_ret, input_size=args.input_size, feature_schema=args.feature_schema)
+    test_x, test_y, test_meta = collect_dataset_sequences(test_rows, input_size=args.input_size, feature_schema=args.feature_schema)
 
     # Train LSTM
     print("Training baseline LSTM...")
     base_preds, base_probs = run_experiment(
         train_base_x, train_base_y, val_base_x, val_base_y, test_x, test_y,
-        args.epochs, args.batch_size, args.device, args.seed, "baseline", output_dir
+        args.epochs, args.batch_size, args.device, args.seed, "baseline", output_dir,
+        input_size=args.input_size, feature_schema=args.feature_schema
     )
 
     print("Training retrained LSTM...")
     ret_preds, ret_probs = run_experiment(
         train_ret_x, train_ret_y, val_ret_x, val_ret_y, test_x, test_y,
-        args.epochs, args.batch_size, args.device, args.seed, "retrained", output_dir
+        args.epochs, args.batch_size, args.device, args.seed, "retrained", output_dir,
+        input_size=args.input_size, feature_schema=args.feature_schema
     )
 
 
@@ -738,13 +786,25 @@ def main():
 
     # Save to JSON
     json_path = output_dir / "evaluation_summary.json"
+    summary_data = {
+        "baseline": baseline_summary,
+        "retrained": retrained_summary,
+        "counts": counts_info,
+        "input_size": args.input_size,
+        "feature_schema_version": args.feature_schema,
+    }
     with json_path.open("w", encoding="utf-8") as fp:
-        json.dump({
-            "baseline": baseline_summary,
-            "retrained": retrained_summary,
-            "counts": counts_info
-        }, fp, indent=2, ensure_ascii=False)
+        json.dump(summary_data, fp, indent=2, ensure_ascii=False)
     print(f"Saved JSON summary to {json_path}")
+
+    # Also save individual model metrics as metrics.json (default to retrained)
+    metrics_path = output_dir / "metrics.json"
+    metrics_data = dict(retrained_summary)
+    metrics_data["input_size"] = args.input_size
+    metrics_data["feature_schema_version"] = args.feature_schema
+    with metrics_path.open("w", encoding="utf-8") as fp:
+        json.dump(metrics_data, fp, indent=2, ensure_ascii=False)
+    print(f"Saved metrics.json to {metrics_path}")
 
     # Write MD Report
     write_report(report_path, baseline_summary, retrained_summary, counts_info)

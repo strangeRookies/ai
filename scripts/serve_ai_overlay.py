@@ -643,14 +643,30 @@ def main():
     args = parser.parse_args()
     args.camera_login_id = args.camera_login_id or args.camera_id
 
+    # Register worker to prevent duplicate starts for same cameraLoginId
+    from ai.worker_registry import register_worker, unregister_worker
+    try:
+        register_worker(
+            args.camera_login_id,
+            os.getpid(),
+            args.rtsp_url,
+            f"http://{args.host}:{args.port}" if mjpeg_debug_enabled(args) else ""
+        )
+    except RuntimeError as exc:
+        print(f"[ai-overlay][error] Duplicate worker detected: {exc}", file=sys.stderr, flush=True)
+        sys.exit(1)
+
     state = OverlayState()
     worker = OverlayWorker(args, state)
     server = None
 
     def shutdown(_signum, _frame):
+        print(f"[ai-overlay] Shutdown signal received for camera={args.camera_login_id}. Cleaning up.", flush=True)
         worker.stop()
         if server is not None:
             server.shutdown()
+        unregister_worker(args.camera_login_id)
+        sys.exit(0)
 
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
@@ -669,6 +685,7 @@ def main():
         worker.stop()
         if server is not None:
             server.server_close()
+        unregister_worker(args.camera_login_id)
 
 
 if __name__ == "__main__":

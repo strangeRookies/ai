@@ -128,12 +128,12 @@ def stable_shuffle(rows: list[FightRow], seed: int, split: str) -> list[FightRow
     return shuffled
 
 
-def collect_sequences(rows: list[FightRow], sequence_length: int, sequence_stride: int) -> SequenceBatch:
+def collect_sequences(rows: list[FightRow], sequence_length: int, sequence_stride: int, input_size: int = 51, feature_schema: str = "keypoint51") -> SequenceBatch:
     x_rows: list[np.ndarray] = []
     y_rows: list[int] = []
     sequence_rows: list[dict[str, int | str]] = []
     for row in rows:
-        sequences = sequences_from_npz(row.npz_path, sequence_length, sequence_stride)
+        sequences = sequences_from_npz(row.npz_path, sequence_length, sequence_stride, input_size, feature_schema)
         for index, features in enumerate(sequences):
             x_rows.append(features)
             y_rows.append(row.label)
@@ -152,9 +152,9 @@ def collect_sequences(rows: list[FightRow], sequence_length: int, sequence_strid
     return SequenceBatch(x=np.stack(x_rows).astype(np.float32), y=np.asarray(y_rows, dtype=np.int64), rows=sequence_rows)
 
 
-def sequences_from_npz(path: Path, sequence_length: int, sequence_stride: int) -> list[np.ndarray]:
+def sequences_from_npz(path: Path, sequence_length: int, sequence_stride: int, input_size: int = 51, feature_schema: str = "keypoint51") -> list[np.ndarray]:
     raw = load_keypoint_cache(path)
-    feature_sequences = feature_array_sequences(raw, sequence_length, sequence_stride)
+    feature_sequences = feature_array_sequences(raw, sequence_length, sequence_stride, input_size, feature_schema)
     if feature_sequences:
         return feature_sequences
     frames = keypoint_array_to_frames(raw)
@@ -165,25 +165,55 @@ def sequences_from_npz(path: Path, sequence_length: int, sequence_stride: int) -
             "detections": [first_detection(frame) for frame in window],
             "frame_shapes": [frame.get("frame_shape") for frame in window],
         }
-        results.append(keypoint_sequence_to_features(sequence))
+        results.append(keypoint_sequence_to_features(sequence, expected_input_size=input_size, feature_schema=feature_schema))
     return results
 
 
-def feature_array_sequences(raw: np.ndarray, sequence_length: int, sequence_stride: int) -> list[np.ndarray]:
+def feature_array_sequences(raw: np.ndarray, sequence_length: int, sequence_stride: int, input_size: int = 51, feature_schema: str = "keypoint51") -> list[np.ndarray]:
     array = np.asarray(raw, dtype=np.float32)
+    # Check if array shape last dimension is 51 or 54
     if array.ndim == 3 and int(array.shape[-1]) in FEATURE_DIMS:
-        return [normalize_feature_dim(array[index]) for index in range(array.shape[0])]
+        return [normalize_feature_dim(array[index], input_size, feature_schema) for index in range(array.shape[0])]
     if array.ndim == 2 and int(array.shape[-1]) in FEATURE_DIMS:
-        return [normalize_feature_dim(array[start : start + sequence_length]) for start in range(0, max(0, array.shape[0] - sequence_length + 1), sequence_stride)]
+        return [normalize_feature_dim(array[start : start + sequence_length], input_size, feature_schema) for start in range(0, max(0, array.shape[0] - sequence_length + 1), sequence_stride)]
     return []
 
 
-def normalize_feature_dim(features: np.ndarray) -> np.ndarray:
-    if features.shape[-1] == KEYPOINT_FEATURE_DIM:
+def normalize_feature_dim(features: np.ndarray, input_size: int = 51, feature_schema: str = "keypoint51") -> np.ndarray:
+    actual_dim = int(features.shape[-1])
+    target_dim = int(input_size)
+    
+    if actual_dim == target_dim:
         return features.astype(np.float32)
-    if features.shape[-1] == MOTION_KEYPOINT_FEATURE_DIM:
-        return features[..., :KEYPOINT_FEATURE_DIM].astype(np.float32)
-    raise FightDatasetError(f"Unsupported LSTM feature dimension: {features.shape[-1]}")
+        
+    if target_dim == 51:
+        return features[..., :51].astype(np.float32)
+        
+    if target_dim == 54:
+        if actual_dim == 51:
+            if feature_schema == "keypoint_motion54":
+                from .motion_features import append_motion_features
+                if features.ndim == 2:
+                    return append_motion_features(features)
+                elif features.ndim == 1:
+                    return np.pad(features, (0, 3), mode="constant").astype(np.float32)
+            elif feature_schema == "keypoint_bbox54":
+                if features.ndim == 2:
+                    return np.pad(features, ((0, 0), (0, 3)), mode="constant").astype(np.float32)
+                elif features.ndim == 1:
+                    return np.pad(features, (0, 3), mode="constant").astype(np.float32)
+        else:
+            if actual_dim > target_dim:
+                return features[..., :target_dim].astype(np.float32)
+            else:
+                pad_width = target_dim - actual_dim
+                if features.ndim == 2:
+                    return np.pad(features, ((0, 0), (0, pad_width)), mode="constant").astype(np.float32)
+                elif features.ndim == 1:
+                    return np.pad(features, (0, pad_width), mode="constant").astype(np.float32)
+                    
+    raise FightDatasetError(f"Unsupported LSTM feature dimension mapping: actual_dim={actual_dim} -> target_dim={target_dim}")
+
 
 
 def first_detection(frame: Mapping[str, object]) -> dict[str, object]:

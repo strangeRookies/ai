@@ -156,6 +156,10 @@ def start_camera_worker(camera: RegisteredCamera, config: RunnerConfig, port: in
         print(f"[registered-cameras] ffmpeg: {safe_command_text(ffmpeg_command)}", flush=True)
     print(f"[registered-cameras] overlay: {safe_command_text(overlay_command)}", flush=True)
 
+    # Ensure any existing duplicate worker process is terminated/killed first
+    from ai.worker_registry import force_kill_existing_worker
+    force_kill_existing_worker(camera.camera_login_id)
+
     if config.dry_run:
         return CameraWorker(
             processes=[],
@@ -245,6 +249,12 @@ def run_camera_sync_loop(cameras: list[RegisteredCamera], config: RunnerConfig) 
     next_refresh_at = time.monotonic() + config.refresh_interval_seconds
     while True:
         time.sleep(2)
+        from ai.worker_registry import get_active_worker_count, get_active_publisher_count
+        print(
+            f"[registered-cameras] Active camera workers: {get_active_worker_count()} "
+            f"| Active simulated publishers: {get_active_publisher_count()}",
+            flush=True
+        )
         for camera_login_id, worker in list(workers.items()):
             if worker_has_exited(worker):
                 print(
