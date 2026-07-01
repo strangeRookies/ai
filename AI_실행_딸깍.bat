@@ -92,15 +92,18 @@ echo.
 echo [4/5] Checking GPU access to Windows backend through reverse tunnel...
 if "%RUN_MODE%"=="tunnel_only" (
   echo Skipping backend check (Tunnel Only mode).
-) else (
-  ssh %GPU_USER%@%GPU_HOST% "curl -fsS http://127.0.0.1:18080/api/cameras/active >/dev/null"
-  if errorlevel 1 (
-    echo [ERROR] GPU PC cannot reach the Windows backend through port 18080.
-    echo Make sure the tunnel window is open and the backend is running on localhost:8080.
-    pause
-    exit /b 1
-  )
+  goto CHECK_DONE
 )
+
+ssh %GPU_USER%@%GPU_HOST% "curl -fsS http://127.0.0.1:18080/api/cameras/active >/dev/null"
+if errorlevel 1 (
+  echo [ERROR] GPU PC cannot reach the Windows backend through port 18080.
+  echo Make sure the tunnel window is open and the backend is running on localhost:8080.
+  pause
+  exit /b 1
+)
+
+:CHECK_DONE
 
 if "%RUN_MODE%"=="tunnel_only" (
   echo.
