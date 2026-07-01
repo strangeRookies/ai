@@ -25,10 +25,13 @@
 # 1. 프로젝트 루트 디렉토리로 이동
 cd ~/yolo_training/strange_ai_lstm/strange_ai
 
-# 2. Check Python version
+# 2. 가상환경 접속 (활성화)
+source .venv/bin/activate
+
+# 3. Python 버전 확인
 python --version
 
-# 3. PyTorch 설치 여부 및 CUDA 사용 가능 상태 확인
+# 4. PyTorch 설치 여부 및 CUDA 사용 가능 상태 확인
 python - <<'PY'
 import torch
 print("PyTorch version:", torch.__version__)
