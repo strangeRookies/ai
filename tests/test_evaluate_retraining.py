@@ -1,12 +1,10 @@
-import csv
-import tempfile
 import unittest
-from pathlib import Path
-
 from scripts.evaluate_retraining_manifest_v2 import (
     filter_approved_rows,
     segment_by_tag,
     calculate_metrics_from_preds,
+    select_and_balance_rows,
+    verify_split_isolation,
 )
 
 
@@ -61,6 +59,61 @@ class EvaluateRetrainingTest(unittest.TestCase):
         self.assertEqual(metrics["f1_score"], 1.0)
         self.assertIn(0.5, metrics["thresholds"])
         self.assertEqual(metrics["thresholds"][0.5]["f1"], 1.0)
+
+    def test_select_and_balance_rows_per_class(self):
+        rows = [
+            {"clip_id": "c1", "label": "0", "label_name": "Normal"},
+            {"clip_id": "c2", "label": "0", "label_name": "Normal"},
+            {"clip_id": "c3", "label": "0", "label_name": "Normal"},
+            {"clip_id": "c4", "label": "1", "label_name": "Faint"},
+            {"clip_id": "c5", "label": "1", "label_name": "Faint"},
+        ]
+
+        # Limit per class = 2 (each class gets 2 rows, total = 4)
+        selected = select_and_balance_rows(rows, limit=2, per_class=True, balance=True, seed=42, split_name="test")
+        
+        self.assertEqual(len(selected), 4)
+        normals = [r for r in selected if r["label_name"] == "Normal"]
+        faints = [r for r in selected if r["label_name"] == "Faint"]
+        self.assertEqual(len(normals), 2)
+        self.assertEqual(len(faints), 2)
+
+    def test_select_and_balance_rows_total_limit(self):
+        rows = [
+            {"clip_id": "c1", "label": "0", "label_name": "Normal"},
+            {"clip_id": "c2", "label": "0", "label_name": "Normal"},
+            {"clip_id": "c3", "label": "1", "label_name": "Faint"},
+            {"clip_id": "c4", "label": "1", "label_name": "Faint"},
+        ]
+
+        # Limit total = 2 (each class gets limit // 2 = 1 row, total = 2)
+        selected = select_and_balance_rows(rows, limit=2, per_class=False, balance=True, seed=42, split_name="test")
+        
+        self.assertEqual(len(selected), 2)
+        normals = [r for r in selected if r["label_name"] == "Normal"]
+        faints = [r for r in selected if r["label_name"] == "Faint"]
+        self.assertEqual(len(normals), 1)
+        self.assertEqual(len(faints), 1)
+
+    def test_verify_split_isolation_raises_on_leakage(self):
+        train = [{"clip_id": "c1", "parent_clip_id": "parent_x", "split_group_id": "g1", "source_video": "v1"}]
+        val = [{"clip_id": "c2", "parent_clip_id": "parent_y", "split_group_id": "g2", "source_video": "v2"}]
+        test = [{"clip_id": "c3", "parent_clip_id": "parent_x", "split_group_id": "g3", "source_video": "v3"}]
+
+        # train shares parent_x with test -> should raise RuntimeError
+        with self.assertRaises(RuntimeError):
+            verify_split_isolation(train, val, test)
+
+    def test_verify_split_isolation_passes_on_no_leakage(self):
+        train = [{"clip_id": "c1", "parent_clip_id": "parent_x", "split_group_id": "g1", "source_video": "v1"}]
+        val = [{"clip_id": "c2", "parent_clip_id": "parent_y", "split_group_id": "g2", "source_video": "v2"}]
+        test = [{"clip_id": "c3", "parent_clip_id": "parent_z", "split_group_id": "g3", "source_video": "v3"}]
+
+        # No intersection of parent_clip_id, split_group_id, or source_video between train/val and test
+        try:
+            verify_split_isolation(train, val, test)
+        except RuntimeError as e:
+            self.fail(f"verify_split_isolation raised RuntimeError unexpectedly: {e}")
 
 
 if __name__ == "__main__":
