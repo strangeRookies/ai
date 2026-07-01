@@ -91,26 +91,41 @@ python scripts/evaluate_retraining_manifest_v2.py \
   --report-path reports/retraining_manifest_v2_eval_sample.md
 ```
 
-### 단계 4.3. 전체 Real-Mode 재학습 및 성능 평가 실행
-샘플 평가가 정상적으로 완료되면, 전체 실제 데이터셋에 대해 baseline과 retrained 모델을 동시에 학습하여 최종 성능 비교를 수행합니다.
+### 단계 4.3. 클래스 균형(Class-Balanced) 제한 적용 평가 및 학습 실행
+전체 `metadata.csv` 21만 개의 데이터를 모두 학습에 사용하지 않고, 아래의 사유로 인해 클래스 균형(Class-balanced)이 맞춰진 제한된 크기의 데이터셋으로 학습 및 비교 평가를 수행합니다.
 
-이 명령어는 다음을 자동으로 수행합니다:
-1. 전체 학습 데이터셋에 대한 YOLO Pose 키포인트 캐시 시퀀스를 로드합니다.
-2. Baseline 학습 세트와 Retrained 학습 세트 각각에서 두 개의 LSTM 모델을 개별 학습합니다.
-3. 학습된 두 모델을 *동일한* 공통 테스트 스플릿(Test split)에 대해 평가합니다.
-4. Precision, Recall, F1-score 개선 수치 및 시나리오 태그별 통계 보고서를 생성합니다.
+#### 💡 전체 데이터를 사용하지 않고제한(Class-Balanced Split Limit)을 적용하는 이유
+1. **시간 절약 (Time Efficiency):** 21만 개의 고차원 Pose 시퀀스 전체를 로드하고 PyTorch LSTM을 반복 학습하는 것은 GPU 환경에서도 막대한 시간이 소요됩니다.
+2. **클래스 불균형 방지 (Imbalance Prevention):** 실제 CCTV 환경 특성상 정상 행위(Normal) 데이터가 쓰러짐(Faint) 데이터보다 압도적으로 많습니다. 클래스 비율을 1:1로 제한하여 모델이 다수 클래스에 편향되는 것을 방지합니다.
+3. **기존 실험과의 일관성 유지 (Comparability):** 이전 LSTM 베이스라인 학습 실험 구성(Train 14k, Val 3k, Test 2.8k 수준)과 일치시켜 개선 효과를 객체적으로 파악합니다.
+4. **동일한 테스트 스플릿 기반 공정 비교 (Fair Common Test Split):** 평가 메트릭 비교를 동일한 Baseline Test 세트로 고정함으로써 검증 데이터 불일치로 인한 왜곡을 사전에 차단합니다.
+
+#### 📊 권장 설정값 (Default Recommended Split Limits)
+* **Train:** 전체 14,000개 (또는 클래스당 `--train-limit 7000`)
+* **Validation:** 전체 3,000개 (또는 클래스당 `--val-limit 1500`)
+* **Test:** 전체 2,800개 (또는 클래스당 `--test-limit 1400`)
+
+#### 🚀 권장 실행 명령어
+아래 명령어를 통해 클래스 균형을 유지하고, Baseline Test 스플릿을 고정한 채 Baseline 모델과 Retrained 모델을 공정하게 교차 평가할 수 있습니다.
 
 ```bash
 python scripts/evaluate_retraining_manifest_v2.py \
   --baseline ../ai_fall_experiments/data/metadata/metadata.csv \
   --retrained data/manifests/training_manifest_v2.csv \
-  --output-dir runs/evaluation_real \
-  --report-path reports/retraining_manifest_v2_eval_real.md \
+  --balance-labels \
+  --per-class \
+  --train-limit 7000 \
+  --val-limit 1500 \
+  --test-limit 1400 \
+  --fixed-test-from-baseline \
   --device cuda \
-  --epochs 20 \
-  --batch-size 32 \
-  --seed 42
+  --epochs 5 \
+  --seed 42 \
+  --output-dir runs/evaluation_real_balanced \
+  --report-path reports/retraining_manifest_v2_eval_real_balanced.md
 ```
+> [!NOTE]
+> `--per-class` 옵션이 켜져 있을 때 `--train-limit 7000`은 클래스당 7,000개를 의미하므로 최종 학습 데이터 수는 Normal 7,000개 + Faint 7,000개 = 총 14,000개가 됩니다.
 
 ---
 

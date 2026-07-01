@@ -5,6 +5,14 @@
 
 This report evaluates the improvements in the LSTM Fall Classifier model after applying Hard Negative Mining, Faint Reinforcement, and Synthetic Data Augmentation using `training_manifest_v2.csv`.
 
+## Dataset Row Counts Used
+
+| Split | Baseline (metadata.csv) Rows | Retrained (training_manifest_v2.csv) Rows |
+| :--- | :---: | :---: |
+| Train | 200 | 200 |
+| Val | 60 | 60 |
+| Test | 60 | 60 |
+
 ## Performance Metrics Summary
 
 | Metric | Baseline (metadata.csv) | Retrained (training_manifest_v2.csv) | Improvement |
