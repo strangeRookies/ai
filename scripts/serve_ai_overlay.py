@@ -40,7 +40,9 @@ from ai.publishers.mqtt_payloads import build_overlay_payload, current_timestamp
 def initial_summary():
     return initial_overlay_summary()
 
-
+#각 카메라별로 동작하는 실시간 오버레이 스크립트 
+#RTSP 스트림을 캡처하여 AI 분석(YOLO Pose 및 LSTM)을 수행
+#감지된 객체의 바운딩 박스(bbox), 트래킹 ID 및 상태 메타데이터를 MQTT camera 토픽으로 실시간 발행
 class OverlayPublishState:
     def __init__(self):
         self.signals_by_track = {}

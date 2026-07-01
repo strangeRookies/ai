@@ -130,7 +130,8 @@ def publish_unavailable_camera_status(
     if close:
         close()
 
-
+ #FFmpeg 프로세스 제어
+ #카메라 원본 스트림이나 시뮬레이션용 MP4 비디오 파일을 RTSP 스트림으로 변환해 MediaMTX(rtsp://localhost:8554/{cameraLoginId})에 공급
 def start_camera_worker(camera: RegisteredCamera, config: RunnerConfig, port: int) -> CameraWorker | None:
     processes: list[subprocess.Popen[str]] = []
     try:
