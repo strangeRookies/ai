@@ -1,5 +1,5 @@
 @echo off
-setlocal
+setlocal enabledelayedexpansion
 chcp 65001 >nul
 
 set "LOCAL_CONFIG=%~dp0AI_LOCAL_CONFIG.bat"
@@ -25,17 +25,19 @@ set "MQTT_PORT=1883"
 
 echo Checking for busy local ports (8888, 8889, 8189, 18080)...
 netstat -ano | findstr /R "LISTENING.*:8888 LISTENING.*:8889 LISTENING.*:8189 LISTENING.*:18080" >nul
-if not errorlevel 1 (
-  echo.
-  echo [WARNING] Stale tunnel ports are already listening on your local machine.
-  echo This indicates another SSH tunnel or AI session might be active.
-  set /p "CLEAN_CHOICE=Do you want to clean up existing AI processes first? (y/n): "
-  if /i "!CLEAN_CHOICE!"=="y" (
-    call "%~dp0cleanup_ai_processes.bat"
-  ) else (
-    echo Continuing anyway (this may cause remote port forwarding to fail).
-  )
+if errorlevel 1 goto PORTS_FREE
+
+echo.
+echo [WARNING] Stale tunnel ports are already listening on your local machine.
+echo This indicates another SSH tunnel or AI session might be active.
+set /p "CLEAN_CHOICE=Do you want to clean up existing AI processes first? [y/n]: "
+if /i "%CLEAN_CHOICE%"=="y" (
+  call "%~dp0cleanup_ai_processes.bat"
+) else (
+  echo Continuing anyway (this may cause remote port forwarding to fail).
 )
+
+:PORTS_FREE
 
 echo ========================================================
 echo Starting STABLE AI environment from GPU %BRANCH% branch
@@ -112,21 +114,21 @@ if "%RUN_MODE%"=="tunnel_only" (
 
 :BACKEND_CHECK
 ssh %GPU_USER%@%GPU_HOST% "curl -fsS http://127.0.0.1:18080/api/cameras/active >/dev/null"
-if errorlevel 1 (
-  echo.
-  echo [WARNING] GPU PC cannot reach the Windows backend through reverse tunnel port 18080.
-  echo Please make sure:
-  echo   1. The SSH Tunnel window is open and you entered the password.
-  echo   2. The backend service is running locally on localhost:8080.
-  echo.
-  echo Options:
-  echo   [1] Retry the backend check
-  echo   [2] Skip the check and continue AI startup anyway
-  echo   [3] Exit launcher
-  set /p "CHECK_FAIL_CHOICE=Choose (1, 2, or 3): "
-  if "!CHECK_FAIL_CHOICE!"=="1" goto BACKEND_CHECK
-  if "!CHECK_FAIL_CHOICE!"=="3" exit /b 1
-)
+if not errorlevel 1 goto CHECK_DONE
+
+echo.
+echo [WARNING] GPU PC cannot reach the Windows backend through reverse tunnel port 18080.
+echo Please make sure:
+echo   1. The SSH Tunnel window is open and you entered the password.
+echo   2. The backend service is running locally on localhost:8080.
+echo.
+echo Options:
+echo   [1] Retry the backend check
+echo   [2] Skip the check and continue AI startup anyway
+echo   [3] Exit launcher
+set /p "CHECK_FAIL_CHOICE=Choose [1, 2, or 3]: "
+if "%CHECK_FAIL_CHOICE%"=="1" goto BACKEND_CHECK
+if "%CHECK_FAIL_CHOICE%"=="3" exit /b 1
 
 :CHECK_DONE
 
