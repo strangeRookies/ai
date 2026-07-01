@@ -15,7 +15,7 @@ env/
 .env
 .env.*
 !.env.example
-AI_DEV_LOCAL_CONFIG.bat
+AI_LOCAL_CONFIG.bat
 
 # Local credentials and private keys
 *.pem
