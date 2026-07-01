@@ -295,7 +295,10 @@ def process_frame(
     update_quantitative_summary(summary, boxes, _tracker_diag if tracker is not None else None)
     summary["latest_overlay_event_count"] = len(overlay_payload["events"])
     if publisher is not None:
-        publisher.publish(overlay_payload, topic=topic_settings["camera_topic"])
+        try:
+            publisher.publish(overlay_payload, topic=topic_settings["camera_topic"])
+        except Exception as exc:
+            print(f"[ai-worker][error] failed to publish overlay payload for camera={stream_id}: {exc}", file=sys.stderr, flush=True)
     for track_id in triggered_track_ids:
         track_prediction = predictions_by_track[track_id]
         sequence = sequences_by_track[track_id]
@@ -316,7 +319,10 @@ def process_frame(
         if args.print_events:
             print(f"[ai-overlay-event] {json.dumps(payload, ensure_ascii=False)}", flush=True)
         if publisher is not None:
-            publisher.publish(payload, topic=topic_settings["event_topic"])
+            try:
+                publisher.publish(payload, topic=topic_settings["event_topic"])
+            except Exception as exc:
+                print(f"[ai-worker][error] failed to publish event payload for camera={stream_id}: {exc}", file=sys.stderr, flush=True)
     maybe_log_debug(frame_packet, boxes, summary, prediction, args, prefix="[ai-overlay-debug]")
 
     update_overlay_runtime(summary)
@@ -407,6 +413,7 @@ class OverlayWorker:
     def _reader_run(self):
         publisher = None
         status_publisher = None
+        reconnect_count = 0
         try:
             publisher, publisher_mode = create_event_publisher(self.args)
             status_publisher = CameraStatusPublisher(
@@ -419,6 +426,8 @@ class OverlayWorker:
                     with VideoReader(self.args.rtsp_url) as reader:
                         print(f"[ai-overlay-reader] connected: {redact_url(self.args.rtsp_url)}", flush=True)
                         status_publisher.notify_connected()
+                        frame_count = 0
+                        last_heartbeat_time = time.time()
                         while not self.stop_event.is_set():
                             packet = reader.read()
                             if packet is None:
@@ -443,6 +452,19 @@ class OverlayWorker:
                             )
                             self.queue.put_latest(packet_wrapped)
                             
+                            frame_count += 1
+                            now = time.time()
+                            if now - last_heartbeat_time >= 1.0:
+                                print(
+                                    f"[heartbeat-reader] camera={self.camera_login_id} "
+                                    f"read_count={frame_count} "
+                                    f"fps={frame_count / (now - last_heartbeat_time):.1f} "
+                                    f"queue_size={self.queue.size()}",
+                                    flush=True
+                                )
+                                frame_count = 0
+                                last_heartbeat_time = now
+
                             every_n = max(0, int(getattr(self.args, "debug_every_n", 30)))
                             if every_n > 0 and frame_metadata.frame_id % every_n == 0:
                                 now_ms = time.time_ns() // 1_000_000
@@ -461,6 +483,8 @@ class OverlayWorker:
                         status_publisher.notify_error(reason=type(exc).__name__)
                 
                 if not self.stop_event.is_set():
+                    reconnect_count += 1
+                    print(f"[ai-overlay-reader] camera={self.camera_login_id} reconnecting (count={reconnect_count}) after error/end", flush=True)
                     if status_publisher is not None:
                         status_publisher.notify_reconnecting()
                     time.sleep(self.args.reconnect_delay)
@@ -518,6 +542,10 @@ class OverlayWorker:
                     cheap_filter_config=cheap_filter_config,
                 )
 
+        last_heartbeat_time = time.monotonic()
+        inference_count = 0
+        mqtt_publish_count = 0
+
         while not self.stop_event.is_set():
             if not camera_ids:
                 time.sleep(0.01)
@@ -570,7 +598,30 @@ class OverlayWorker:
             )
             topic_settings = mqtt_topic_settings_from_args(self.args)
             if publisher is not None:
-                publisher.publish(fs_payload, topic=topic_settings["camera_topic"])
+                try:
+                    publisher.publish(fs_payload, topic=topic_settings["camera_topic"])
+                    mqtt_publish_count += 1
+                except Exception as exc:
+                    print(
+                        f"[ai-worker][error] failed to publish frame sync payload for camera={current_cam_id}: {exc}",
+                        file=sys.stderr,
+                        flush=True
+                    )
+
+            inference_count += 1
+            now = time.monotonic()
+            if now - last_heartbeat_time >= 1.0:
+                print(
+                    f"[heartbeat-inference] camera={self.camera_login_id} "
+                    f"inference_count={inference_count} "
+                    f"mqtt_publish_count={mqtt_publish_count} "
+                    f"fps={inference_count / (now - last_heartbeat_time):.1f} "
+                    f"dropped={self.queue.dropped_frame_count}",
+                    flush=True
+                )
+                inference_count = 0
+                mqtt_publish_count = 0
+                last_heartbeat_time = now
 
             inference_ms = (time.perf_counter() - inference_start) * 1000.0
             every_n = max(0, int(getattr(self.args, "debug_every_n", 30)))

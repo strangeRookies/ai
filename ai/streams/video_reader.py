@@ -26,6 +26,8 @@ class VideoReader:
             raise RuntimeError(f"OpenCV is required to read video input: {exc}") from exc
 
         self.cv2 = cv2
+        import os
+        os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|timeout;5000000"
         self.cap = cv2.VideoCapture(self.input_uri)
         if not self.cap.isOpened():
             raise RuntimeError(f"Failed to open video input: {self.input_uri}")
