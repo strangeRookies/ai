@@ -58,7 +58,7 @@ goto DO_TUNNEL
 echo.
 echo === [Full Restart Mode] ===
 echo [1/5] Syncing GPU stable repo to origin/develop...
-ssh %GPU_USER%@%GPU_HOST% "cd %REMOTE_ROOT% && git stash push -u -m auto-stash-before-ai-stable-run-$(date +%%Y%%m%%d-%%H%%M%%S) || true && git fetch origin && git checkout develop && git pull --ff-only origin develop"
+ssh %GPU_USER%@%GPU_HOST% "cd %REMOTE_ROOT% && git stash push -u -m auto-stash-before-ai-stable-run || true && git fetch origin && git checkout develop && git pull --ff-only origin develop"
 if errorlevel 1 (
   echo [ERROR] Failed to sync GPU stable repo.
   pause
@@ -113,7 +113,7 @@ if "%RUN_MODE%"=="tunnel_only" (
 
 echo.
 echo [5/5] Starting MediaMTX, RTSP publisher, then AI runner on GPU stable repo...
-ssh %GPU_USER%@%GPU_HOST% "cd %REMOTE_ROOT% && ( docker ps --filter 'name=^mediamtx$' --format '{{.Names}}' | grep -q '^mediamtx$' || nohup bash scripts/run_rtsp_server.sh > rtsp_server.log 2>&1 </dev/null & ) && sleep 3 && source .venv/bin/activate && ( nohup python scripts/start_simulated_rtsp_from_folder.py --video-dir /home/%GPU_USER%/yolo_training/ai_fall_experiments/data/raw/indoor_chromakey/videos --backend-url http://127.0.0.1:18080 --rtsp-host 127.0.0.1 --rtsp-port 8554 --poll-interval 30 --ffmpeg-mode nvenc > publisher.log 2>&1 </dev/null & ) && sleep 8 && ( nohup python scripts/run_registered_cameras.py --backend-base-url http://127.0.0.1:18080 --rtsp-base-url rtsp://127.0.0.1:8554 --video-pool /home/%GPU_USER%/yolo_training/ai_fall_experiments/data/raw/indoor_chromakey/videos --overlay-report-enabled --detector-mode real --yolo-model yolo26n-pose.pt --publisher mqtt --mqtt-host %MQTT_HOST% --mqtt-port %MQTT_PORT% --mqtt-topic safety/events --skip-simulated-ffmpeg > ai_runner.log 2>&1 </dev/null & )"
+ssh %GPU_USER%@%GPU_HOST% "bash %REMOTE_ROOT%/scripts/start_ai_stable.sh %MQTT_HOST% %MQTT_PORT%"
 if errorlevel 1 (
   echo [ERROR] Failed to start GPU stable runtime.
   pause
