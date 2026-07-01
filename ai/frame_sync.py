@@ -1,9 +1,57 @@
 from __future__ import annotations
 
 import time
+import threading
 from collections import defaultdict, deque
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
+import numpy as np
+
+from ai.evidence import evidence_id, latency_order_valid
+
+
+@dataclass(frozen=True, slots=True)
+class FramePacket:
+    camera_login_id: str
+    frame_id: int
+    captured_at_ms: int
+    frame: np.ndarray
+    width: int
+    height: int
+    frame_idx: int
+    timestamp: float
+    fps: float = 0.0
+
+
+class CameraFrameQueue:
+    def __init__(self, camera_login_id: str, maxsize: int = 5):
+        self.camera_login_id = str(camera_login_id)
+        self.maxlen = max(1, int(maxsize))
+        self.queue: deque[FramePacket] = deque(maxlen=self.maxlen)
+        self.dropped_frame_count = 0
+        self._lock = threading.Lock()
+
+    def put_latest(self, packet: FramePacket) -> None:
+        with self._lock:
+            if len(self.queue) >= self.maxlen:
+                self.dropped_frame_count += 1
+            self.queue.append(packet)
+
+    def get_latest(self, drop_stale: bool = True) -> FramePacket | None:
+        with self._lock:
+            if not self.queue:
+                return None
+            if drop_stale:
+                dropped = len(self.queue) - 1
+                if dropped > 0:
+                    self.dropped_frame_count += dropped
+                    for _ in range(dropped):
+                        self.queue.popleft()
+            return self.queue.popleft()
+
+    def size(self) -> int:
+        with self._lock:
+            return len(self.queue)
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,6 +77,10 @@ class FrameMetadata:
         if self.published_at_ms is None:
             return None
         return max(0, self.published_at_ms - self.captured_at_ms)
+
+    @property
+    def latency_order_valid(self) -> bool:
+        return latency_order_valid(self.captured_at_ms, self.processed_at_ms, self.published_at_ms)
 
 
 class FrameMetadataBuffer:
@@ -77,6 +129,37 @@ class FrameMetadataBuffer:
             return None
         return min(frames, key=lambda item: abs(item.captured_at_ms - int(timestamp_ms)))
 
+    def evidence_context(
+        self,
+        camera_login_id: str,
+        frame_id: int,
+        dropped_frame_count: int = 0,
+        snapshot_path: str | None = None,
+        clip_path: str | None = None,
+    ) -> dict[str, int | str | bool | None]:
+        metadata = self.get_by_frame_id(camera_login_id, frame_id)
+        if metadata is None:
+            raise LookupError(f"frame metadata not found: camera_login_id={camera_login_id} frame_id={frame_id}")
+        context: dict[str, int | str | bool | None] = {
+            "cameraLoginId": metadata.camera_login_id,
+            "frameId": int(metadata.frame_id),
+            "timestampMs": int(metadata.captured_at_ms),
+            "capturedAtMs": int(metadata.captured_at_ms),
+            "processedAtMs": metadata.processed_at_ms,
+            "publishedAtMs": metadata.published_at_ms,
+            "aiLatencyMs": metadata.ai_latency_ms,
+            "publishLatencyMs": metadata.publish_latency_ms,
+            "droppedFrameCount": int(dropped_frame_count),
+            "evidenceId": evidence_id(metadata.camera_login_id, metadata.frame_id, metadata.captured_at_ms),
+            "traceId": evidence_id(metadata.camera_login_id, metadata.frame_id, metadata.captured_at_ms),
+            "latencyOrderValid": metadata.latency_order_valid,
+        }
+        if snapshot_path is not None:
+            context["snapshotPath"] = snapshot_path
+        if clip_path is not None:
+            context["clipPath"] = clip_path
+        return context
+
     def size(self, camera_login_id: str) -> int:
         return len(self._frames_by_camera.get(str(camera_login_id), ()))
 
@@ -100,6 +183,39 @@ class FrameMetadataBuffer:
 
 def current_epoch_ms() -> int:
     return time.time_ns() // 1_000_000
+
+
+def evidence_context_from_packet(
+    packet: FramePacket,
+    processed_at_ms: int | None = None,
+    published_at_ms: int | None = None,
+    dropped_frame_count: int = 0,
+    snapshot_path: str | None = None,
+    clip_path: str | None = None,
+) -> dict[str, int | str | bool | None]:
+    context: dict[str, int | str | bool | None] = {
+        "cameraLoginId": packet.camera_login_id,
+        "frameId": int(packet.frame_id),
+        "timestampMs": int(packet.captured_at_ms),
+        "capturedAtMs": int(packet.captured_at_ms),
+        "processedAtMs": processed_at_ms,
+        "publishedAtMs": published_at_ms,
+        "aiLatencyMs": max(0, int(processed_at_ms) - int(packet.captured_at_ms))
+        if processed_at_ms is not None
+        else None,
+        "publishLatencyMs": max(0, int(published_at_ms) - int(packet.captured_at_ms))
+        if published_at_ms is not None
+        else None,
+        "droppedFrameCount": int(dropped_frame_count),
+        "evidenceId": evidence_id(packet.camera_login_id, packet.frame_id, packet.captured_at_ms),
+        "traceId": evidence_id(packet.camera_login_id, packet.frame_id, packet.captured_at_ms),
+        "latencyOrderValid": latency_order_valid(packet.captured_at_ms, processed_at_ms, published_at_ms),
+    }
+    if snapshot_path is not None:
+        context["snapshotPath"] = snapshot_path
+    if clip_path is not None:
+        context["clipPath"] = clip_path
+    return context
 
 
 def frame_size_from_shape(frame_shape: Sequence[int]) -> tuple[int, int]:

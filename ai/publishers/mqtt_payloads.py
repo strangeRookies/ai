@@ -5,6 +5,7 @@ from collections.abc import Mapping, Sequence
 from typing import Final, TypeAlias
 
 from ai.action.faint_post_processing import faint_probability
+from ai.publishers.evidence_fields import add_evidence_fields
 
 SCHEMA_VERSION: Final = "1.1"
 DEFAULT_EVENT_TYPE: Final = "faint"
@@ -29,6 +30,7 @@ def build_overlay_payload(
     captured_at_ms: int | None = None,
     processed_at_ms: int | None = None,
     published_at_ms: int | None = None,
+    dropped_frame_count: int | None = None,
 ) -> dict[str, JsonValue]:
     emitted_at = timestamp_ms if timestamp_ms is not None else published_at_ms or current_timestamp_ms()
     payload: dict[str, JsonValue] = {
@@ -51,6 +53,49 @@ def build_overlay_payload(
         ],
     }
     _add_frame_sync_fields(payload, frame_id, captured_at_ms, processed_at_ms, published_at_ms)
+    add_evidence_fields(
+        payload,
+        stream_id,
+        frame_id,
+        captured_at_ms,
+        processed_at_ms,
+        published_at_ms,
+        dropped_frame_count=dropped_frame_count,
+    )
+    return payload
+
+
+def build_frame_sync_payload(
+    camera_login_id: str,
+    frame_id: int,
+    captured_at_ms: int,
+    published_at_ms: int,
+    queue_lag_ms: int,
+    dropped_frame_count: int,
+    processed_at_ms: int | None = None,
+) -> dict[str, JsonValue]:
+    payload: dict[str, JsonValue] = {
+        "schemaVersion": SCHEMA_VERSION,
+        "messageType": "frame_sync",
+        "type": "frame_sync",
+        "cameraLoginId": camera_login_id,
+        "frameId": int(frame_id),
+        "capturedAtMs": int(captured_at_ms),
+        "publishedAtMs": int(published_at_ms),
+        "queueLagMs": int(queue_lag_ms),
+        "droppedFrameCount": int(dropped_frame_count),
+    }
+    if processed_at_ms is not None:
+        payload["processedAtMs"] = int(processed_at_ms)
+    add_evidence_fields(
+        payload,
+        camera_login_id,
+        frame_id,
+        captured_at_ms,
+        processed_at_ms,
+        published_at_ms,
+        dropped_frame_count=dropped_frame_count,
+    )
     return payload
 
 
@@ -69,6 +114,9 @@ def build_confirmed_event_payload(
     processed_at_ms: int | None = None,
     published_at_ms: int | None = None,
     sequence_metadata: JsonMap | None = None,
+    dropped_frame_count: int | None = None,
+    snapshot_path: str | None = None,
+    clip_path: str | None = None,
 ) -> dict[str, JsonValue]:
     emitted_at = timestamp_ms if timestamp_ms is not None else published_at_ms or current_timestamp_ms()
     event_type = _event_type(prediction)
@@ -116,6 +164,17 @@ def build_confirmed_event_payload(
         "events": [event],
     }
     _add_frame_sync_fields(payload, frame_id, captured_at_ms, processed_at_ms, published_at_ms)
+    add_evidence_fields(
+        payload,
+        stream_id,
+        frame_id,
+        captured_at_ms,
+        processed_at_ms,
+        published_at_ms,
+        dropped_frame_count=dropped_frame_count,
+        snapshot_path=snapshot_path,
+        clip_path=clip_path,
+    )
     if sequence_metadata is not None:
         payload["sequence"] = dict(sequence_metadata)
     if tracking_id is not None:
@@ -172,7 +231,10 @@ def _overlay_event(
     }
     tracking_id = box.get("track_id")
     if tracking_id is not None:
-        event["trackingId"] = int(float(str(tracking_id)))
+        val = int(float(str(tracking_id)))
+        event["trackingId"] = val
+        event["trackId"] = val
+        event["track_id"] = val
     box_frame_id = box.get("frameId")
     if box_frame_id is not None:
         event["frameId"] = int(float(str(box_frame_id)))

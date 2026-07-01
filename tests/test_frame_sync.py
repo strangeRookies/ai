@@ -1,6 +1,11 @@
 import unittest
 
-from ai.frame_sync import FrameMetadataBuffer
+from ai.frame_sync import (
+    CameraFrameQueue,
+    FrameMetadataBuffer,
+    FramePacket as SyncFramePacket,
+    evidence_context_from_packet,
+)
 from ai.streams.video_reader import FramePacket
 
 
@@ -34,6 +39,93 @@ class FrameSyncTest(unittest.TestCase):
         self.assertEqual(published.published_at_ms, 2062)
         self.assertEqual(published.ai_latency_ms, 55)
         self.assertEqual(published.publish_latency_ms, 62)
+
+    def test_latest_queue_evidence_context_uses_processed_frame_after_drop(self):
+        now_values = iter([1000, 1010, 1020, 1030, 1050, 1060])
+        buffer = FrameMetadataBuffer(maxlen=10, now_ms=lambda: next(now_values))
+        queue = CameraFrameQueue("cam_04", maxsize=2)
+
+        for index in range(4):
+            packet = FramePacket(frame_idx=index, fps=30.0, timestamp=index / 30.0, frame=None)
+            metadata = buffer.record_capture("cam_04", packet, (360, 640, 3))
+            queue.put_latest(
+                SyncFramePacket(
+                    camera_login_id="cam_04",
+                    frame_id=metadata.frame_id,
+                    captured_at_ms=metadata.captured_at_ms,
+                    frame=None,
+                    width=metadata.width,
+                    height=metadata.height,
+                    frame_idx=packet.frame_idx,
+                    timestamp=packet.timestamp,
+                    fps=packet.fps,
+                )
+            )
+
+        processed_packet = queue.get_latest()
+        self.assertIsNotNone(processed_packet)
+        self.assertEqual(processed_packet.frame_id, 4)
+        processed = buffer.mark_processed("cam_04", processed_packet.frame_id)
+        published = buffer.mark_published("cam_04", processed_packet.frame_id)
+        evidence = buffer.evidence_context("cam_04", processed_packet.frame_id, queue.dropped_frame_count)
+
+        self.assertEqual(queue.dropped_frame_count, 3)
+        self.assertEqual(evidence["cameraLoginId"], "cam_04")
+        self.assertEqual(evidence["frameId"], 4)
+        self.assertEqual(evidence["timestampMs"], 1030)
+        self.assertEqual(evidence["capturedAtMs"], 1030)
+        self.assertEqual(evidence["processedAtMs"], 1050)
+        self.assertEqual(evidence["publishedAtMs"], 1060)
+        self.assertEqual(evidence["aiLatencyMs"], 20)
+        self.assertEqual(evidence["publishLatencyMs"], 30)
+        self.assertEqual(evidence["droppedFrameCount"], 3)
+        self.assertEqual(evidence["evidenceId"], "cam_04-4-1030")
+        self.assertTrue(evidence["latencyOrderValid"])
+        self.assertEqual(processed.frame_id, published.frame_id)
+
+    def test_evidence_context_from_packet_survives_metadata_eviction(self):
+        packet = SyncFramePacket(
+            camera_login_id="cam_04",
+            frame_id=7,
+            captured_at_ms=2000,
+            frame=None,
+            width=640,
+            height=360,
+            frame_idx=20,
+            timestamp=2.0,
+            fps=10.0,
+        )
+
+        evidence = evidence_context_from_packet(
+            packet,
+            processed_at_ms=2030,
+            published_at_ms=2045,
+            dropped_frame_count=5,
+        )
+
+        self.assertEqual(evidence["cameraLoginId"], "cam_04")
+        self.assertEqual(evidence["frameId"], 7)
+        self.assertEqual(evidence["timestampMs"], 2000)
+        self.assertEqual(evidence["evidenceId"], "cam_04-7-2000")
+        self.assertEqual(evidence["droppedFrameCount"], 5)
+        self.assertTrue(evidence["latencyOrderValid"])
+
+    def test_evidence_context_flags_invalid_latency_order(self):
+        packet = SyncFramePacket(
+            camera_login_id="cam_04",
+            frame_id=8,
+            captured_at_ms=3000,
+            frame=None,
+            width=640,
+            height=360,
+            frame_idx=21,
+            timestamp=2.1,
+            fps=10.0,
+        )
+
+        evidence = evidence_context_from_packet(packet, processed_at_ms=3100, published_at_ms=3090)
+
+        self.assertFalse(evidence["latencyOrderValid"])
 
 
 if __name__ == "__main__":
