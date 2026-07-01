@@ -133,3 +133,28 @@ cleanup_ai_processes.bat
 ### 6.3. 구버전 스크립트 실행 금지 경고
 반드시 프로젝트 **루트(최상위) 디렉토리**에 있는 `AI_실행_딸깍.bat`를 실행하십시오.
 `strange_ai\` 하위 폴더에 있는 구버전 배치 스크립트는 추적 로그 시스템, 괄호 파싱 예방 및 `call`/`goto` 예외 안전망이 누락되어 있으므로 **절대 실행하지 마십시오.**
+---
+
+## 2026-07-01 ffmpeg publisher lifecycle note
+
+The stable launcher should prefer:
+
+```bash
+python scripts/start_simulated_rtsp_from_folder.py --ffmpeg-mode auto
+```
+
+Temporary safe mode while NVENC is unstable:
+
+```bash
+python scripts/start_simulated_rtsp_from_folder.py --ffmpeg-mode copy
+```
+
+Expected process shape for four simulated cameras:
+
+* one `start_simulated_rtsp_from_folder.py` parent process
+* four ffmpeg publisher child processes
+* no repeated `Force killing existing publisher` during ordinary crash recovery
+* no repeated `Scavenged and killing duplicate ffmpeg publisher` during ordinary crash recovery
+* no `[ffmpeg] <defunct>` entries after cleanup
+
+The simulator writes a lock file at `runs/simulated_rtsp/start_simulated_rtsp_from_folder.lock` to prevent duplicate parent instances. If startup reports an existing running PID, use the normal cleanup script instead of starting a second publisher.

@@ -1,9 +1,12 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from ai.registered_cameras import RegisteredCamera
-from scripts.start_simulated_rtsp_from_folder import build_ffmpeg_cmd, stable_video_index, video_for_camera
+from ai.ffmpeg_command import build_ffmpeg_command
+from ai.simulated_rtsp_publisher import FfmpegRestartPolicy, PublisherLock, select_initial_ffmpeg_mode, tail_text_file
+from scripts.start_simulated_rtsp_from_folder import build_ffmpeg_cmd, parse_arguments, stable_video_index, video_for_camera
 
 
 class SimulatedRtspFolderPublisherTest(unittest.TestCase):
@@ -23,6 +26,110 @@ class SimulatedRtspFolderPublisherTest(unittest.TestCase):
         self.assertEqual(command[command.index("-b:v") + 1], "1500k")
         self.assertEqual(command[command.index("-pix_fmt") + 1], "yuv420p")
 
+    def test_ffmpeg_command_accepts_libx264_alias(self):
+        command = build_ffmpeg_cmd(
+            Path("sample.mp4"),
+            "rtsp://localhost:8554/cam_01",
+            True,
+            "libx264",
+        )
+
+        self.assertEqual(command[command.index("-c:v") + 1], "libx264")
+        self.assertEqual(command[command.index("-preset") + 1], "ultrafast")
+
+    def test_legacy_registered_camera_ffmpeg_helper_uses_auto_default(self):
+        with patch.dict("os.environ", {}, clear=True):
+            command = build_ffmpeg_command(Path("sample.mp4"), "rtsp://localhost:8554/cam_01")
+
+        self.assertEqual(command[command.index("-c:v") + 1], "copy")
+
+    def test_legacy_registered_camera_ffmpeg_helper_honors_env_override(self):
+        with patch.dict("os.environ", {"FFMPEG_MODE": "cpu"}):
+            command = build_ffmpeg_command(Path("sample.mp4"), "rtsp://localhost:8554/cam_01")
+
+        self.assertEqual(command[command.index("-c:v") + 1], "libx264")
+
+    def test_cli_default_honors_ffmpeg_mode_environment(self):
+        argv = ["start_simulated_rtsp_from_folder.py", "--video-dir", "."]
+        with patch.dict("os.environ", {"FFMPEG_MODE": "copy"}), patch("sys.argv", argv):
+            args = parse_arguments()
+
+        self.assertEqual(args.ffmpeg_mode, "copy")
+
+    def test_auto_restart_policy_falls_back_from_nvenc_after_exit_255(self):
+        policy = FfmpegRestartPolicy(requested_mode="auto", initial_mode="nvenc")
+
+        next_mode = policy.record_exit(exit_code=255)
+
+        self.assertEqual(next_mode, "copy")
+        self.assertEqual(policy.active_mode, "copy")
+        self.assertEqual(policy.restart_count, 1)
+
+    def test_auto_restart_policy_falls_back_from_nvenc_failure_hints(self):
+        policy = FfmpegRestartPolicy(requested_mode="auto", initial_mode="nvenc")
+
+        next_mode = policy.record_exit(exit_code=1, stderr_tail="OpenEncodeSessionEx failed")
+
+        self.assertEqual(next_mode, "copy")
+        self.assertEqual(policy.active_mode, "copy")
+
+    def test_auto_restart_policy_falls_back_from_repeated_nvenc_failures(self):
+        policy = FfmpegRestartPolicy(requested_mode="auto", initial_mode="nvenc", max_restarts_per_mode=1)
+
+        first_mode = policy.record_exit(exit_code=1)
+        second_mode = policy.record_exit(exit_code=1)
+
+        self.assertEqual(first_mode, "nvenc")
+        self.assertEqual(second_mode, "copy")
+
+    def test_copy_restart_policy_falls_back_to_cpu_after_repeated_failure(self):
+        policy = FfmpegRestartPolicy(requested_mode="auto", initial_mode="copy", max_restarts_per_mode=1)
+
+        first_mode = policy.record_exit(exit_code=1)
+        second_mode = policy.record_exit(exit_code=1)
+
+        self.assertEqual(first_mode, "copy")
+        self.assertEqual(second_mode, "cpu")
+        self.assertEqual(policy.active_mode, "cpu")
+
+    def test_auto_initial_mode_prefers_nvenc_only_when_available(self):
+        self.assertEqual(select_initial_ffmpeg_mode("auto", nvenc_available=True), "nvenc")
+        self.assertEqual(select_initial_ffmpeg_mode("auto", nvenc_available=False), "copy")
+
+    def test_publisher_lock_rejects_live_parent_process(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            lock_path = Path(temp_dir) / "start.lock"
+            lock_path.write_text("1234", encoding="utf-8")
+            lock = PublisherLock(lock_path)
+
+            with patch("ai.worker_registry.check_pid_alive", return_value=True), patch(
+                "ai.worker_registry.check_process_signature_matches",
+                return_value=True,
+            ):
+                with self.assertRaises(RuntimeError):
+                    lock.acquire()
+
+    def test_publisher_lock_removes_stale_parent_process_lock(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            lock_path = Path(temp_dir) / "start.lock"
+            lock_path.write_text("1234", encoding="utf-8")
+            lock = PublisherLock(lock_path)
+
+            with patch("ai.worker_registry.check_pid_alive", return_value=False):
+                lock.acquire()
+                lock.release()
+
+            self.assertFalse(lock_path.exists())
+
+    def test_tail_text_file_returns_recent_lines(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            log_path = Path(temp_dir) / "cam_01-ffmpeg.log"
+            log_path.write_text("\n".join(f"line-{idx}" for idx in range(60)), encoding="utf-8")
+
+            tail = tail_text_file(log_path, max_lines=3)
+
+        self.assertEqual(tail, "line-57\nline-58\nline-59")
+
     def test_video_for_camera_prefers_backend_assigned_video_path(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             short_video = Path(temp_dir) / "000_short_clip.mp4"
@@ -40,6 +147,28 @@ class SimulatedRtspFolderPublisherTest(unittest.TestCase):
             selected = video_for_camera(camera, [short_video], 0)
 
         self.assertEqual(selected, full_video)
+
+    def test_video_for_camera_ignores_assigned_video_outside_video_pool(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            video_pool = Path(temp_dir) / "pool"
+            outside_pool = Path(temp_dir) / "outside"
+            video_pool.mkdir()
+            outside_pool.mkdir()
+            fallback_video = video_pool / "fallback.mp4"
+            outside_video = outside_pool / "outside.mp4"
+            fallback_video.write_bytes(b"fallback")
+            outside_video.write_bytes(b"outside")
+            camera = RegisteredCamera(
+                camera_id="1",
+                camera_login_id="cam_01",
+                rtsp_url=None,
+                source_type="SIMULATED_RTSP",
+                assigned_video_path=str(outside_video),
+            )
+
+            selected = video_for_camera(camera, [fallback_video], 0)
+
+        self.assertEqual(selected, fallback_video)
 
 
 if __name__ == "__main__":

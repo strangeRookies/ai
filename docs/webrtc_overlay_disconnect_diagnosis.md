@@ -117,3 +117,44 @@ mosquitto_sub -h localhost -p 1883 -t 'safety/#' -v
   `start_simulated_rtsp_from_folder.py` 내의 모니터링 루프 주기를 30초에서 1초로 단축하여, ffmpeg 장애 발생 시 1초 내로 인지 및 자동 복구를 진행하도록 개편했습니다.
 * **MQTT 발행 예외 격리**:
   `serve_ai_overlay.py` 내부의 모든 `publisher.publish(...)` 호출을 `try-except`로 감싸 브로커 단절이 분석 스레드를 정지(Crash)시키지 못하도록 보강했습니다.
+---
+
+## 7. 2026-07-01 ffmpeg publisher lifecycle update
+
+Current default:
+
+```bash
+python scripts/start_simulated_rtsp_from_folder.py \
+  --video-dir /path/to/videos \
+  --backend-url http://127.0.0.1:18080 \
+  --ffmpeg-mode auto
+```
+
+Mode policy:
+
+* `auto`: checks `h264_nvenc` and `nvidia-smi`; starts with `nvenc` only when both are available, otherwise starts with `copy`.
+* `nvenc`: forces NVENC first, but falls back after failures unless `--no-ffmpeg-fallback` is set.
+* `copy`: remuxes without re-encoding; use this as the safest temporary mode when NVENC is unstable.
+* `cpu` / `libx264`: browser-safe CPU encode profile.
+
+Runtime safety:
+
+* A lock file at `runs/simulated_rtsp/start_simulated_rtsp_from_folder.lock` prevents duplicate simulator parent processes.
+* On ffmpeg exit, the parent calls `wait()` before restart so terminated children are reaped.
+* Restart handling unregisters the dead publisher instead of repeatedly calling duplicate scavenging on normal crash recovery.
+* Exit logs include the code, camera id, last ffmpeg log lines, restart count through the mode policy, and known hints such as `h264_nvenc`, `Cannot load libcuda`, `Device busy`, `Connection refused`, and `already publishing`.
+
+Recommended checks:
+
+```bash
+ffmpeg -hide_banner -encoders | grep -E "nvenc|libx264|h264"
+ffmpeg -hide_banner -hwaccels
+nvidia-smi
+pgrep -af start_simulated_rtsp_from_folder.py
+pgrep -af ffmpeg
+ps -eo pid,ppid,stat,cmd | grep -E "start_simulated|ffmpeg" | grep -v grep
+curl -I http://127.0.0.1:8888/cam_01/index.m3u8
+curl -I http://127.0.0.1:8888/cam_02/index.m3u8
+curl -I http://127.0.0.1:8888/cam_03/index.m3u8
+curl -I http://127.0.0.1:8888/cam_04/index.m3u8
+```

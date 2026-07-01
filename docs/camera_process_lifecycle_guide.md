@@ -71,3 +71,12 @@ pkill -9 -f 'ffmpeg'
 # 레지스트리 캐시 파일 초기화
 rm -f runs/camera_worker_registry.json
 ```
+---
+
+## 2026-07-01 ffmpeg mode baseline
+
+Default operational mode is now `--ffmpeg-mode auto` or `FFMPEG_MODE=auto`.
+`auto` checks NVENC availability first, uses NVENC only when available, and falls back toward `copy` / CPU encoding when failures repeat.
+
+Use `--ffmpeg-mode copy` as a temporary safe mode while diagnosing NVENC instability.
+Use `--ffmpeg-mode nvenc` only for explicit NVENC testing, not as the normal launcher default.

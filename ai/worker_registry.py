@@ -11,9 +11,12 @@ def check_pid_alive(pid: int) -> bool:
     if pid <= 0:
         return False
     try:
+        proc = psutil.Process(pid)
+        if proc.status() == psutil.STATUS_ZOMBIE:
+            return False
         os.kill(pid, 0)
         return True
-    except OSError:
+    except (OSError, psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
         return False
 
 
@@ -90,6 +93,10 @@ def force_kill_existing_worker(camera_login_id: str) -> None:
                     proc.wait(timeout=3)
                 except psutil.TimeoutExpired:
                     proc.kill()
+                    try:
+                        proc.wait(timeout=3)
+                    except psutil.TimeoutExpired:
+                        pass
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 pass
 
@@ -108,6 +115,10 @@ def force_kill_existing_worker(camera_login_id: str) -> None:
                             proc.wait(timeout=3)
                         except psutil.TimeoutExpired:
                             proc.kill()
+                            try:
+                                proc.wait(timeout=3)
+                            except psutil.TimeoutExpired:
+                                pass
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
             pass
 
@@ -161,6 +172,10 @@ def force_kill_existing_publisher(output_path: str) -> None:
                         proc.wait(timeout=3)
                     except psutil.TimeoutExpired:
                         proc.kill()
+                        try:
+                            proc.wait(timeout=3)
+                        except psutil.TimeoutExpired:
+                            pass
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                     pass
             del registry[key]
@@ -180,6 +195,10 @@ def force_kill_existing_publisher(output_path: str) -> None:
                         proc.wait(timeout=3)
                     except psutil.TimeoutExpired:
                         proc.kill()
+                        try:
+                            proc.wait(timeout=3)
+                        except psutil.TimeoutExpired:
+                            pass
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
             pass
 
