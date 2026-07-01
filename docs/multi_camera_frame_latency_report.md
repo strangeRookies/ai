@@ -24,25 +24,25 @@
 
 ```mermaid
 graph TD
-    subgraph AI Engine (Python)
-        RTSP[RTSP Stream Reader Thread] -->|Capture & Timestamp| Q[Bounded CameraFrameQueue (maxsize: 3)]
+    subgraph AI["AI Engine - Python"]
+        RTSP["RTSP Stream Reader Thread"] -->|"Capture and timestamp"| Q["Bounded CameraFrameQueue - maxsize 3"]
         Q -->|Drop Old Frames| Q
-        Inference[Inference Thread] -->|Pop Latest Frame| Model[YOLO & LSTM Inference]
+        Inference["Inference Thread"] -->|"Pop latest frame"| Model["YOLO and LSTM Inference"]
         Model -->|Publish overlay| MQTT[MQTT Broker]
         Model -->|Publish frame_sync| MQTT
     end
-    subgraph Backend (Spring Boot)
-        MQTT -->|JSON Serialization| Sub[MqttSafetyEventSubscriber]
-        Sub -->|Accept overlay & frame_sync| Relay[OverlayRelayService]
-        Relay -->|Instant Broadcast frame_sync| STOMP[WebSocket STOMP Broker]
-        Relay -->|Stale-protected overlay| STOMP
+    subgraph Backend["Backend - Spring Boot"]
+        MQTT -->|"JSON serialization"| Sub["MqttSafetyEventSubscriber"]
+        Sub -->|"Accept overlay and frame_sync"| Relay["OverlayRelayService"]
+        Relay -->|"Instant broadcast frame_sync"| STOMP["WebSocket STOMP Broker"]
+        Relay -->|"Stale protected overlay"| STOMP
     end
-    subgraph Frontend (React/Zustand)
-        STOMP -->|Subscribe /camera-overlays| Hook[useCameraOverlays]
+    subgraph Frontend["Frontend - React and Zustand"]
+        STOMP -->|"Subscribe camera overlays"| Hook["useCameraOverlays"]
         Hook -->|Route frame_sync| FSB[FrameSyncBuffer]
         Hook -->|Route overlay| OSB[OverlaySyncBuffer]
-        FSB -->|Align Playback Clock| Player[WebRtcCameraPlayer]
-        OSB -->|Closest-Match BBox| Player
+        FSB -->|"Align playback clock"| Player["WebRtcCameraPlayer"]
+        OSB -->|"Closest match BBox"| Player
     end
 ```
 
