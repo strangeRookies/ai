@@ -2,14 +2,14 @@
 setlocal
 chcp 65001 >nul
 
-set "LOCAL_CONFIG=%~dp0AI_DEV_LOCAL_CONFIG.bat"
+set "LOCAL_CONFIG=%~dp0AI_LOCAL_CONFIG.bat"
 if not exist "%LOCAL_CONFIG%" goto CONFIG_ERROR
 call "%LOCAL_CONFIG%"
 goto CONFIG_OK
 
 :CONFIG_ERROR
-echo [ERROR] Missing AI_DEV_LOCAL_CONFIG.bat
-echo Copy AI_DEV_LOCAL_CONFIG.example.bat to AI_DEV_LOCAL_CONFIG.bat and set local values.
+echo [ERROR] Missing AI_LOCAL_CONFIG.bat
+echo Copy AI_LOCAL_CONFIG.example.bat to AI_LOCAL_CONFIG.bat and set local values.
 pause
 exit /b 1
 
@@ -34,10 +34,13 @@ echo ========================================================
 echo Select running mode:
 echo   [1] Full restart and run AI processes (First run)
 echo   [2] SSH Tunnels only (For sharing running streams)
+echo   [3] Stop remote AI processes only
 echo ========================================================
-set /p "MODE=Choose (1 or 2): "
+set /p "MODE=Choose (1, 2, or 3): "
 
-if "%MODE%"=="2" (
+if "%MODE%"=="3" (
+  goto MODE_STOP
+) else if "%MODE%"=="2" (
   goto MODE_TUNNEL
 ) else (
   goto MODE_FULL
@@ -64,7 +67,7 @@ if errorlevel 1 (
 
 echo.
 echo [2/5] Stopping previous AI runtime processes...
-ssh %GPU_USER%@%GPU_HOST% "pkill -f '%REMOTE_ROOT%/scripts/run_registered_cameras.py' 2>/dev/null || true; pkill -f '%REMOTE_ROOT%/scripts/start_simulated_rtsp_from_folder.py' 2>/dev/null || true; pkill -f '%REMOTE_ROOT%/scripts/serve_ai_overlay.py' 2>/dev/null || true"
+ssh %GPU_USER%@%GPU_HOST% "pkill -f '%REMOTE_ROOT%/scripts/run_registered_cameras.py' 2>/dev/null || true; pkill -f '%REMOTE_ROOT%/scripts/start_simulated_rtsp_from_folder.py' 2>/dev/null || true; pkill -f '%REMOTE_ROOT%/scripts/serve_ai_overlay.py' 2>/dev/null || true; pkill -f 'ffmpeg' 2>/dev/null || true; rm -f %REMOTE_ROOT%/runs/camera_worker_registry.json 2>/dev/null || true; docker rm -f mediamtx 2>/dev/null || true"
 if errorlevel 1 (
   echo [ERROR] Failed while stopping old GPU runtime.
   pause
@@ -112,6 +115,13 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
+
+:MODE_STOP
+echo.
+echo Stopping remote AI runtime processes...
+ssh %GPU_USER%@%GPU_HOST% "pkill -f '%REMOTE_ROOT%/scripts/run_registered_cameras.py' 2>/dev/null || true; pkill -f '%REMOTE_ROOT%/scripts/start_simulated_rtsp_from_folder.py' 2>/dev/null || true; pkill -f '%REMOTE_ROOT%/scripts/serve_ai_overlay.py' 2>/dev/null || true; pkill -f 'ffmpeg' 2>/dev/null || true; rm -f %REMOTE_ROOT%/runs/camera_worker_registry.json 2>/dev/null || true; docker rm -f mediamtx 2>/dev/null || true"
+echo Remote AI processes stopped.
+goto FINISH
 
 :FINISH
 echo.

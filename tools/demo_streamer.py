@@ -79,8 +79,31 @@ def main():
         cmd.extend(["-f", "rtsp", "-rtsp_transport", "tcp", normalized_url])
         
         print(f"Running (mode={mode}): {' '.join(cmd)}")
-        subprocess.run(cmd)
-        print("FFmpeg process exited, restarting in 2 seconds...")
+        
+        current_proc = None
+        
+        def signal_handler(sig, frame):
+            nonlocal current_proc
+            if current_proc is not None:
+                print(f"\n[demo-streamer] Terminating child ffmpeg (pid={current_proc.pid})...", flush=True)
+                current_proc.terminate()
+                try:
+                    current_proc.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    current_proc.kill()
+            sys.exit(0)
+
+        import signal
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
+
+        try:
+            current_proc = subprocess.Popen(cmd)
+            exit_code = current_proc.wait()
+            print(f"FFmpeg process exited with code {exit_code}, restarting in 2 seconds...")
+        except Exception as e:
+            print(f"Failed to run ffmpeg: {e}")
+        
         time.sleep(2)
 
 if __name__ == "__main__":
