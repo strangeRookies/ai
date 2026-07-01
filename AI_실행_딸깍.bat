@@ -70,9 +70,9 @@ echo.
 echo ========================================================
 echo Starting STABLE AI environment from GPU %BRANCH% branch
 echo ========================================================
-echo GPU: %GPU_USER%@%GPU_HOST%
-echo Remote repo: %REMOTE_ROOT%
-echo MQTT: %MQTT_HOST%:%MQTT_PORT% topic=safety/events
+echo [DEPRECATED] This batch file is obsolete.
+echo Please run the official launcher at the project root instead:
+echo   ..\AI_실행_딸깍.bat
 echo ========================================================
 echo.
 echo ========================================================

@@ -1,6 +1,6 @@
 import unittest
 
-from ai.publishers.mqtt_payloads import build_confirmed_event_payload, build_overlay_payload
+from ai.publishers.mqtt_payloads import build_confirmed_event_payload, build_frame_sync_payload, build_overlay_payload
 
 
 class MqttPayloadsTest(unittest.TestCase):
@@ -251,6 +251,25 @@ class MqttPayloadsTest(unittest.TestCase):
         self.assertEqual(event["evidence"]["latency"]["publishLatencyMs"], 23)
         self.assertEqual(event["evidence"]["droppedFrameCount"], 2)
         self.assertTrue(event["evidence"]["latencyOrderValid"])
+
+    def test_frame_sync_payload_uses_same_evidence_key(self):
+        payload = build_frame_sync_payload(
+            camera_login_id="cam_01",
+            frame_id=123,
+            captured_at_ms=1782180000100,
+            processed_at_ms=1782180000120,
+            published_at_ms=1782180000123,
+            queue_lag_ms=23,
+            dropped_frame_count=2,
+        )
+
+        self.assertEqual(payload["messageType"], "frame_sync")
+        self.assertEqual(payload["type"], "frame_sync")
+        self.assertEqual(payload["evidenceId"], "cam_01-123-1782180000100")
+        self.assertEqual(payload["traceId"], payload["evidenceId"])
+        self.assertEqual(payload["evidence"]["frameId"], 123)
+        self.assertEqual(payload["evidence"]["capturedAtMs"], 1782180000100)
+        self.assertEqual(payload["evidence"]["droppedFrameCount"], 2)
 
 
 if __name__ == "__main__":

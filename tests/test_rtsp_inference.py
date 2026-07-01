@@ -27,7 +27,7 @@ class RtspInferenceTest(unittest.TestCase):
         import cv2
 
         writer = cv2.VideoWriter(str(video), cv2.VideoWriter_fourcc(*"MJPG"), 10.0, (32, 32))
-        for _ in range(4):
+        for _ in range(5):
             writer.write(np.zeros((32, 32, 3), dtype=np.uint8))
         writer.release()
 

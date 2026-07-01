@@ -16,6 +16,7 @@ from ai.action.faint_post_processing import (
 )
 from ai.action.per_track_sequence_buffer import PerTrackCropSequenceBuffers, PerTrackKeypointSequenceBuffers
 from ai.action.lstm_contract import DEFAULT_KEYPOINT_INPUT_SIZE, log_lstm_config
+from ai.evidence import evidence_id
 from ai.inference.rtsp_runtime import (
     build_inference_event_log,
     build_inference_event_payload,
@@ -161,7 +162,10 @@ def run(args):
 
     writer = None
     camera_login_id = getattr(args, "camera_login_id", None) or args.camera_id
-    queue = CameraFrameQueue(camera_login_id, maxsize=getattr(args, "frame_queue_maxsize", 3))
+    rtsp_url_str = str(getattr(args, "rtsp_url", "") or "")
+    is_offline_video = rtsp_url_str.endswith((".mp4", ".avi", ".mkv", ".mov")) or args.detector_mode == "mock" or getattr(args, "max_frames", 0) > 0
+    max_q_size = 10000 if is_offline_video else getattr(args, "frame_queue_maxsize", 3)
+    queue = CameraFrameQueue(camera_login_id, maxsize=max_q_size)
     stop_event = threading.Event()
     reader_exited = threading.Event()
 
@@ -213,8 +217,6 @@ def run(args):
             if args.max_frames > 0 and summary["frames_processed"] >= args.max_frames:
                 break
             
-            rtsp_url_str = str(getattr(args, "rtsp_url", "") or "")
-            is_offline_video = rtsp_url_str.endswith((".mp4", ".avi", ".mkv", ".mov")) or args.detector_mode == "mock" or getattr(args, "max_frames", 0) > 0
             drop_stale = not is_offline_video
             frame_packet = queue.get_latest(drop_stale=drop_stale)
             if frame_packet is None:
@@ -325,6 +327,15 @@ def run(args):
                         frame_metadata = frame_buffer.mark_published(camera_login_id, frame_metadata.frame_id)
                         summary["latest_published_at_ms"] = frame_metadata.published_at_ms
                         summary["latest_publish_latency_ms"] = frame_metadata.publish_latency_ms
+                        evidence_key = evidence_id(
+                            camera_login_id,
+                            frame_metadata.frame_id,
+                            frame_metadata.captured_at_ms,
+                        )
+                        summary["latest_evidence_id"] = evidence_key
+                        summary["latest_trace_id"] = evidence_key
+                        summary["latest_dropped_frame_count"] = queue.dropped_frame_count
+                        summary["latest_latency_order_valid"] = frame_metadata.latency_order_valid
                         if not frame_metadata.latency_order_valid:
                             print(
                                 "[frame-sync] warning "
@@ -346,10 +357,6 @@ def run(args):
                         published_at_ms=frame_metadata.published_at_ms if frame_metadata else None,
                         dropped_frame_count=queue.dropped_frame_count,
                     )
-                    if frame_metadata is not None:
-                        summary["latest_evidence_id"] = (
-                            f"{camera_login_id}-{frame_metadata.frame_id}-{frame_metadata.captured_at_ms}"
-                        )
                     event_log = build_inference_event_log(args, frame_packet, track_prediction, boxes, sequence)
                     if getattr(args, "event_log_dir", None):
                         save_inference_event_log(args.event_log_dir, event_log)

@@ -70,13 +70,15 @@ def worker_has_exited(worker: CameraWorker) -> bool:
 
 
 def camera_source_signature(camera: RegisteredCamera, config: RunnerConfig) -> str:
+    import json as _json
+    roi_suffix = _json.dumps(list(camera.roi_configs), sort_keys=True)
     match camera.source_type:
         case "REAL_RTSP":
-            return f"REAL_RTSP:{camera.rtsp_url or ''}"
+            return f"REAL_RTSP:{camera.rtsp_url or ''}|roi:{roi_suffix}"
         case "SIMULATED_RTSP":
             return (
                 f"SIMULATED_RTSP:{camera_rtsp_url(config.rtsp_base_url, camera.camera_login_id)}:"
-                f"{camera.assigned_video_path or ''}"
+                f"{camera.assigned_video_path or ''}|roi:{roi_suffix}"
             )
 
 
@@ -128,7 +130,8 @@ def publish_unavailable_camera_status(
     if close:
         close()
 
-
+ #FFmpeg 프로세스 제어
+ #카메라 원본 스트림이나 시뮬레이션용 MP4 비디오 파일을 RTSP 스트림으로 변환해 MediaMTX(rtsp://localhost:8554/{cameraLoginId})에 공급
 def start_camera_worker(camera: RegisteredCamera, config: RunnerConfig, port: int) -> CameraWorker | None:
     processes: list[subprocess.Popen[str]] = []
     try:
@@ -155,6 +158,10 @@ def start_camera_worker(camera: RegisteredCamera, config: RunnerConfig, port: in
     if ffmpeg_command is not None:
         print(f"[registered-cameras] ffmpeg: {safe_command_text(ffmpeg_command)}", flush=True)
     print(f"[registered-cameras] overlay: {safe_command_text(overlay_command)}", flush=True)
+
+    # Ensure any existing duplicate worker process is terminated/killed first
+    from ai.worker_registry import force_kill_existing_worker
+    force_kill_existing_worker(camera.camera_login_id)
 
     if config.dry_run:
         return CameraWorker(
@@ -245,6 +252,12 @@ def run_camera_sync_loop(cameras: list[RegisteredCamera], config: RunnerConfig) 
     next_refresh_at = time.monotonic() + config.refresh_interval_seconds
     while True:
         time.sleep(2)
+        from ai.worker_registry import get_active_worker_count, get_active_publisher_count
+        print(
+            f"[registered-cameras] Active camera workers: {get_active_worker_count()} "
+            f"| Active simulated publishers: {get_active_publisher_count()}",
+            flush=True
+        )
         for camera_login_id, worker in list(workers.items()):
             if worker_has_exited(worker):
                 print(

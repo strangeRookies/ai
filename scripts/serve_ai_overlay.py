@@ -11,6 +11,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from ai.action.per_track_sequence_buffer import PerTrackCropSequenceBuffers, PerTrackKeypointSequenceBuffers
 from ai.action.lstm_contract import DEFAULT_KEYPOINT_INPUT_SIZE, DEFAULT_LSTM_SEQUENCE_LENGTH, DEFAULT_LSTM_SEQUENCE_STRIDE, log_lstm_config
+from ai.evidence import evidence_id
 from ai.frame_sync import FrameMetadataBuffer, FramePacket, CameraFrameQueue
 from ai.inference.rtsp_runtime import build_inference_event_payload, cheap_filter_config_from_args, create_detection_postprocessor, ensure_mock_keypoints
 from ai.inference.rtsp_runtime import maybe_log_debug, normalize_detections, update_detections_with_postprocessor, update_prediction_counts, update_tracking_summary
@@ -22,6 +23,7 @@ from ai.inference.rtsp_runtime import (
     update_quantitative_summary,
 )
 from ai.overlay_http import OverlayState, create_overlay_server
+from ai.roi import apply_roi_mask, combine_roi_masks
 from ai.streams.video_reader import VideoReader
 from ai.visualization.action_overlay import annotate_boxes_with_action, annotate_boxes_with_track_actions, draw_metrics_panel, faint_probability
 from ai.visualization.action_overlay import format_action_overlay_text, initial_overlay_summary, update_overlay_runtime
@@ -38,7 +40,9 @@ from ai.publishers.mqtt_payloads import build_overlay_payload, current_timestamp
 def initial_summary():
     return initial_overlay_summary()
 
-
+#각 카메라별로 동작하는 실시간 오버레이 스크립트 
+#RTSP 스트림을 캡처하여 AI 분석(YOLO Pose 및 LSTM)을 수행
+#감지된 객체의 바운딩 박스(bbox), 트래킹 ID 및 상태 메타데이터를 MQTT camera 토픽으로 실시간 발행
 class OverlayPublishState:
     def __init__(self):
         self.signals_by_track = {}
@@ -101,6 +105,7 @@ def process_frame(
     overlay_publish_state=None,
     frame_buffer=None,
     dropped_frame_count=None,
+    roi_mask=None,
 ):
     stream_id = getattr(args, "camera_login_id", None) or args.camera_id
     frame_metadata = None
@@ -114,7 +119,8 @@ def process_frame(
             summary["latest_frame_id"] = frame_metadata.frame_id
             summary["latest_captured_at_ms"] = frame_metadata.captured_at_ms
             summary["frame_sync_buffer_size"] = frame_buffer.size(stream_id)
-    detections = detector.detect(frame_packet.frame)
+    inference_frame = apply_roi_mask(frame_packet.frame, roi_mask)
+    detections = detector.detect(inference_frame)
     if args.detector_mode == "mock":
         detections = ensure_mock_keypoints(detections)
 
@@ -265,8 +271,12 @@ def process_frame(
         timestamp_ms = published_at_ms
         summary["latest_published_at_ms"] = published_at_ms
         summary["latest_publish_latency_ms"] = frame_metadata.publish_latency_ms
+        evidence_key = evidence_id(stream_id, frame_metadata.frame_id, frame_metadata.captured_at_ms)
         log_frame_sync(args, stream_id, frame_metadata, frame_buffer, int(dropped_frame_count or 0))
-        summary["latest_evidence_id"] = f"{stream_id}-{frame_metadata.frame_id}-{frame_metadata.captured_at_ms}"
+        summary["latest_evidence_id"] = evidence_key
+        summary["latest_trace_id"] = evidence_key
+        summary["latest_dropped_frame_count"] = int(dropped_frame_count or 0)
+        summary["latest_latency_order_valid"] = frame_metadata.latency_order_valid
     overlay_payload = build_overlay_payload(
         stream_id=stream_id,
         frame_width=frame_width,
@@ -327,6 +337,7 @@ def log_frame_sync(args, stream_id, frame_metadata, frame_buffer, dropped_frame_
             "[frame-sync] warning "
             f"{stream_id} "
             f"latency_order_invalid=true "
+            f"latency_order_valid=false "
             f"frame_id={frame_metadata.frame_id} "
             f"captured_at_ms={frame_metadata.captured_at_ms} "
             f"processed_at_ms={frame_metadata.processed_at_ms} "
@@ -483,10 +494,13 @@ class OverlayWorker:
         print(f"[ai-overlay-inference] tracking postprocessor: {postprocessing_mode}", flush=True)
         display_id_mapper = DisplayIdMapper()
         overlay_publish_state = OverlayPublishState()
-        
         camera_ids = [self.camera_login_id]
         camera_index = 0
-        
+
+        roi_configs = getattr(self.args, "roi_configs_parsed", [])
+        cached_roi_mask = None
+        cached_roi_frame_shape = None
+
         sequence_buffers = {}
         for cid in camera_ids:
             if self.args.classifier_input == "crops":
@@ -510,15 +524,25 @@ class OverlayWorker:
                 continue
             current_cam_id = camera_ids[camera_index]
             camera_index = (camera_index + 1) % len(camera_ids)
-            
+
             if current_cam_id != self.camera_login_id:
                 continue
-                
+
             frame_packet = self.queue.get_latest()
             if frame_packet is None:
                 time.sleep(0.005)
                 continue
-                
+
+            if roi_configs:
+                h, w = frame_packet.frame.shape[:2]
+                if cached_roi_mask is None or cached_roi_frame_shape != (h, w):
+                    cached_roi_mask = combine_roi_masks(roi_configs, h, w)
+                    cached_roi_frame_shape = (h, w)
+                    print(
+                        f"[ai-overlay][roi] mask built: {len(roi_configs)} region(s) frame={w}x{h}",
+                        flush=True,
+                    )
+
             inference_start = time.perf_counter()
             overlay = process_frame(
                 frame_packet, detector, classifier, sequence_buffers[current_cam_id], summary, self.args,
@@ -528,12 +552,13 @@ class OverlayWorker:
                 overlay_publish_state=overlay_publish_state,
                 frame_buffer=self.frame_buffer,
                 dropped_frame_count=self.queue.dropped_frame_count,
+                roi_mask=cached_roi_mask,
             )
-            
+
             now_ms = time.time_ns() // 1_000_000
             queue_lag_ms = now_ms - frame_packet.captured_at_ms
-            published_at_ms = now_ms
-            
+            published_at_ms = summary.get("latest_published_at_ms") or now_ms
+
             fs_payload = build_frame_sync_payload(
                 camera_login_id=current_cam_id,
                 frame_id=frame_packet.frame_id,
@@ -541,11 +566,12 @@ class OverlayWorker:
                 published_at_ms=published_at_ms,
                 queue_lag_ms=queue_lag_ms,
                 dropped_frame_count=self.queue.dropped_frame_count,
+                processed_at_ms=summary.get("latest_processed_at_ms"),
             )
             topic_settings = mqtt_topic_settings_from_args(self.args)
             if publisher is not None:
                 publisher.publish(fs_payload, topic=topic_settings["camera_topic"])
-                
+
             inference_ms = (time.perf_counter() - inference_start) * 1000.0
             every_n = max(0, int(getattr(self.args, "debug_every_n", 30)))
             if every_n > 0 and frame_packet.frame_id % every_n == 0:
@@ -556,12 +582,12 @@ class OverlayWorker:
                     f"queue_lag_ms={queue_lag_ms}",
                     flush=True
                 )
-                
+
             if overlay is not None:
                 self.state.update_frame(overlay, summary)
             if self.args.max_frames > 0 and summary["frames_processed"] >= self.args.max_frames:
                 break
-                
+
         close = getattr(publisher, "close", None) if publisher is not None else None
         if close:
             close()
@@ -621,6 +647,11 @@ def main():
     parser.add_argument("--debug-every-n", type=int, default=30)
     parser.add_argument("--print-events", action="store_true")
     parser.add_argument("--dry-run", action="store_true", help="Run in dry-run mode (do not publish events to MQTT)")
+    parser.add_argument(
+        "--roi-configs",
+        default=None,
+        help="JSON array of active ROI config objects (polygonPoints in 0~1 normalized coords)",
+    )
     
     # MQTT Options
     parser.add_argument("--publisher", choices=["mqtt", "console"], help="Event publisher mode (default: from env or console if dry-run)")
@@ -636,14 +667,40 @@ def main():
     args = parser.parse_args()
     args.camera_login_id = args.camera_login_id or args.camera_id
 
+    args.roi_configs_parsed = []
+    if args.roi_configs:
+        try:
+            parsed = json.loads(args.roi_configs)
+            if isinstance(parsed, list):
+                args.roi_configs_parsed = parsed
+                print(f"[ai-overlay][roi] loaded {len(parsed)} ROI config(s)", flush=True)
+        except json.JSONDecodeError:
+            print("[ai-overlay][roi] warning: failed to parse --roi-configs JSON", flush=True)
+
+    # Register worker to prevent duplicate starts for same cameraLoginId
+    from ai.worker_registry import register_worker, unregister_worker
+    try:
+        register_worker(
+            args.camera_login_id,
+            os.getpid(),
+            args.rtsp_url,
+            f"http://{args.host}:{args.port}" if mjpeg_debug_enabled(args) else ""
+        )
+    except RuntimeError as exc:
+        print(f"[ai-overlay][error] Duplicate worker detected: {exc}", file=sys.stderr, flush=True)
+        sys.exit(1)
+
     state = OverlayState()
     worker = OverlayWorker(args, state)
     server = None
 
     def shutdown(_signum, _frame):
+        print(f"[ai-overlay] Shutdown signal received for camera={args.camera_login_id}. Cleaning up.", flush=True)
         worker.stop()
         if server is not None:
             server.shutdown()
+        unregister_worker(args.camera_login_id)
+        sys.exit(0)
 
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
@@ -662,6 +719,7 @@ def main():
         worker.stop()
         if server is not None:
             server.server_close()
+        unregister_worker(args.camera_login_id)
 
 
 if __name__ == "__main__":

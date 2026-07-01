@@ -197,6 +197,15 @@ def write_preprocess_outputs(output_dir, split_name, sequence_metadata, clip_sum
 def build_checkpoint_payload(model_state, model_config, args, best_acc, train_summary, val_summary):
     input_size = int(model_config["input_size"])
     crop_feature_size = int(args.feature_size)
+    schema = getattr(args, "feature_schema", "keypoint51" if input_size == 51 else "keypoint_motion54")
+    
+    names = [f"kp{i}_{coord}" for i in range(17) for coord in ("x", "y", "conf")]
+    if input_size == 54:
+        if schema == "keypoint_bbox54":
+            names += ["bbox_width_norm", "bbox_height_norm", "bbox_area_norm"]
+        else:
+            names += ["center_drop", "velocity", "torso_angle_norm"]
+            
     return {
         "model_state": model_state,
         "model_config": model_config,
@@ -204,9 +213,11 @@ def build_checkpoint_payload(model_state, model_config, args, best_acc, train_su
         "feature_size": crop_feature_size,
         "sequence_length": int(args.sequence_length),
         "sequence_stride": int(args.sequence_stride),
-        "feature_type": "crop",
+        "feature_type": "crop" if input_size != 51 and input_size != 54 else "keypoint",
         "crop_feature_size": crop_feature_size,
         "input_size": input_size,
+        "feature_schema_version": schema,
+        "feature_names": names,
         "label_mapping": dict(LABEL_MAPPING),
         "best_val_acc": best_acc,
         "preprocess_summary": {"train": train_summary, "val": val_summary},
