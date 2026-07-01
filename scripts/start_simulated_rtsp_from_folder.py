@@ -206,29 +206,34 @@ def main() -> None:
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
+    last_backend_poll_time = 0.0
+    last_status_log_time = 0.0
     try:
         while True:
-            # Re-scan video files to allow adding new videos dynamically
-            try:
-                video_files = scan_video_directory(video_dir)
-            except Exception as e:
-                print(f"[simulated-rtsp][warning] Failed to scan video directory: {e}", file=sys.stderr)
-            
-            if not video_files:
-                print(f"[simulated-rtsp][error] Video directory became empty! Exiting.", file=sys.stderr)
-                cleanup_all_streams()
-                sys.exit(1)
+            now = time.monotonic()
+            simulated_cameras = None
+            if now - last_backend_poll_time >= poll_interval:
+                # Re-scan video files to allow adding new videos dynamically
+                try:
+                    video_files = scan_video_directory(video_dir)
+                except Exception as e:
+                    print(f"[simulated-rtsp][warning] Failed to scan video directory: {e}", file=sys.stderr)
+                
+                if not video_files:
+                    print(f"[simulated-rtsp][error] Video directory became empty! Exiting.", file=sys.stderr)
+                    cleanup_all_streams()
+                    sys.exit(1)
 
-            # Query active cameras from backend
-            try:
-                active_cameras = load_active_cameras(backend_url, None, timeout_seconds=10.0)
-                # Filter to only keep SIMULATED_RTSP cameras
-                # 테스트를 위해 REAL_RTSP를 포함한 모든 카메라에 풀영상을 송출하도록 필터 조건 임시 해제
-                simulated_cameras = active_cameras
-            except Exception as e:
-                print(f"[simulated-rtsp][warning] Failed to load active cameras from backend: {e}", file=sys.stderr)
-                # Fallback to keep existing streams running if backend query fails
-                simulated_cameras = None
+                # Query active cameras from backend
+                try:
+                    active_cameras = load_active_cameras(backend_url, None, timeout_seconds=10.0)
+                    # Filter to only keep SIMULATED_RTSP cameras
+                    simulated_cameras = active_cameras
+                    last_backend_poll_time = now
+                except Exception as e:
+                    print(f"[simulated-rtsp][warning] Failed to load active cameras from backend: {e}", file=sys.stderr)
+                    # Fallback to keep existing streams running if backend query fails
+                    simulated_cameras = None
 
             if simulated_cameras is not None:
                 current_active_ids = set()
@@ -261,20 +266,23 @@ def main() -> None:
                         print(f"  CMD: {' '.join(cmd)}", flush=True)
                         
                         try:
-                            # Direct stderr/stdout to devnull to avoid cluttering screen logs unless debugged
-                            p = subprocess.Popen(
-                                cmd,
-                                stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL,
-                                stdin=subprocess.DEVNULL
-                            )
+                            log_dir = Path("runs/simulated_rtsp")
+                            log_dir.mkdir(parents=True, exist_ok=True)
+                            log_path = log_dir / f"{cid}-ffmpeg.log"
+                            with log_path.open("a", encoding="utf-8") as log_file:
+                                p = subprocess.Popen(
+                                    cmd,
+                                    stdout=log_file,
+                                    stderr=subprocess.STDOUT,
+                                    stdin=subprocess.DEVNULL
+                                )
                             register_publisher(target_rtsp_url, p.pid, str(assigned_video), cid)
                             running_streams[cid] = {
                                 'process': p,
                                 'video_path': assigned_video,
                                 'rtsp_url': target_rtsp_url
                             }
-                            print(f"  Started process (pid={p.pid})", flush=True)
+                            print(f"  Started process (pid={p.pid}), logs redirected to {log_path}", flush=True)
                         except Exception as ex:
                             print(f"[simulated-rtsp][error] Failed to start ffmpeg for camera={cid}: {ex}", file=sys.stderr)
 
@@ -285,7 +293,7 @@ def main() -> None:
                         stop_stream(cid, running_streams[cid])
                         del running_streams[cid]
 
-            # Periodic check for crashed processes
+            # Check for crashed processes (every 1 second)
             for cid, info in list(running_streams.items()):
                 p = info['process']
                 exit_code = p.poll()
@@ -295,27 +303,34 @@ def main() -> None:
                     force_kill_existing_publisher(info['rtsp_url'])
                     cmd = build_ffmpeg_cmd(info['video_path'], info['rtsp_url'], loop_playback, args.ffmpeg_mode)
                     try:
-                        new_p = subprocess.Popen(
-                            cmd,
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
-                            stdin=subprocess.DEVNULL
-                        )
+                        log_dir = Path("runs/simulated_rtsp")
+                        log_dir.mkdir(parents=True, exist_ok=True)
+                        log_path = log_dir / f"{cid}-ffmpeg.log"
+                        with log_path.open("a", encoding="utf-8") as log_file:
+                            new_p = subprocess.Popen(
+                                cmd,
+                                stdout=log_file,
+                                stderr=subprocess.STDOUT,
+                                stdin=subprocess.DEVNULL
+                            )
                         register_publisher(info['rtsp_url'], new_p.pid, str(info['video_path']), cid)
                         running_streams[cid]['process'] = new_p
-                        print(f"  Restarted process (pid={new_p.pid})", flush=True)
+                        print(f"  Restarted process (pid={new_p.pid}), logs redirected to {log_path}", flush=True)
                     except Exception as ex:
                         print(f"[simulated-rtsp][error] Failed to restart ffmpeg for camera={cid}: {ex}", file=sys.stderr)
                         del running_streams[cid]
 
-            # Periodic status logging
-            from ai.worker_registry import get_active_worker_count, get_active_publisher_count
-            print(
-                f"[simulated-rtsp] Active camera workers: {get_active_worker_count()} "
-                f"| Active simulated publishers: {get_active_publisher_count()}",
-                flush=True
-            )
-            time.sleep(poll_interval)
+            # Periodic status logging (every 10 seconds)
+            if now - last_status_log_time >= 10.0:
+                from ai.worker_registry import get_active_worker_count, get_active_publisher_count
+                print(
+                    f"[simulated-rtsp] Active camera workers: {get_active_worker_count()} "
+                    f"| Active simulated publishers: {get_active_publisher_count()}",
+                    flush=True
+                )
+                last_status_log_time = now
+            
+            time.sleep(1.0)
             
     except KeyboardInterrupt:
         cleanup_all_streams()
