@@ -63,7 +63,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--ffmpeg-mode",
         choices=["copy", "cpu", "nvenc"],
-        default=os.environ.get("FFMPEG_MODE", "cpu"),
+        default=os.environ.get("FFMPEG_MODE", "copy"),
         help="FFmpeg encoding mode. CPU/NVENC modes apply the browser-safe output profile."
     )
     return parser.parse_args()
