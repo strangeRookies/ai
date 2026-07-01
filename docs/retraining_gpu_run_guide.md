@@ -23,7 +23,7 @@
 
 ```bash
 # 1. 프로젝트 루트 디렉토리로 이동
-cd ~/yolo_training/strange_ai_lstm/strange_ai
+cd ~/yolo_training/strange_ai_lstm
 
 # 2. 가상환경 접속 (활성화)
 source .venv/bin/activate
@@ -59,6 +59,19 @@ GPU PC에서 실행하기 전에 아래의 디렉토리와 파일들이 정상�
 ---
 
 ## 4. 실행 단계 (실제 명령어)
+
+### 단계 4.0. v2 학습 Manifest 빌드 (training_manifest_v2.csv 생성)
+가장 먼저 baseline 메타데이터와 검수(approved) 완료된 hard negative / faint / synthetic 후보 csv를 병합하여 학습용 최종 manifest를 생성해야 합니다.
+```bash
+# 기본 metadata와 검수 완료된 후보 csv들을 병합하여 training_manifest_v2.csv 생성
+python scripts/build_training_manifest_v2.py \
+  --base-metadata-csv ../ai_fall_experiments/data/metadata/metadata.csv \
+  --hard-negative-csv data/manifests/hard_negative_candidates.csv \
+  --faint-reinforcement-csv data/manifests/faint_reinforcement_candidates.csv \
+  --synthetic-csv data/manifests/synthetic_candidates.csv \
+  --output-csv data/manifests/training_manifest_v2.csv
+```
+*로컬 테스트 또는 빠른 검증을 위해 sample 모드로 임시 생성하고 싶다면 `--sample 100` 옵션을 추가하여 빌드합니다.*
 
 ### 단계 4.1. Manifest Leakage 및 승인 여부 검증
 생성된 `training_manifest_v2.csv`에 데이터 스플릿 누수(split leakage)나 승인 상태(`review_status=approved`) 위반 항목이 없는지 검사합니다:
