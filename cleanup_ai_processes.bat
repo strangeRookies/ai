@@ -42,7 +42,7 @@ if "%DRY_RUN%"=="true" (
 )
 
 echo ======================================================================
-echo             PERFORMING GRADUAL AI PROCESS CLEANUP (LOCAL & REMOTE)
+echo             PERFORMING GRADUAL AI PROCESS CLEANUP (LOCAL ^& REMOTE)
 echo ======================================================================
 echo GPU Server: %GPU_USER%@%GPU_HOST%
 echo ======================================================================

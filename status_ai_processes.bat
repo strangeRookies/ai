@@ -10,7 +10,7 @@ if not exist "%LOCAL_CONFIG%" (
 call "%LOCAL_CONFIG%"
 
 echo ======================================================================
-echo             AI PROCESS & PORT STATUS DIAGNOSIS (LOCAL & REMOTE)
+echo             AI PROCESS ^& PORT STATUS DIAGNOSIS (LOCAL ^& REMOTE)
 echo ======================================================================
 echo GPU Server: %GPU_USER%@%GPU_HOST%
 echo Remote Root: %STABLE_ROOT%
@@ -51,7 +51,7 @@ ssh %GPU_USER%@%GPU_HOST% "if [ -f %STABLE_ROOT%/runs/camera_worker_registry.jso
 echo.
 
 echo ----------------------------------------------------------------------
-echo [5] GPU MEMORY & COMPUTE STATUS (nvidia-smi)
+echo [5] GPU MEMORY ^& COMPUTE STATUS (nvidia-smi)
 echo ----------------------------------------------------------------------
 ssh %GPU_USER%@%GPU_HOST% "nvidia-smi || echo '[WARNING] nvidia-smi command not available on GPU host'"
 echo.
