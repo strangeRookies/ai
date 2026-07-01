@@ -208,7 +208,7 @@ def print_split_distributions(split_name: str, rows: list[dict[str, str]]):
         print(f"    {src}: {count}")
 
 
-def train_lstm(train_x: np.ndarray, train_y: np.ndarray, val_x: np.ndarray, val_y: np.ndarray, epochs: int, batch_size: int, device_str: str, seed: int) -> object:
+def train_lstm(train_x: np.ndarray, train_y: np.ndarray, val_x: np.ndarray, val_y: np.ndarray, epochs: int, batch_size: int, device_str: str, seed: int, model_name: str, output_dir: Path) -> object:
     import torch
     from torch import nn
     from torch.utils.data import DataLoader, TensorDataset
@@ -239,17 +239,59 @@ def train_lstm(train_x: np.ndarray, train_y: np.ndarray, val_x: np.ndarray, val_
     train_labels = torch.from_numpy(train_y)
     train_loader = DataLoader(TensorDataset(train_tensor, train_labels), batch_size=batch_size, shuffle=True)
 
+    val_tensor = torch.from_numpy(val_x).to(device)
+    val_labels = torch.from_numpy(val_y).to(device)
+
+    best_val_loss = float("inf")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"\n--- Training {model_name.upper()} Model (Device: {device}) ---")
+
     for epoch in range(1, epochs + 1):
         model.train()
+        epoch_loss = 0.0
+        correct_train = 0
+        total_train = 0
+        
         for x_batch, y_batch in train_loader:
             x_batch = x_batch.to(device)
             y_batch = y_batch.to(device)
             optimizer.zero_grad()
-            loss = criterion(model(x_batch), y_batch)
+            logits = model(x_batch)
+            loss = criterion(logits, y_batch)
             loss.backward()
             optimizer.step()
+            
+            epoch_loss += loss.item() * x_batch.size(0)
+            preds = logits.argmax(dim=1)
+            correct_train += preds.eq(y_batch).sum().item()
+            total_train += x_batch.size(0)
+            
+        train_loss = epoch_loss / total_train
+        train_acc = correct_train / total_train
+
+        # Validation
+        model.eval()
+        with torch.no_grad():
+            val_logits = model(val_tensor)
+            val_loss = criterion(val_logits, val_labels).item()
+            val_preds = val_logits.argmax(dim=1)
+            val_acc = val_preds.eq(val_labels).sum().item() / val_labels.size(0)
+
+        print(f"Epoch {epoch:02d}/{epochs:02d} | Train Loss: {train_loss:.4f} - Train Acc: {train_acc:.2%} | Val Loss: {val_loss:.4f} - Val Acc: {val_acc:.2%}")
+
+        # Save checkpoints
+        epoch_ckpt_path = output_dir / f"{model_name}_epoch_{epoch}.pt"
+        torch.save(model.state_dict(), epoch_ckpt_path)
+
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            best_ckpt_path = output_dir / f"{model_name}_best.pt"
+            torch.save(model.state_dict(), best_ckpt_path)
+            print(f"  [SAVED BEST] New best validation loss: {val_loss:.4f} -> Saved to {best_ckpt_path}")
 
     return model
+
 
 
 def evaluate_lstm(model: object, test_x: np.ndarray, test_y: np.ndarray, device_str: str) -> tuple[list[int], list[float]]:
@@ -279,15 +321,16 @@ def evaluate_lstm(model: object, test_x: np.ndarray, test_y: np.ndarray, device_
     return y_pred, faint_probs
 
 
-def run_experiment(train_x, train_y, val_x, val_y, test_x, test_y, epochs, batch_size, device, seed):
+def run_experiment(train_x, train_y, val_x, val_y, test_x, test_y, epochs, batch_size, device, seed, model_name, output_dir):
     try:
         import torch
-        model = train_lstm(train_x, train_y, val_x, val_y, epochs, batch_size, device, seed)
+        model = train_lstm(train_x, train_y, val_x, val_y, epochs, batch_size, device, seed, model_name, output_dir)
         preds, probs = evaluate_lstm(model, test_x, test_y, device)
         return preds, probs
     except ImportError:
-        print("[evaluate-retraining] PyTorch not installed. Generating mock predictions...")
+        print(f"[evaluate-retraining] PyTorch not installed. Generating mock predictions for {model_name}...")
         return run_mock_predictions(test_y, seed)
+
 
 
 def run_mock_predictions(test_y, seed):
@@ -667,14 +710,15 @@ def main():
     print("Training baseline LSTM...")
     base_preds, base_probs = run_experiment(
         train_base_x, train_base_y, val_base_x, val_base_y, test_x, test_y,
-        args.epochs, args.batch_size, args.device, args.seed
+        args.epochs, args.batch_size, args.device, args.seed, "baseline", output_dir
     )
 
     print("Training retrained LSTM...")
     ret_preds, ret_probs = run_experiment(
         train_ret_x, train_ret_y, val_ret_x, val_ret_y, test_x, test_y,
-        args.epochs, args.batch_size, args.device, args.seed
+        args.epochs, args.batch_size, args.device, args.seed, "retrained", output_dir
     )
+
 
     # Segment metrics
     base_tag_stats, base_aug_stats = segment_by_tag(test_meta, test_y, base_preds, base_probs)
