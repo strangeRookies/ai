@@ -78,7 +78,7 @@ set "RUN_MODE=full_run"
 :DO_TUNNEL
 echo.
 echo [3/5] Cleaning up stale remote ports and starting SSH tunnel in a new window...
-ssh %GPU_USER%@%GPU_HOST% "lsof -t -i:18080 | xargs kill -9 2>/dev/null || true"
+ssh %GPU_USER%@%GPU_HOST% "pkill -f '^sshd: %GPU_USER%$' 2>/dev/null || true; lsof -t -i:18080 | xargs kill -9 2>/dev/null || true"
 if "%RUN_MODE%"=="tunnel_only" (
   start "AI STABLE SSH Tunnel - keep open" cmd /k ssh -o ExitOnForwardFailure=yes -N -L 8888:127.0.0.1:8888 -L 8889:127.0.0.1:8889 -L 8189:127.0.0.1:8189 %GPU_USER%@%GPU_HOST%
 ) else (
