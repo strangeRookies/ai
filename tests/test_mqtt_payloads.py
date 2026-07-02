@@ -22,6 +22,7 @@ class MqttPayloadsTest(unittest.TestCase):
                     "y2": 230.4,
                     "score": 0.91,
                     "track_id": 3,
+                    "display_id": 1,
                     "faint_probability": 0.72,
                 }
             ],
@@ -51,6 +52,9 @@ class MqttPayloadsTest(unittest.TestCase):
                         "trackingId": 3,
                         "trackId": 3,
                         "track_id": 3,
+                        "displayId": 1,
+                        "display_id": 1,
+                        "displayLabel": "ID 1",
                         "frameId": 123,
                         "bbox": {"x": 120, "y": 80, "width": 200, "height": 150},
                         "boundingBox": {"x": 120, "y": 80, "width": 200, "height": 150},
@@ -78,6 +82,32 @@ class MqttPayloadsTest(unittest.TestCase):
         # No faint signal → confidence derived from box score
         self.assertAlmostEqual(payload["events"][0]["confidence"], 0.9)
         self.assertFalse(payload["events"][0]["eventTriggered"])
+
+    def test_overlay_payload_keeps_raw_track_id_separate_from_display_id(self):
+        payload = build_overlay_payload(
+            stream_id="cam_01",
+            frame_width=640,
+            frame_height=360,
+            timestamp_ms=1782180000123,
+            boxes=[
+                {
+                    "x1": 1,
+                    "y1": 2,
+                    "x2": 30,
+                    "y2": 40,
+                    "score": 0.9,
+                    "track_id": 987654321,
+                    "display_id": 2,
+                }
+            ],
+        )
+
+        event = payload["events"][0]
+        self.assertEqual(event["trackingId"], 987654321)
+        self.assertEqual(event["track_id"], 987654321)
+        self.assertEqual(event["displayId"], 2)
+        self.assertEqual(event["display_id"], 2)
+        self.assertEqual(event["displayLabel"], "ID 2")
 
     def test_overlay_payload_clamps_bbox_to_frame_bounds(self):
         payload = build_overlay_payload(

@@ -79,6 +79,37 @@ class SupervisionPostProcessorTest(unittest.TestCase):
         out = proc.process(dets, np.zeros((200, 200, 3), dtype=np.uint8))
         self.assertEqual(out[0]["track_id"], 3)
 
+    def test_reordered_bytetrack_output_maps_ids_by_bbox_not_index(self):
+        from ai.postprocess.supervision_postprocessor import SupervisionByteTrackAdapter
+        adapter = SupervisionByteTrackAdapter()
+        adapter._tracker = FakeReorderedRoboflowByteTrack()
+        proc = SupervisionPostProcessor(byte_tracker=adapter)
+        detections = [
+            {
+                "bbox": [10, 10, 40, 40],
+                "confidence": 0.91,
+                "class_name": "person",
+                "keypoints": [{"x": 12, "y": 13, "confidence": 0.8}],
+            },
+            {
+                "bbox": [100, 100, 150, 160],
+                "confidence": 0.82,
+                "class_name": "person",
+                "keypoints": [{"x": 120, "y": 130, "confidence": 0.7}],
+            },
+        ]
+
+        output = proc.process(detections, np.zeros((200, 200, 3), dtype=np.uint8))
+
+        self.assertEqual(output[0]["track_id"], 11)
+        self.assertEqual(output[0]["bbox"], detections[0]["bbox"])
+        self.assertEqual(output[0]["keypoints"], detections[0]["keypoints"])
+        self.assertEqual(output[0]["confidence"], 0.91)
+        self.assertEqual(output[1]["track_id"], 22)
+        self.assertEqual(output[1]["bbox"], detections[1]["bbox"])
+        self.assertEqual(output[1]["keypoints"], detections[1]["keypoints"])
+        self.assertEqual(output[1]["confidence"], 0.82)
+
     def test_bbox_smoothing_filters_out_noise(self):
         # Configure postprocessor config with 0.6 smoothing alpha
         from ai.postprocess.supervision_postprocessor import SupervisionPostProcessorConfig, SupervisionByteTrackAdapter
@@ -142,6 +173,17 @@ class FakeRoboflowByteTrack:
             confidence=detections.confidence,
             class_id=detections.class_id,
             tracker_id=np.array(tids, dtype=int)
+        )
+
+
+class FakeReorderedRoboflowByteTrack:
+    def update_with_detections(self, detections):
+        import supervision as sv
+        return sv.Detections(
+            xyxy=np.asarray([detections.xyxy[1], detections.xyxy[0]], dtype=np.float32),
+            confidence=np.asarray([detections.confidence[1], detections.confidence[0]], dtype=np.float32),
+            class_id=np.asarray([detections.class_id[1], detections.class_id[0]], dtype=int),
+            tracker_id=np.asarray([22, 11], dtype=int),
         )
 
 

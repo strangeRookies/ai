@@ -235,6 +235,12 @@ def _overlay_event(
         event["trackingId"] = val
         event["trackId"] = val
         event["track_id"] = val
+    display_id = box.get("display_id")
+    if display_id is not None:
+        val = int(float(str(display_id)))
+        event["displayId"] = val
+        event["display_id"] = val
+        event["displayLabel"] = f"ID {val}"
     box_frame_id = box.get("frameId")
     if box_frame_id is not None:
         event["frameId"] = int(float(str(box_frame_id)))

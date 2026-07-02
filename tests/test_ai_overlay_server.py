@@ -12,6 +12,7 @@ from scripts.serve_ai_overlay import OverlayPublishState, format_action_overlay_
 from ai.action.per_track_sequence_buffer import PerTrackCropSequenceBuffers
 from ai.visualization.action_overlay import annotate_boxes_with_action
 from tracking.simple_tracker import SimpleTrackAssigner
+from tracking.display_id_mapper import DisplayIdMapper
 
 
 class AiOverlayServerTest(unittest.TestCase):
@@ -202,6 +203,52 @@ class AiOverlayServerTest(unittest.TestCase):
         self.assertEqual(summary["latest_dropped_frame_count"], 4)
         self.assertTrue(summary["latest_latency_order_valid"])
 
+    def test_process_frame_payload_keeps_raw_track_id_and_display_id_separate(self):
+        args = Namespace(
+            detector_mode="mock",
+            camera_id="legacy_cam",
+            camera_login_id="cam_01",
+            print_events=False,
+            classifier_input="crops",
+            mqtt_camera_topic="camera",
+            mqtt_event_topic="event",
+            mqtt_topic=None,
+        )
+        detector = create_detector("mock", "yolov8n-pose.pt", "auto")
+        classifier, _ = create_classifier(None, "auto")
+        buffer = PerTrackCropSequenceBuffers(sequence_length=2, stride=1, resize_size=32)
+        summary = initial_summary()
+        publisher = FakePublisher()
+        display_id_mapper = DisplayIdMapper()
+
+        frame = np.zeros((64, 64, 3), dtype=np.uint8)
+        for frame_idx in range(2):
+            process_frame(
+                FramePacket(frame_idx=frame_idx, fps=10.0, timestamp=frame_idx / 10.0, frame=frame),
+                detector,
+                classifier,
+                buffer,
+                summary,
+                args,
+                tracker=FixedTrackIdTracker(987654321),
+                publisher=publisher,
+                display_id_mapper=display_id_mapper,
+            )
+
+        overlay_topic, overlay_payload = publisher.published[-2]
+        event_topic, event_payload = publisher.published[-1]
+        overlay_event = overlay_payload["events"][0]
+        self.assertEqual(overlay_topic, "camera")
+        self.assertEqual(event_topic, "event")
+        self.assertEqual(overlay_event["trackingId"], 987654321)
+        self.assertEqual(overlay_event["track_id"], 987654321)
+        self.assertEqual(overlay_event["displayId"], 1)
+        self.assertEqual(overlay_event["display_id"], 1)
+        self.assertEqual(overlay_event["displayLabel"], "ID 1")
+        self.assertEqual(event_payload["track_id"], 987654321)
+        self.assertNotIn("displayId", event_payload)
+        self.assertEqual(summary["display_id_map"]["raw_to_display"]["987654321"], 1)
+
     def test_log_frame_sync_warns_on_invalid_latency_order(self):
         now_values = iter([1000, 900, 950])
         frame_buffer = FrameMetadataBuffer(now_ms=lambda: next(now_values))
@@ -261,6 +308,28 @@ class FakePublisher:
     def publish(self, payload, topic=None):
         self.published.append((topic, payload))
         return True
+
+
+class FixedTrackIdTracker:
+    def __init__(self, track_id):
+        self.track_id = track_id
+
+    def update(self, detections, now=None):
+        output = []
+        for detection in detections:
+            item = dict(detection)
+            item["track_id"] = self.track_id
+            output.append(item)
+        return output
+
+    def diagnostics(self):
+        return {
+            "active_tracks": 1,
+            "new_tracks": 1,
+            "lost_tracks": 0,
+            "id_switch_like_events": 0,
+            "tracks": {str(self.track_id): {"track_id": self.track_id}},
+        }
 
 
 if __name__ == "__main__":
