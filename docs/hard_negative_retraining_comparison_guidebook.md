@@ -54,7 +54,7 @@ Check these paths before running any comparison:
 | --- | --- |
 | `data/manifests/hard_negative_candidates.csv` or `.jsonl` | Hard-negative candidate source. Only `review_status=approved` rows may be exported. |
 | `runs/self_improving_error_mining/verification/manual_cli_final/hard_negative_candidates.jsonl` | Sample candidate manifest from the preparation pipeline, useful for schema inspection only. |
-| `data/splits/final_source_video_split/all.csv` | Baseline metadata or baseline split source. |
+| `data/metadata/metadata.csv` | Baseline metadata or baseline split source. |
 | `data/manifests/training_manifest_v2.csv` | Candidate retraining manifest output, if already generated. |
 | `runs/hard_negative_retraining_comparison/` | Expected run output root for comparison logs, exports, metrics, and reports. |
 | `docs/hard_negative_retraining_performance_comparison.md` | Final human-readable comparison report path. |
@@ -88,7 +88,7 @@ Example commands for the user:
 
 | Example Command | What This Confirms |
 | --- | --- |
-| `python scripts/build_training_manifest_v2.py --base-metadata-csv ../ai_fall_experiments/data/metadata/metadata.csv --hard-negative-csv data/manifests/hard_negative_candidates.csv --faint-reinforcement-csv data/manifests/faint_reinforcement_candidates.csv --synthetic-csv data/manifests/synthetic_candidates.csv --output-csv data/manifests/training_manifest_v2.csv` | Builds the full v2 metadata pool. If hard-negative files are missing, the output may contain only `source_type=real`. |
+| `python scripts/build_training_manifest_v2.py --base-metadata-csv data/metadata/metadata.csv --hard-negative-csv data/manifests/hard_negative_candidates.csv --faint-reinforcement-csv data/manifests/faint_reinforcement_candidates.csv --synthetic-csv data/manifests/synthetic_candidates.csv --output-csv data/manifests/training_manifest_v2.csv` | Builds the full v2 metadata pool. If hard-negative files are missing, the output may contain only `source_type=real`. |
 | `python scripts/check_manifest_leakage.py --manifest data/manifests/training_manifest_v2.csv` | Checks split leakage and unapproved candidate rows. |
 | `python scripts/inspect_manifest_v2.py --manifest data/manifests/training_manifest_v2.csv --group-by source_type` | Confirms whether hard-negative candidates are actually present. If this helper does not exist, create a read-only inspection tool first. |
 | `python scripts/inspect_manifest_v2.py --manifest data/manifests/training_manifest_v2.csv --group-by label` | Confirms class balance before sampling. |
@@ -185,7 +185,7 @@ Example commands for the user:
 
 | Example Command | What This Confirms |
 | --- | --- |
-| `python scripts/export_hard_negative_ratios.py --baseline-manifest runs/hard_negative_retraining_comparison/bbox54_splits/train.csv --hard-negative-candidates data/manifests/hard_negative_candidates.csv --ratios 0.05,0.10,0.20 --feature-schema keypoint_bbox54 --feature-dim 54 --output-dir runs/hard_negative_retraining_comparison/train_exports` | Creates `baseline`, `hn_0.05`, `hn_0.10`, and `hn_0.20` experiment manifests from approved strict bbox54 candidates only. |
+| `python scripts/export_hard_negative_ratios.py --baseline-manifest data/metadata/metadata.csv --hard-negative-candidates data/manifests/hard_negative_candidates.csv --ratios 0.05,0.10,0.20 --feature-schema keypoint_bbox54 --feature-dim 54 --output-dir runs/hard_negative_retraining_comparison/train_exports` | Creates `baseline`, `hn_0.05`, `hn_0.10`, and `hn_0.20` experiment manifests from approved strict bbox54 candidates only. |
 | `python scripts/check_manifest_leakage.py --manifest runs/hard_negative_retraining_comparison/train_exports/hn_0.05.csv` | Confirms `hn_0.05` does not leak test/eval source videos or split groups into train. |
 | `python scripts/check_manifest_leakage.py --manifest runs/hard_negative_retraining_comparison/train_exports/hn_0.10.csv` | Same check for `hn_0.10`. |
 | `python scripts/check_manifest_leakage.py --manifest runs/hard_negative_retraining_comparison/train_exports/hn_0.20.csv` | Same check for `hn_0.20`. |
@@ -345,7 +345,7 @@ Commands to run directly, in order, after the missing strict comparison/export h
    - Trains the strict bbox54 baseline.
 7. `python scripts/evaluate_bbox54_checkpoint.py --checkpoint runs/hard_negative_retraining_comparison/models/bbox54_baseline/best.pt --eval-csv runs/hard_negative_retraining_comparison/bbox54_splits/test.csv --feature-schema keypoint_bbox54 --feature-dim 54 --output-dir runs/hard_negative_retraining_comparison/bbox54_baseline_eval`
    - Evaluates bbox54 baseline and produces FP rows for mining.
-8. `python scripts/export_hard_negative_ratios.py --baseline-manifest runs/hard_negative_retraining_comparison/bbox54_splits/train.csv --hard-negative-candidates data/manifests/hard_negative_candidates.csv --ratios 0.05,0.10,0.20 --feature-schema keypoint_bbox54 --feature-dim 54 --output-dir runs/hard_negative_retraining_comparison/train_exports`
+8. `python scripts/export_hard_negative_ratios.py --baseline-manifest data/metadata/metadata.csv --hard-negative-candidates data/manifests/hard_negative_candidates.csv --ratios 0.05,0.10,0.20 --feature-schema keypoint_bbox54 --feature-dim 54 --output-dir runs/hard_negative_retraining_comparison/train_exports`
    - Exports baseline and ratio-specific train manifests.
 9. `python scripts/check_manifest_leakage.py --manifest runs/hard_negative_retraining_comparison/train_exports/hn_0.05.csv`
    - Checks split leakage for `hn_0.05`.
