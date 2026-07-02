@@ -30,7 +30,7 @@ def filter_video_files(
     excluded: list[Path] = []
     
     for p in video_files:
-        path_lower = str(p.resolve()).lower()
+        path_lower = str(p.absolute()).lower()
         matched = True
         
         if domain and domain.lower() not in path_lower:
@@ -56,7 +56,7 @@ def filter_video_files(
 
 
 def estimate_video_metadata(video_path: Path) -> dict[str, str]:
-    path_lower = str(video_path.resolve()).lower()
+    path_lower = str(video_path.absolute()).lower()
     
     # Domain estimation
     if "inside" in path_lower or "indoor" in path_lower:
