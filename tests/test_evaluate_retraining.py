@@ -1,5 +1,6 @@
 import unittest
 from scripts.evaluate_retraining_manifest_v2 import (
+    collect_dataset_sequences,
     filter_approved_rows,
     segment_by_tag,
     calculate_metrics_from_preds,
@@ -114,6 +115,36 @@ class EvaluateRetrainingTest(unittest.TestCase):
             verify_split_isolation(train, val, test)
         except RuntimeError as e:
             self.fail(f"verify_split_isolation raised RuntimeError unexpectedly: {e}")
+
+    def test_collect_dataset_sequences_preserves_candidate_mining_metadata(self):
+        rows = [
+            {
+                "clip_id": "clip_fp",
+                "clip_path": "clips/clip_fp.mp4",
+                "label": "0",
+                "label_name": "Normal",
+                "split": "test",
+                "source_video": "source_fp.mp4",
+                "frame_id": "123",
+                "start_frame": "100",
+                "end_frame": "129",
+                "split_group_id": "source_fp",
+                "parent_clip_id": "parent_fp",
+                "scenario_tag": "bending",
+                "augmentation_type": "none",
+            }
+        ]
+
+        _, _, metadata = collect_dataset_sequences(rows, input_size=54, feature_schema="keypoint_bbox54")
+
+        self.assertEqual(metadata[0]["clip_id"], "clip_fp")
+        self.assertEqual(metadata[0]["clip_path"], "clips/clip_fp.mp4")
+        self.assertEqual(metadata[0]["source_video"], "source_fp.mp4")
+        self.assertEqual(metadata[0]["frame_id"], "123")
+        self.assertEqual(metadata[0]["start_frame"], "100")
+        self.assertEqual(metadata[0]["end_frame"], "129")
+        self.assertEqual(metadata[0]["feature_schema"], "keypoint_bbox54")
+        self.assertEqual(metadata[0]["feature_dim"], "54")
 
 
 if __name__ == "__main__":

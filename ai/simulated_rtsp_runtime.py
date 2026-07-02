@@ -52,14 +52,26 @@ def run_simulated_rtsp_publisher(args: argparse.Namespace, repo_root: Path) -> N
         print("[NVENC CHECK] h264_nvenc unavailable. Falling back to copy/libx264.", flush=True)
     print("==================================================", flush=True)
 
-    video_files = scan_video_directory(video_dir)
-    if not video_files:
+    all_scanned_files = scan_video_directory(video_dir)
+    if not all_scanned_files:
         print(f"[simulated-rtsp][error] No video files (mp4, avi, mov, mkv) found in {video_dir}", file=sys.stderr)
         sys.exit(1)
 
-    print(f"Scanned {len(video_files)} video files:")
-    for video_file in video_files:
-        print(f"  - {video_file.name}")
+    from ai.simulated_rtsp_sources import filter_video_files
+    try:
+        video_files, excluded_files = filter_video_files(all_scanned_files, args.domain, args.label, args.video_filter)
+    except ValueError as exc:
+        print(f"[simulated-rtsp][error] Filter mismatch: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Scanned {len(all_scanned_files)} video files. Filter results:")
+    print(f"  Accepted ({len(video_files)}):")
+    for vf in video_files:
+        print(f"    - {vf.name}")
+    if excluded_files:
+        print(f"  Excluded ({len(excluded_files)}):")
+        for vf in excluded_files:
+            print(f"    - {vf.name}")
     print("--------------------------------------------------", flush=True)
 
     running_streams: dict[str, dict[str, Any]] = {}
@@ -112,12 +124,11 @@ def run_simulated_rtsp_publisher(args: argparse.Namespace, repo_root: Path) -> N
             simulated_cameras = None
             if now - last_backend_poll_time >= poll_interval:
                 try:
-                    video_files = scan_video_directory(video_dir)
-                except OSError as exc:
-                    print(f"[simulated-rtsp][warning] Failed to scan video directory: {exc}", file=sys.stderr)
-
-                if not video_files:
-                    print("[simulated-rtsp][error] Video directory became empty! Exiting.", file=sys.stderr)
+                    all_scanned_files = scan_video_directory(video_dir)
+                    from ai.simulated_rtsp_sources import filter_video_files
+                    video_files, excluded_files = filter_video_files(all_scanned_files, args.domain, args.label, args.video_filter)
+                except Exception as exc:
+                    print(f"[simulated-rtsp][error] Failed during directory scan or filtering: {exc}", file=sys.stderr)
                     cleanup_all_streams()
                     sys.exit(1)
 
@@ -155,7 +166,13 @@ def run_simulated_rtsp_publisher(args: argparse.Namespace, repo_root: Path) -> N
                             fallback_enabled=not args.no_ffmpeg_fallback,
                         )
                         cmd = build_ffmpeg_cmd(assigned_video, target_rtsp_url, loop_playback, policy.active_mode)
-                        print(f"[simulated-rtsp] Mapping camera={camera_login_id} to video={assigned_video.name}", flush=True)
+                        from ai.simulated_rtsp_sources import estimate_video_metadata
+                        meta = estimate_video_metadata(assigned_video)
+                        print(
+                            f"[simulated-rtsp] Mapping camera={camera_login_id} to video={assigned_video.name} "
+                            f"(domain={meta['domain']}, label={meta['label']}, source={meta['source']})",
+                            flush=True
+                        )
                         print(f"  FFmpeg mode: requested={args.ffmpeg_mode}, active={policy.active_mode}", flush=True)
                         print(f"  CMD: {' '.join(cmd)}", flush=True)
                         try:

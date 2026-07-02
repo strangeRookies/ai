@@ -71,6 +71,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--skip-rtsp-probe", action="store_true", help="Skip real RTSP preflight before starting AI workers.")
     parser.add_argument("--refresh-interval-seconds", type=float, default=float(os.getenv("CAMERA_POLL_INTERVAL_SECONDS", "30.0")))
     parser.add_argument("--skip-simulated-ffmpeg", action="store_true", help="Skip spawning internal ffmpeg for simulated cameras.")
+    parser.add_argument("--domain", default=os.getenv("VIDEO_DOMAIN"))
+    parser.add_argument("--label", default=os.getenv("VIDEO_LABEL"))
+    parser.add_argument("--video-filter", default=os.getenv("VIDEO_FILTER"))
     return parser.parse_args(argv)
 
 
@@ -110,6 +113,9 @@ def config_from_args(args: argparse.Namespace) -> RunnerConfig:
         skip_ffmpeg_spawn=args.skip_simulated_ffmpeg,
         overlay_public_base_url=args.overlay_public_base_url,
         overlay_report_enabled=args.overlay_report_enabled,
+        domain=args.domain,
+        label=args.label,
+        video_filter=args.video_filter,
     )
 
 
