@@ -140,7 +140,7 @@ Example commands for the user:
 
 | Example Command | What This Confirms |
 | --- | --- |
-| `python -m ai.action.train_lstm --dataset-csv runs/hard_negative_retraining_comparison/bbox54_splits/train.csv --val-csv runs/hard_negative_retraining_comparison/bbox54_splits/val.csv --input-size 54 --feature-schema keypoint_bbox54 --device cuda --epochs 30 --batch-size 64 --output-dir runs/hard_negative_retraining_comparison/models/bbox54_baseline` | Trains the strict bbox54 baseline model. |
+| `python scripts/train_fight_vs_normal_lstm.py --csv runs/hard_negative_retraining_comparison/bbox54_splits/train.csv --device cuda --epochs 30 --batch-size 64 --output-dir runs/hard_negative_retraining_comparison/models/bbox54_baseline` | Trains the strict bbox54 baseline model. |
 | `python scripts/evaluate_bbox54_checkpoint.py --checkpoint runs/hard_negative_retraining_comparison/models/bbox54_baseline/best.pt --eval-csv runs/hard_negative_retraining_comparison/bbox54_splits/test.csv --feature-schema keypoint_bbox54 --feature-dim 54 --output-dir runs/hard_negative_retraining_comparison/bbox54_baseline_eval` | Evaluates the bbox54 baseline on the fixed bbox54 test split. |
 | `python scripts/inspect_checkpoint_metadata.py --checkpoint runs/hard_negative_retraining_comparison/models/bbox54_baseline/best.pt` | Confirms checkpoint metadata has `input_size=54` and `feature_schema_version=keypoint_bbox54`. |
 
@@ -215,10 +215,10 @@ Example commands for the user:
 
 | Example Command | What This Confirms |
 | --- | --- |
-| `python -m ai.action.train_lstm --dataset-csv runs/hard_negative_retraining_comparison/train_exports/baseline.csv --input-size 54 --feature-schema keypoint_bbox54 --device cuda --epochs 30 --batch-size 64 --output-dir runs/hard_negative_retraining_comparison/models/baseline` | Trains the strict bbox54 baseline experiment checkpoint. |
-| `python -m ai.action.train_lstm --dataset-csv runs/hard_negative_retraining_comparison/train_exports/hn_0.05.csv --input-size 54 --feature-schema keypoint_bbox54 --device cuda --epochs 30 --batch-size 64 --output-dir runs/hard_negative_retraining_comparison/models/hn_0.05` | Trains the 5% hard-negative variant. |
-| `python -m ai.action.train_lstm --dataset-csv runs/hard_negative_retraining_comparison/train_exports/hn_0.10.csv --input-size 54 --feature-schema keypoint_bbox54 --device cuda --epochs 30 --batch-size 64 --output-dir runs/hard_negative_retraining_comparison/models/hn_0.10` | Trains the 10% hard-negative variant. |
-| `python -m ai.action.train_lstm --dataset-csv runs/hard_negative_retraining_comparison/train_exports/hn_0.20.csv --input-size 54 --feature-schema keypoint_bbox54 --device cuda --epochs 30 --batch-size 64 --output-dir runs/hard_negative_retraining_comparison/models/hn_0.20` | Trains the 20% hard-negative variant. |
+| `python scripts/train_fight_vs_normal_lstm.py --csv runs/hard_negative_retraining_comparison/train_exports/baseline.csv --device cuda --epochs 30 --batch-size 64 --output-dir runs/hard_negative_retraining_comparison/models/baseline` | Trains the strict bbox54 baseline experiment checkpoint. |
+| `python scripts/train_fight_vs_normal_lstm.py --csv runs/hard_negative_retraining_comparison/train_exports/hn_0.05.csv --device cuda --epochs 30 --batch-size 64 --output-dir runs/hard_negative_retraining_comparison/models/hn_0.05` | Trains the 5% hard-negative variant. |
+| `python scripts/train_fight_vs_normal_lstm.py --csv runs/hard_negative_retraining_comparison/train_exports/hn_0.10.csv --device cuda --epochs 30 --batch-size 64 --output-dir runs/hard_negative_retraining_comparison/models/hn_0.10` | Trains the 10% hard-negative variant. |
+| `python scripts/train_fight_vs_normal_lstm.py --csv runs/hard_negative_retraining_comparison/train_exports/hn_0.20.csv --device cuda --epochs 30 --batch-size 64 --output-dir runs/hard_negative_retraining_comparison/models/hn_0.20` | Trains the 20% hard-negative variant. |
 | `python scripts/compare_hard_negative_retraining.py --eval-split runs/hard_negative_retraining_comparison/eval_split.csv --checkpoints runs/hard_negative_retraining_comparison/models/baseline/best.pt,runs/hard_negative_retraining_comparison/models/hn_0.05/best.pt,runs/hard_negative_retraining_comparison/models/hn_0.10/best.pt,runs/hard_negative_retraining_comparison/models/hn_0.20/best.pt --labels baseline,hn_0.05,hn_0.10,hn_0.20 --feature-schema keypoint_bbox54 --feature-dim 54 --output-dir runs/hard_negative_retraining_comparison --report-path docs/hard_negative_retraining_performance_comparison.md` | Evaluates every checkpoint on the identical split and writes comparison outputs. |
 
 If `scripts/compare_hard_negative_retraining.py` is not implemented yet, implement it before GPU execution. Do not use a comparison script that silently falls back to mock predictions or pads 51-dim arrays.
@@ -341,7 +341,7 @@ Commands to run directly, in order, after the missing strict comparison/export h
    - Creates a strict bbox54-only manifest and rejects padded 51-dim data.
 5. `python scripts/split_bbox54_manifest.py --manifest data/manifests/training_manifest_v2_bbox54.csv --train-limit 7000 --val-limit 1500 --test-limit 1400 --per-class --balance-labels --output-dir runs/hard_negative_retraining_comparison/bbox54_splits`
    - Creates balanced bbox54 train/val/test splits.
-6. `python -m ai.action.train_lstm --dataset-csv runs/hard_negative_retraining_comparison/bbox54_splits/train.csv --val-csv runs/hard_negative_retraining_comparison/bbox54_splits/val.csv --input-size 54 --feature-schema keypoint_bbox54 --device cuda --epochs 30 --batch-size 64 --output-dir runs/hard_negative_retraining_comparison/models/bbox54_baseline`
+6. `python scripts/train_fight_vs_normal_lstm.py --csv runs/hard_negative_retraining_comparison/bbox54_splits/train.csv --device cuda --epochs 30 --batch-size 64 --output-dir runs/hard_negative_retraining_comparison/models/bbox54_baseline`
    - Trains the strict bbox54 baseline.
 7. `python scripts/evaluate_bbox54_checkpoint.py --checkpoint runs/hard_negative_retraining_comparison/models/bbox54_baseline/best.pt --eval-csv runs/hard_negative_retraining_comparison/bbox54_splits/test.csv --feature-schema keypoint_bbox54 --feature-dim 54 --output-dir runs/hard_negative_retraining_comparison/bbox54_baseline_eval`
    - Evaluates bbox54 baseline and produces FP rows for mining.
@@ -353,7 +353,7 @@ Commands to run directly, in order, after the missing strict comparison/export h
    - Checks split leakage for `hn_0.10`.
 11. `python scripts/check_manifest_leakage.py --manifest runs/hard_negative_retraining_comparison/train_exports/hn_0.20.csv`
    - Checks split leakage for `hn_0.20`.
-12. `python -m ai.action.train_lstm --dataset-csv runs/hard_negative_retraining_comparison/train_exports/<experiment>.csv --input-size 54 --feature-schema keypoint_bbox54 --device cuda --epochs 30 --batch-size 64 --output-dir runs/hard_negative_retraining_comparison/models/<experiment>`
+12. `python scripts/train_fight_vs_normal_lstm.py --csv runs/hard_negative_retraining_comparison/train_exports/<experiment>.csv --device cuda --epochs 30 --batch-size 64 --output-dir runs/hard_negative_retraining_comparison/models/<experiment>`
    - Trains each experiment variant. Run once per experiment label.
 13. `python scripts/compare_hard_negative_retraining.py --eval-split runs/hard_negative_retraining_comparison/bbox54_splits/test.csv --checkpoints <four-checkpoints> --labels baseline,hn_0.05,hn_0.10,hn_0.20 --feature-schema keypoint_bbox54 --feature-dim 54 --output-dir runs/hard_negative_retraining_comparison --report-path docs/hard_negative_retraining_performance_comparison.md`
    - Compares every checkpoint on the same evaluation split.
