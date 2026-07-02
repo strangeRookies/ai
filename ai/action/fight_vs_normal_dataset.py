@@ -190,16 +190,14 @@ def normalize_feature_dim(features: np.ndarray, input_size: int = 51, feature_sc
         return features[..., :51].astype(np.float32)
         
     if target_dim == 54:
+        if feature_schema == "keypoint_bbox54" and actual_dim < 54:
+            raise FightDatasetError(f"Cannot pad keypoint features to keypoint_bbox54: actual_dim={actual_dim} -> target_dim={target_dim}")
+            
         if actual_dim == 51:
             if feature_schema == "keypoint_motion54":
                 from .motion_features import append_motion_features
                 if features.ndim == 2:
                     return append_motion_features(features)
-                elif features.ndim == 1:
-                    return np.pad(features, (0, 3), mode="constant").astype(np.float32)
-            elif feature_schema == "keypoint_bbox54":
-                if features.ndim == 2:
-                    return np.pad(features, ((0, 0), (0, 3)), mode="constant").astype(np.float32)
                 elif features.ndim == 1:
                     return np.pad(features, (0, 3), mode="constant").astype(np.float32)
         else:

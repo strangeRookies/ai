@@ -4,6 +4,24 @@ Date: 2026-07-02
 
 This guidebook explains how a human operator should compare the existing baseline model with hard-negative retraining variants. Codex did not run Python, unittest, training, evaluation, or GPU commands for this guidebook.
 
+## 0. Decision: Rebuild Around Strict Bbox54
+
+Use this guidebook only for a `keypoint_bbox54` experiment. The current `keypoint51` balanced result is useful as a historical baseline, but it is not the target experiment.
+
+The dataset and training path may need to be rebuilt because the existing evaluation/data-loader path contains `np.pad` fallback logic that can turn 51-dim keypoint features into fake 54-dim vectors. That path is not valid for this comparison.
+
+Required order:
+
+1. Build or locate the full v2 metadata pool.
+2. Add a strict bbox54 validation gate.
+3. Derive a bbox54-only baseline train/val/test split.
+4. Mine FP rows from the bbox54 baseline evaluation.
+5. Export only approved hard-negative candidates.
+6. Build `baseline`, `hn_0.05`, `hn_0.10`, and `hn_0.20` experiment manifests.
+7. Train/evaluate all variants on the same bbox54 evaluation split.
+
+Do not continue if any sample enters through 51-to-54 padding.
+
 ## 1. Current Purpose
 
 The goal is to compare `baseline`, `hn_0.05`, `hn_0.10`, and `hn_0.20` fairly on the same evaluation split.
@@ -19,6 +37,15 @@ The comparison must answer:
 
 This work must not change production inference defaults, production threshold defaults, or the existing `keypoint51` path. Hard-negative rows are experiment inputs only; they are not automatically merged into the production train set.
 
+The comparison must be based on real 54-dim bbox features:
+
+- `input_size=54`
+- `feature_schema=keypoint_bbox54`
+- checkpoint metadata must record `feature_schema_version=keypoint_bbox54`
+- bbox feature columns `51..53` must be real bbox width, height, and area values
+
+If the result shows `input_size=51` or `feature_schema_version=keypoint51`, it is not a bbox54 comparison result.
+
 ## 2. Files And Directories To Check Before Running
 
 Check these paths before running any comparison:
@@ -32,6 +59,7 @@ Check these paths before running any comparison:
 | `runs/hard_negative_retraining_comparison/` | Expected run output root for comparison logs, exports, metrics, and reports. |
 | `docs/hard_negative_retraining_performance_comparison.md` | Final human-readable comparison report path. |
 | `scripts/evaluate_retraining_manifest_v2.py` | Existing evaluator. For strict `keypoint_bbox54`, verify it does not pad 51-dim data into 54-dim data before using it. |
+| `ai/action/fight_vs_normal_dataset.py` | Existing dataset loader. For strict `keypoint_bbox54`, verify it does not pad 51-dim features into 54-dim data. |
 
 Critical feature rule:
 
@@ -40,7 +68,55 @@ Critical feature rule:
 - bbox columns `51..53` must contain real bbox width, height, and area features.
 - Do not use any path that turns 51-dim vectors into 54-dim vectors with `[0, 0, 0]` or `np.pad`.
 
-## 3. Test Execution Order
+Known invalid path to guard before bbox54 execution:
+
+```bash
+grep -R "np.pad" -n scripts/evaluate_retraining_manifest_v2.py ai/action/fight_vs_normal_dataset.py
+```
+
+If this returns padding branches that run when `feature_schema=keypoint_bbox54`, do not use those branches for the bbox54 experiment. Add a strict failure instead:
+
+```text
+keypoint_bbox54 requires real 54-dim bbox features; 51-to-54 padding is forbidden
+```
+
+## 3. Build The V2 Pool, Then Derive Bbox54 Data
+
+`training_manifest_v2.csv` is the full metadata pool. It is not automatically the final bbox54 training set.
+
+Example commands for the user:
+
+| Example Command | What This Confirms |
+| --- | --- |
+| `python scripts/build_training_manifest_v2.py --base-metadata-csv ../ai_fall_experiments/data/metadata/metadata.csv --hard-negative-csv data/manifests/hard_negative_candidates.csv --faint-reinforcement-csv data/manifests/faint_reinforcement_candidates.csv --synthetic-csv data/manifests/synthetic_candidates.csv --output-csv data/manifests/training_manifest_v2.csv` | Builds the full v2 metadata pool. If hard-negative files are missing, the output may contain only `source_type=real`. |
+| `python scripts/check_manifest_leakage.py --manifest data/manifests/training_manifest_v2.csv` | Checks split leakage and unapproved candidate rows. |
+| `python scripts/inspect_manifest_v2.py --manifest data/manifests/training_manifest_v2.csv --group-by source_type` | Confirms whether hard-negative candidates are actually present. If this helper does not exist, create a read-only inspection tool first. |
+| `python scripts/inspect_manifest_v2.py --manifest data/manifests/training_manifest_v2.csv --group-by label` | Confirms class balance before sampling. |
+
+If the output has only:
+
+```json
+{"source_type_counts": {"real": 215541}}
+```
+
+then hard negatives are not included yet. Treat that result as a real-data pool or keypoint51/bbox54 baseline pool, not as a hard-negative experiment.
+
+For the actual bbox54 run, derive a strict bbox54-only split:
+
+| Example Command | What This Confirms |
+| --- | --- |
+| `python scripts/export_strict_bbox54_manifest.py --input data/manifests/training_manifest_v2.csv --output data/manifests/training_manifest_v2_bbox54.csv --feature-schema keypoint_bbox54 --feature-dim 54 --reject-padding` | Keeps only samples with real bbox54 features and rejects 51-to-54 padding. |
+| `python scripts/split_bbox54_manifest.py --manifest data/manifests/training_manifest_v2_bbox54.csv --train-limit 7000 --val-limit 1500 --test-limit 1400 --per-class --balance-labels --output-dir runs/hard_negative_retraining_comparison/bbox54_splits` | Creates class-balanced bbox54 train/val/test splits. |
+
+Expected bbox54 split files:
+
+- `runs/hard_negative_retraining_comparison/bbox54_splits/train.csv`
+- `runs/hard_negative_retraining_comparison/bbox54_splits/val.csv`
+- `runs/hard_negative_retraining_comparison/bbox54_splits/test.csv`
+- `runs/hard_negative_retraining_comparison/bbox54_splits/split_summary.json`
+- `runs/hard_negative_retraining_comparison/bbox54_splits/rejected_non_bbox54.csv`
+
+## 4. Test Execution Order
 
 The following commands are examples for the user to run. Codex did not run them.
 
@@ -56,7 +132,21 @@ Pass condition:
 - All tests must pass before training or evaluation.
 - If a test reveals 51-to-54 padding, stop and fix the comparison path before running real bbox54 experiments.
 
-## 4. Hard Negative Candidate Validation Order
+## 5. Bbox54 Baseline Before Hard Negatives
+
+Before hard-negative mining, run a strict bbox54 baseline. This baseline is the reference for FP mining and later ratio comparison.
+
+Example commands for the user:
+
+| Example Command | What This Confirms |
+| --- | --- |
+| `python -m ai.action.train_lstm --dataset-csv runs/hard_negative_retraining_comparison/bbox54_splits/train.csv --val-csv runs/hard_negative_retraining_comparison/bbox54_splits/val.csv --input-size 54 --feature-schema keypoint_bbox54 --device cuda --epochs 30 --batch-size 64 --output-dir runs/hard_negative_retraining_comparison/models/bbox54_baseline` | Trains the strict bbox54 baseline model. |
+| `python scripts/evaluate_bbox54_checkpoint.py --checkpoint runs/hard_negative_retraining_comparison/models/bbox54_baseline/best.pt --eval-csv runs/hard_negative_retraining_comparison/bbox54_splits/test.csv --feature-schema keypoint_bbox54 --feature-dim 54 --output-dir runs/hard_negative_retraining_comparison/bbox54_baseline_eval` | Evaluates the bbox54 baseline on the fixed bbox54 test split. |
+| `python scripts/inspect_checkpoint_metadata.py --checkpoint runs/hard_negative_retraining_comparison/models/bbox54_baseline/best.pt` | Confirms checkpoint metadata has `input_size=54` and `feature_schema_version=keypoint_bbox54`. |
+
+Only after this stage should FP rows be mined as hard-negative candidates.
+
+## 6. Hard Negative Candidate Validation Order
 
 Validate hard-negative candidates before exporting ratio-specific train manifests.
 
@@ -80,7 +170,7 @@ Candidate rows must be excluded or quarantined when:
 - `source_video`, label interval, or frame range cannot be verified.
 - `source_type=synthetic_preview` and `--include-synthetic-approved` was not explicitly chosen.
 
-## 5. Ratio-Specific Export Method
+## 7. Ratio-Specific Export Method
 
 Export ratio-specific experimental train manifests. The ratios should be explicit and reproducible.
 
@@ -95,7 +185,7 @@ Example commands for the user:
 
 | Example Command | What This Confirms |
 | --- | --- |
-| `python scripts/export_hard_negative_ratios.py --baseline-manifest data/splits/final_source_video_split/all.csv --hard-negative-candidates data/manifests/hard_negative_candidates.csv --ratios 0.05,0.10,0.20 --feature-schema keypoint_bbox54 --feature-dim 54 --output-dir runs/hard_negative_retraining_comparison/train_exports` | Creates `baseline`, `hn_0.05`, `hn_0.10`, and `hn_0.20` experiment manifests from approved strict bbox54 candidates only. |
+| `python scripts/export_hard_negative_ratios.py --baseline-manifest runs/hard_negative_retraining_comparison/bbox54_splits/train.csv --hard-negative-candidates data/manifests/hard_negative_candidates.csv --ratios 0.05,0.10,0.20 --feature-schema keypoint_bbox54 --feature-dim 54 --output-dir runs/hard_negative_retraining_comparison/train_exports` | Creates `baseline`, `hn_0.05`, `hn_0.10`, and `hn_0.20` experiment manifests from approved strict bbox54 candidates only. |
 | `python scripts/check_manifest_leakage.py --manifest runs/hard_negative_retraining_comparison/train_exports/hn_0.05.csv` | Confirms `hn_0.05` does not leak test/eval source videos or split groups into train. |
 | `python scripts/check_manifest_leakage.py --manifest runs/hard_negative_retraining_comparison/train_exports/hn_0.10.csv` | Same check for `hn_0.10`. |
 | `python scripts/check_manifest_leakage.py --manifest runs/hard_negative_retraining_comparison/train_exports/hn_0.20.csv` | Same check for `hn_0.20`. |
@@ -117,7 +207,7 @@ Expected export files:
 - excluded count by reason,
 - synthetic included/excluded status.
 
-## 6. Baseline Vs Hard Negative Model Comparison Method
+## 8. Baseline Vs Hard Negative Model Comparison Method
 
 All variants must use the same evaluation split. The train manifest changes by ratio; the test/evaluation rows must not change.
 
@@ -139,7 +229,7 @@ Low-memory fallback:
 - If CUDA is unavailable, use CPU only for functional validation, not final performance claims.
 - For long runs, require checkpoint files, intermediate metrics, and resume state under each experiment directory.
 
-## 7. Threshold Sweep Check
+## 9. Threshold Sweep Check
 
 The sweep must include exactly:
 
@@ -164,7 +254,7 @@ Expected threshold files:
 - `runs/hard_negative_retraining_comparison/threshold_audit/<experiment>/threshold_audit.json`
 - `runs/hard_negative_retraining_comparison/threshold_audit/<experiment>/threshold_audit.md`
 
-## 8. Expected Result File Locations
+## 10. Expected Result File Locations
 
 The run should produce:
 
@@ -186,7 +276,7 @@ The run should produce:
 
 The report must state whether it is based on real GPU results or sample/mock validation. Do not treat mock output as model performance.
 
-## 9. Result Interpretation Criteria
+## 11. Result Interpretation Criteria
 
 Use the same primary threshold, then inspect the full threshold sweep.
 
@@ -209,7 +299,7 @@ Recommended ratio rule:
 4. Use `hn_0.20` only if it reduces FP without increasing FN and without scenario overfitting.
 5. Do not change production threshold based only on this comparison; treat threshold values as candidates until RTSP replay/smoke testing is complete.
 
-## 10. Error Types To Check When A Run Fails
+## 12. Error Types To Check When A Run Fails
 
 | Error Type | Likely Cause | What To Check |
 | --- | --- | --- |
@@ -221,8 +311,10 @@ Recommended ratio rule:
 | CUDA OOM | Batch size too large. | Reduce batch size and resume from checkpoint if available. |
 | misleading mock fallback | Script generated plausible metrics without real data. | Do not report these as real performance. Re-run on GPU with real data. |
 | threshold CSV missing | Evaluation predictions were not written or audit path is wrong. | Check `*_eval_predictions.csv` paths and rerun threshold audit. |
+| result still says `input_size=51` | The run used keypoint51, not bbox54. | Rebuild strict bbox54 data and rerun with `--input-size 54 --feature-schema keypoint_bbox54`. |
+| `np.pad` appears in bbox54 path | 51-to-54 fallback is still active. | Stop and add a hard failure for `keypoint_bbox54` when actual feature width is 51. |
 
-## 11. GPU Server Additional Checks
+## 13. GPU Server Additional Checks
 
 On the GPU server, additionally confirm:
 
@@ -245,19 +337,27 @@ Commands to run directly, in order, after the missing strict comparison/export h
    - Confirms bbox54 feature creation and schema guards.
 3. `python -m unittest discover -s tests -p "*hard_negative*"`
    - Confirms approved-only export, ratio counts, same split, threshold sweep, and report generation tests.
-4. `python scripts/export_hard_negative_ratios.py --baseline-manifest data/splits/final_source_video_split/all.csv --hard-negative-candidates data/manifests/hard_negative_candidates.csv --ratios 0.05,0.10,0.20 --feature-schema keypoint_bbox54 --feature-dim 54 --output-dir runs/hard_negative_retraining_comparison/train_exports`
+4. `python scripts/export_strict_bbox54_manifest.py --input data/manifests/training_manifest_v2.csv --output data/manifests/training_manifest_v2_bbox54.csv --feature-schema keypoint_bbox54 --feature-dim 54 --reject-padding`
+   - Creates a strict bbox54-only manifest and rejects padded 51-dim data.
+5. `python scripts/split_bbox54_manifest.py --manifest data/manifests/training_manifest_v2_bbox54.csv --train-limit 7000 --val-limit 1500 --test-limit 1400 --per-class --balance-labels --output-dir runs/hard_negative_retraining_comparison/bbox54_splits`
+   - Creates balanced bbox54 train/val/test splits.
+6. `python -m ai.action.train_lstm --dataset-csv runs/hard_negative_retraining_comparison/bbox54_splits/train.csv --val-csv runs/hard_negative_retraining_comparison/bbox54_splits/val.csv --input-size 54 --feature-schema keypoint_bbox54 --device cuda --epochs 30 --batch-size 64 --output-dir runs/hard_negative_retraining_comparison/models/bbox54_baseline`
+   - Trains the strict bbox54 baseline.
+7. `python scripts/evaluate_bbox54_checkpoint.py --checkpoint runs/hard_negative_retraining_comparison/models/bbox54_baseline/best.pt --eval-csv runs/hard_negative_retraining_comparison/bbox54_splits/test.csv --feature-schema keypoint_bbox54 --feature-dim 54 --output-dir runs/hard_negative_retraining_comparison/bbox54_baseline_eval`
+   - Evaluates bbox54 baseline and produces FP rows for mining.
+8. `python scripts/export_hard_negative_ratios.py --baseline-manifest runs/hard_negative_retraining_comparison/bbox54_splits/train.csv --hard-negative-candidates data/manifests/hard_negative_candidates.csv --ratios 0.05,0.10,0.20 --feature-schema keypoint_bbox54 --feature-dim 54 --output-dir runs/hard_negative_retraining_comparison/train_exports`
    - Exports baseline and ratio-specific train manifests.
-5. `python scripts/check_manifest_leakage.py --manifest runs/hard_negative_retraining_comparison/train_exports/hn_0.05.csv`
+9. `python scripts/check_manifest_leakage.py --manifest runs/hard_negative_retraining_comparison/train_exports/hn_0.05.csv`
    - Checks split leakage for `hn_0.05`.
-6. `python scripts/check_manifest_leakage.py --manifest runs/hard_negative_retraining_comparison/train_exports/hn_0.10.csv`
+10. `python scripts/check_manifest_leakage.py --manifest runs/hard_negative_retraining_comparison/train_exports/hn_0.10.csv`
    - Checks split leakage for `hn_0.10`.
-7. `python scripts/check_manifest_leakage.py --manifest runs/hard_negative_retraining_comparison/train_exports/hn_0.20.csv`
+11. `python scripts/check_manifest_leakage.py --manifest runs/hard_negative_retraining_comparison/train_exports/hn_0.20.csv`
    - Checks split leakage for `hn_0.20`.
-8. `python -m ai.action.train_lstm --dataset-csv runs/hard_negative_retraining_comparison/train_exports/<experiment>.csv --input-size 54 --feature-schema keypoint_bbox54 --device cuda --epochs 30 --batch-size 64 --output-dir runs/hard_negative_retraining_comparison/models/<experiment>`
+12. `python -m ai.action.train_lstm --dataset-csv runs/hard_negative_retraining_comparison/train_exports/<experiment>.csv --input-size 54 --feature-schema keypoint_bbox54 --device cuda --epochs 30 --batch-size 64 --output-dir runs/hard_negative_retraining_comparison/models/<experiment>`
    - Trains each experiment variant. Run once per experiment label.
-9. `python scripts/compare_hard_negative_retraining.py --eval-split runs/hard_negative_retraining_comparison/eval_split.csv --checkpoints <four-checkpoints> --labels baseline,hn_0.05,hn_0.10,hn_0.20 --feature-schema keypoint_bbox54 --feature-dim 54 --output-dir runs/hard_negative_retraining_comparison --report-path docs/hard_negative_retraining_performance_comparison.md`
+13. `python scripts/compare_hard_negative_retraining.py --eval-split runs/hard_negative_retraining_comparison/bbox54_splits/test.csv --checkpoints <four-checkpoints> --labels baseline,hn_0.05,hn_0.10,hn_0.20 --feature-schema keypoint_bbox54 --feature-dim 54 --output-dir runs/hard_negative_retraining_comparison --report-path docs/hard_negative_retraining_performance_comparison.md`
    - Compares every checkpoint on the same evaluation split.
-10. `python scripts/audit_lstm_thresholds.py --predictions runs/hard_negative_retraining_comparison/predictions/<experiment>_eval_predictions.csv --output-dir runs/hard_negative_retraining_comparison/threshold_audit/<experiment>`
+14. `python scripts/audit_lstm_thresholds.py --predictions runs/hard_negative_retraining_comparison/predictions/<experiment>_eval_predictions.csv --output-dir runs/hard_negative_retraining_comparison/threshold_audit/<experiment>`
     - Produces per-experiment threshold sweep artifacts.
 
 Final judgment should be made only after real GPU output exists. Do not infer real performance from sample/mock data.
