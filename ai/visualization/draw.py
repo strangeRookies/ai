@@ -107,3 +107,25 @@ def draw_keypoints(output, keypoints, min_confidence=0.25, frame_w=None):
     for start, end in skeleton:
         if start < len(valid) and end < len(valid) and valid[start] and valid[end]:
             cv2.line(output, valid[start], valid[end], (255, 191, 0), line_thickness)
+
+
+def draw_roi_polygon(frame, roi_configs, color=(0, 255, 255), thickness=2):
+    import json
+    import numpy as np
+    import cv2
+
+    if not roi_configs:
+        return
+    h, w = frame.shape[:2]
+    for roi in roi_configs:
+        raw = roi.get("polygonPoints", "")
+        if not raw:
+            continue
+        try:
+            polygon = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(polygon, list) or len(polygon) < 3:
+            continue
+        pts = np.array([[round(x * w), round(y * h)] for x, y in polygon], dtype=np.int32)
+        cv2.polylines(frame, [pts], isClosed=True, color=color, thickness=thickness)

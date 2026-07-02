@@ -679,6 +679,12 @@ class OverlayWorker:
                 )
 
             if overlay is not None:
+                if roi_configs:
+                    from ai.visualization.draw import draw_roi_polygon
+                    draw_roi_polygon(overlay, roi_configs, color=(0, 255, 255))
+                if exit_roi_configs:
+                    from ai.visualization.draw import draw_roi_polygon
+                    draw_roi_polygon(overlay, exit_roi_configs, color=(0, 165, 255))
                 self.state.update_frame(overlay, summary)
             if self.args.max_frames > 0 and summary["frames_processed"] >= self.args.max_frames:
                 break
