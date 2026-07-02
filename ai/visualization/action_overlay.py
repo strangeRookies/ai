@@ -62,18 +62,20 @@ def bbox_visual_state(box, threshold=DEFAULT_FAINT_THRESHOLD):
 
 def format_bbox_label(box, threshold=DEFAULT_FAINT_THRESHOLD):
     raw_id = box.get("track_id")
-    display_id = box.get("display_id")
-    # Prefer display_id for the operator-facing label; fall back to raw
-    shown_id = display_id if display_id is not None else (int(raw_id) if raw_id is not None else None)
-    track_text = f"ID {shown_id}" if shown_id is not None else "ID ?"
+    shown_id = int(raw_id) if raw_id is not None else None
+    track_text = f"track ID: {shown_id}" if shown_id is not None else "track ID: n/a"
     faint_prob = box.get("faint_probability")
     state = bbox_visual_state(box, threshold)
     if state == "alert":
-        prob_text = "n/a" if faint_prob is None else f"{float(faint_prob):.2f}"
-        return append_track_debug(f"ALERT | {track_text} | Faint {prob_text}", box)
+        prob_text = "n/a" if faint_prob is None else _percent_text(faint_prob)
+        return append_track_debug(f"{track_text} | FAINT {prob_text}", box)
     if state == "warning":
-        return append_track_debug(f"{track_text} | Faint {float(faint_prob):.2f}", box)
+        return append_track_debug(f"{track_text} | FAINT {_percent_text(faint_prob)}", box)
     return append_track_debug(track_text, box)
+
+
+def _percent_text(value):
+    return f"{float(value) * 100:.0f}%"
 
 
 def append_track_debug(text, box):
@@ -84,11 +86,11 @@ def append_track_debug(text, box):
     conf = box.get("track_confidence")
     conf_text = "n/a" if conf is None else f"{float(conf):.2f}"
     age_text = "?" if age is None else str(int(age))
-    # Show raw track_id alongside display_id in debug mode
+    # The visible label uses raw tracker_id. Keep display_id only as diagnostics.
     raw_id = box.get("track_id")
     display_id = box.get("display_id")
     if raw_id is not None and display_id is not None and int(raw_id) != int(display_id):
-        raw_suffix = f" / raw {int(raw_id)}"
+        raw_suffix = f" / display {int(display_id)}"
     else:
         raw_suffix = ""
     return f"{text}{raw_suffix} | age {age_text} | miss {int(missing)} | conf {conf_text}"

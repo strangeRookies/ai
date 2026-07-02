@@ -4,7 +4,7 @@ Covers:
 - Raw IDs can be large while display IDs start from 1
 - display_id remains stable across frames for the same raw track
 - Removed tracks free their display IDs safely and the IDs can be reused
-- Debug label formatting includes both display_id and raw ID when they differ
+- Debug label formatting can include display_id as diagnostics
 """
 
 import sys
@@ -115,9 +115,9 @@ class DisplayIdMapperTest(unittest.TestCase):
 
 
 class DisplayIdOverlayLabelTest(unittest.TestCase):
-    """Verify that format_bbox_label uses display_id in the label text."""
+    """Verify that format_bbox_label uses raw tracker IDs in the visible label."""
 
-    def test_normal_label_uses_display_id(self):
+    def test_normal_label_uses_raw_track_id(self):
         box = {
             "track_id": 73,
             "display_id": 2,
@@ -125,9 +125,9 @@ class DisplayIdOverlayLabelTest(unittest.TestCase):
             "event_triggered": False,
         }
         label = format_bbox_label(box, threshold=0.3)
-        self.assertEqual(label, "ID 2")
+        self.assertEqual(label, "track ID: 73")
 
-    def test_warning_label_uses_display_id(self):
+    def test_warning_label_uses_raw_track_id(self):
         box = {
             "track_id": 73,
             "display_id": 2,
@@ -135,9 +135,9 @@ class DisplayIdOverlayLabelTest(unittest.TestCase):
             "event_triggered": False,
         }
         label = format_bbox_label(box, threshold=0.3)
-        self.assertEqual(label, "ID 2 | Faint 0.45")
+        self.assertEqual(label, "track ID: 73 | FAINT 45%")
 
-    def test_alert_label_uses_display_id(self):
+    def test_alert_label_uses_raw_track_id(self):
         box = {
             "track_id": 73,
             "display_id": 2,
@@ -145,9 +145,9 @@ class DisplayIdOverlayLabelTest(unittest.TestCase):
             "event_triggered": True,
         }
         label = format_bbox_label(box, threshold=0.3)
-        self.assertEqual(label, "ALERT | ID 2 | Faint 0.82")
+        self.assertEqual(label, "track ID: 73 | FAINT 82%")
 
-    def test_debug_label_shows_raw_id_when_different(self):
+    def test_debug_label_shows_display_id_when_different(self):
         box = {
             "track_id": 73,
             "display_id": 2,
@@ -159,12 +159,11 @@ class DisplayIdOverlayLabelTest(unittest.TestCase):
             "track_confidence": 0.88,
         }
         label = format_bbox_label(box, threshold=0.3)
-        # label must contain "ID 2" and "raw 73"
-        self.assertIn("ID 2", label)
-        self.assertIn("raw 73", label)
+        self.assertIn("track ID: 73", label)
+        self.assertIn("display 2", label)
 
-    def test_debug_label_omits_raw_suffix_when_ids_match(self):
-        """When display_id == track_id (e.g. first track), no raw suffix."""
+    def test_debug_label_omits_display_suffix_when_ids_match(self):
+        """When display_id == track_id (e.g. first track), no display suffix."""
         box = {
             "track_id": 1,
             "display_id": 1,
@@ -176,7 +175,7 @@ class DisplayIdOverlayLabelTest(unittest.TestCase):
             "track_confidence": 0.95,
         }
         label = format_bbox_label(box, threshold=0.3)
-        self.assertNotIn("raw", label)
+        self.assertNotIn("display", label)
 
     def test_fallback_to_raw_id_when_no_display_id(self):
         """If display_id is absent, raw track_id is shown."""
@@ -186,7 +185,7 @@ class DisplayIdOverlayLabelTest(unittest.TestCase):
             "event_triggered": False,
         }
         label = format_bbox_label(box, threshold=0.3)
-        self.assertEqual(label, "ID 73")
+        self.assertEqual(label, "track ID: 73")
 
 
 if __name__ == "__main__":
