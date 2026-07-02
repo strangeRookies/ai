@@ -27,12 +27,14 @@ fi
 
 echo "[start_ai_stable] Starting start_simulated_rtsp_from_folder.py..."
 nohup python scripts/start_simulated_rtsp_from_folder.py \
-    --video-dir /home/$USER/yolo_training/ai_fall_experiments/data/raw/indoor_chromakey/videos \
+    --video-dir /home/$USER/yolo_training/ai_fall_experiments/data/raw \
     --backend-url http://127.0.0.1:18080 \
     --rtsp-host 127.0.0.1 \
     --rtsp-port 8554 \
     --poll-interval 30 \
-    --ffmpeg-mode auto > publisher.log 2>&1 </dev/null &
+    --ffmpeg-mode auto \
+    --domain inside \
+    --label swoon > publisher.log 2>&1 </dev/null &
 
 sleep 8
 
@@ -40,7 +42,7 @@ echo "[start_ai_stable] Starting run_registered_cameras.py..."
 nohup python scripts/run_registered_cameras.py \
     --backend-base-url http://127.0.0.1:18080 \
     --rtsp-base-url rtsp://127.0.0.1:8554 \
-    --video-pool /home/$USER/yolo_training/ai_fall_experiments/data/raw/indoor_chromakey/videos \
+    --video-pool /home/$USER/yolo_training/ai_fall_experiments/data/raw \
     --overlay-report-enabled \
     --detector-mode real \
     --yolo-model yolo26n-pose.pt \
@@ -48,6 +50,8 @@ nohup python scripts/run_registered_cameras.py \
     --mqtt-host "$MQTT_HOST" \
     --mqtt-port "$MQTT_PORT" \
     --mqtt-topic safety/events \
-    --skip-simulated-ffmpeg > ai_runner.log 2>&1 </dev/null &
+    --skip-simulated-ffmpeg \
+    --domain inside \
+    --label swoon > ai_runner.log 2>&1 </dev/null &
 
 echo "[start_ai_stable] All processes spawned in background."

@@ -20,6 +20,77 @@ def scan_video_directory(directory_path: str) -> list[Path]:
     return video_files
 
 
+def filter_video_files(
+    video_files: list[Path],
+    domain: str | None,
+    label: str | None,
+    video_filter: str | None,
+) -> tuple[list[Path], list[Path]]:
+    matching: list[Path] = []
+    excluded: list[Path] = []
+    
+    for p in video_files:
+        name_lower = p.name.lower()
+        matched = True
+        
+        if domain and domain.lower() not in name_lower:
+            matched = False
+        if label and label.lower() not in name_lower:
+            matched = False
+        if video_filter and video_filter.lower() not in name_lower:
+            matched = False
+            
+        if matched:
+            matching.append(p)
+        else:
+            excluded.append(p)
+            
+    if not matching:
+        filter_summary = f"domain={domain}, label={label}, video_filter={video_filter}"
+        raise ValueError(
+            f"No video files matched the filters ({filter_summary}) in the directory. "
+            f"Total scanned: {len(video_files)}, Excluded: {len(excluded)}"
+        )
+        
+    return matching, excluded
+
+
+def estimate_video_metadata(video_path: Path) -> dict[str, str]:
+    name_lower = video_path.name.lower()
+    
+    # Domain estimation
+    if "inside" in name_lower:
+        domain = "inside"
+    elif "outside" in name_lower:
+        domain = "outside"
+    else:
+        domain = "unknown"
+        
+    # Label estimation
+    if "swoon" in name_lower:
+        label = "swoon"
+    elif "fall" in name_lower:
+        label = "fall"
+    elif "fight" in name_lower:
+        label = "fight"
+    elif "assault" in name_lower:
+        label = "assault"
+    else:
+        label = "unknown"
+        
+    # Source estimation (synthetic vs real)
+    if "synthetic" in name_lower or "preview" in name_lower:
+        source = "synthetic"
+    else:
+        source = "real"
+        
+    return {
+        "domain": domain,
+        "label": label,
+        "source": source,
+    }
+
+
 def resolve_assigned_video_path(camera: RegisteredCamera, video_pool: Path, repo_root: Path) -> Path | None:
     if not camera.assigned_video_path:
         return None
@@ -45,3 +116,4 @@ def stable_video_index(camera_login_id: str, video_count: int) -> int:
         raise ValueError("video_count must be positive")
     digest = hashlib.sha256(camera_login_id.encode("utf-8")).digest()
     return int.from_bytes(digest[:8], byteorder="big") % video_count
+

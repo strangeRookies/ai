@@ -97,6 +97,9 @@ class RunnerConfig:
     skip_ffmpeg_spawn: bool = False
     overlay_public_base_url: str | None = None
     overlay_report_enabled: bool = False
+    domain: str | None = None
+    label: str | None = None
+    video_filter: str | None = None
 
 
 def normalize_camera_login_id(login_id: str) -> str:
@@ -211,7 +214,7 @@ def first_video_from_pool(video_pool: Path) -> Path | None:
     return next(iter(sorted(video_pool.glob("*.mp4"))), None)
 
 
-def resolve_simulated_video(camera: RegisteredCamera, video_pool: Path) -> Path:
+def resolve_simulated_video(camera: RegisteredCamera, video_pool: Path, config: RunnerConfig | None = None) -> Path:
     if camera.assigned_video_path:
         pool_root = resolved_video_pool(video_pool, REPO_ROOT)
         for candidate in assigned_video_candidates(camera.assigned_video_path, video_pool, REPO_ROOT):
@@ -222,13 +225,33 @@ def resolve_simulated_video(camera: RegisteredCamera, video_pool: Path) -> Path:
                     f"assignedVideoPath must stay under video_pool for camera_login_id={camera.camera_login_id}"
                 )
 
-    fallback = first_video_from_pool(video_pool)
-    if fallback is not None:
-        return fallback
+    # Load and filter pool videos
+    if not video_pool.exists():
+        raise RuntimeError(f"video_pool directory does not exist: {video_pool}")
+    
+    extensions = {".mp4", ".avi", ".mov", ".mkv"}
+    video_files = [p for p in video_pool.iterdir() if p.is_file() and p.suffix.lower() in extensions]
+    video_files.sort(key=lambda x: x.name)
 
-    raise RuntimeError(
-        f"no assignedVideoPath or fallback mp4 found for camera_login_id={camera.camera_login_id}"
+    if config is not None:
+        from ai.simulated_rtsp_sources import filter_video_files
+        matching, _ = filter_video_files(video_files, config.domain, config.label, config.video_filter)
+        video_files = matching
+
+    if not video_files:
+        raise RuntimeError(f"no matching videos found in pool {video_pool}")
+
+    from ai.simulated_rtsp_sources import stable_video_index, estimate_video_metadata
+    idx = stable_video_index(camera.camera_login_id, len(video_files))
+    assigned = video_files[idx]
+
+    meta = estimate_video_metadata(assigned)
+    print(
+        f"[registered-cameras] Mapping camera_login_id={camera.camera_login_id} "
+        f"to video={assigned.name} (domain={meta['domain']}, label={meta['label']}, source={meta['source']})",
+        flush=True
     )
+    return assigned
 
 
 def build_overlay_command(
@@ -298,7 +321,7 @@ def input_rtsp_for_camera(camera: RegisteredCamera, config: RunnerConfig) -> tup
             rtsp_url = camera_rtsp_url(config.rtsp_base_url, camera.camera_login_id)
             if getattr(config, "skip_ffmpeg_spawn", False):
                 return rtsp_url, None
-            video_path = resolve_simulated_video(camera, config.video_pool)
+            video_path = resolve_simulated_video(camera, config.video_pool, config)
             return rtsp_url, build_ffmpeg_command(video_path, rtsp_url)
         case unreachable:
             assert_never(unreachable)
