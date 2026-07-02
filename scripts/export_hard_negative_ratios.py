@@ -174,6 +174,16 @@ def main():
         }
         print(f"Exported variant to {output_path} (HN added: {len(sampled_hn)}, Total Train: {len(new_train)})")
 
+    # Write eval_split.csv (val + test baseline rows only)
+    eval_rows = val_baseline + test_baseline
+    eval_split_path = output_dir.parent / "eval_split.csv"
+    with eval_split_path.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for r in eval_rows:
+            writer.writerow(r)
+    print(f"Saved eval split manifest to {eval_split_path} (Total Eval: {len(eval_rows)})")
+
     # Save summary
     summary = {
         "baseline_train_count": n_baseline_train,
