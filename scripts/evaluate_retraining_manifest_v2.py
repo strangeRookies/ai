@@ -14,6 +14,7 @@ import numpy as np
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from ai.learning.candidate_manifests import check_manifest_leakage
+from ai.learning.retraining_prediction_exports import write_prediction_exports
 from ai.action.classifier import LSTMActionModel
 from ai.action.fight_vs_normal_metrics import classification_metrics
 
@@ -158,11 +159,21 @@ def collect_dataset_sequences(rows: list[dict[str, str]], input_size: int = 51, 
             y_list.append(label_val)
             seq_metadata.append({
                 "clip_id": clip_id,
+                "clip_path": row.get("clip_path", row.get("video_path", "")),
                 "label_name": label_name,
                 "split": split,
                 "sequence_index": idx,
+                "source_video": row.get("source_video", ""),
+                "frame_id": row.get("frame_id", row.get("frameId", "")),
+                "frameId": row.get("frameId", row.get("frame_id", "")),
+                "start_frame": row.get("start_frame", ""),
+                "end_frame": row.get("end_frame", ""),
+                "split_group_id": row.get("split_group_id", ""),
+                "parent_clip_id": row.get("parent_clip_id", ""),
                 "scenario_tag": row.get("scenario_tag", ""),
                 "augmentation_type": row.get("augmentation_type", ""),
+                "feature_schema": feature_schema,
+                "feature_dim": str(input_size),
             })
 
     if not x_list:
@@ -776,6 +787,29 @@ def main():
 
     baseline_summary = calculate_metrics_from_preds(test_y, base_preds, base_probs, base_tag_stats, base_aug_stats)
     retrained_summary = calculate_metrics_from_preds(test_y, ret_preds, ret_probs, ret_tag_stats, ret_aug_stats)
+    baseline_exports = write_prediction_exports(
+        output_dir,
+        "baseline",
+        test_y.tolist(),
+        base_preds,
+        base_probs,
+        test_meta,
+        threshold=0.5,
+        write_unprefixed_aliases=True,
+    )
+    retrained_exports = write_prediction_exports(
+        output_dir,
+        "retrained",
+        test_y.tolist(),
+        ret_preds,
+        ret_probs,
+        test_meta,
+        threshold=0.5,
+    )
+    print(f"Saved baseline prediction rows to {baseline_exports['predictions_csv']}")
+    print(f"Saved baseline FP rows to {output_dir / 'false_positives.csv'}")
+    print(f"Saved baseline FN rows to {output_dir / 'false_negatives.csv'}")
+    print(f"Saved retrained prediction rows to {retrained_exports['predictions_csv']}")
 
     counts_info = {
         "base_train": len(train_rows_base),
@@ -794,6 +828,11 @@ def main():
         "counts": counts_info,
         "input_size": args.input_size,
         "feature_schema_version": args.feature_schema,
+        "prediction_exports": {
+            "baseline": baseline_exports,
+            "retrained": retrained_exports,
+            "default_error_csv_source": "baseline",
+        },
     }
     with json_path.open("w", encoding="utf-8") as fp:
         json.dump(summary_data, fp, indent=2, ensure_ascii=False)
