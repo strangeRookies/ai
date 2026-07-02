@@ -30,14 +30,14 @@ def filter_video_files(
     excluded: list[Path] = []
     
     for p in video_files:
-        name_lower = p.name.lower()
+        path_lower = str(p.resolve()).lower()
         matched = True
         
-        if domain and domain.lower() not in name_lower:
+        if domain and domain.lower() not in path_lower:
             matched = False
-        if label and label.lower() not in name_lower:
+        if label and label.lower() not in path_lower:
             matched = False
-        if video_filter and video_filter.lower() not in name_lower:
+        if video_filter and video_filter.lower() not in path_lower:
             matched = False
             
         if matched:
@@ -56,30 +56,30 @@ def filter_video_files(
 
 
 def estimate_video_metadata(video_path: Path) -> dict[str, str]:
-    name_lower = video_path.name.lower()
+    path_lower = str(video_path.resolve()).lower()
     
     # Domain estimation
-    if "inside" in name_lower:
+    if "inside" in path_lower or "indoor" in path_lower:
         domain = "inside"
-    elif "outside" in name_lower:
+    elif "outside" in path_lower or "outdoor" in path_lower:
         domain = "outside"
     else:
         domain = "unknown"
         
     # Label estimation
-    if "swoon" in name_lower:
+    if "swoon" in path_lower or "swoom" in path_lower:
         label = "swoon"
-    elif "fall" in name_lower:
+    elif "fall" in path_lower:
         label = "fall"
-    elif "fight" in name_lower:
+    elif "fight" in path_lower:
         label = "fight"
-    elif "assault" in name_lower:
+    elif "assault" in path_lower:
         label = "assault"
     else:
         label = "unknown"
         
     # Source estimation (synthetic vs real)
-    if "synthetic" in name_lower or "preview" in name_lower:
+    if "synthetic" in path_lower or "preview" in path_lower:
         source = "synthetic"
     else:
         source = "real"
