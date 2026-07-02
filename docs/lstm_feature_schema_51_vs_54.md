@@ -61,11 +61,16 @@
 
 로컬 개발 환경에서는 dry-run 또는 mock 모드로 shape와 리포트 형식만 빠르게 검증하고, 대량 데이터(21만 개)에 대한 실제 학습 및 평가는 **GPU 서버**에서 아래 명령어를 복사하여 실행합니다.
 
-### 4.1. 가상환경 활성화 (welabs 계정 예시)
+### 4.1. 가상환경 활성화 및 data 심볼릭 링크 생성 (welabs 계정 예시)
 ```bash
-# 가상환경 진입
+# 1. 작업 디렉터리 이동 및 가상환경 진입
 cd ~/yolo_training/strange_ai_lstm
 source .venv/bin/activate
+
+# 2. 데이터셋을 불러올 수 있도록 실제 데이터 저장소에 대한 심볼릭 링크 생성 (최초 1회 실행)
+if [ ! -e data ]; then
+  ln -s /home/welabs/yolo_training/ai_fall_experiments/data data
+fi
 ```
 
 ### 4.2. 51차원 Baseline 모델 학습 및 평가

@@ -32,7 +32,7 @@ nohup python scripts/start_simulated_rtsp_from_folder.py \
     --rtsp-host 127.0.0.1 \
     --rtsp-port 8554 \
     --poll-interval 30 \
-    --ffmpeg-mode copy > publisher.log 2>&1 </dev/null &
+    --ffmpeg-mode auto > publisher.log 2>&1 </dev/null &
 
 sleep 8
 
