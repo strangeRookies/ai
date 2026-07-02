@@ -23,13 +23,14 @@ from ai.inference.rtsp_runtime import (
     update_quantitative_summary,
 )
 from ai.overlay_http import OverlayState, create_overlay_server
-from ai.roi import apply_roi_mask, combine_roi_masks
+from ai.roi import apply_roi_mask, combine_roi_masks, find_boxes_in_exit_zone
 from ai.streams.video_reader import VideoReader
 from ai.visualization.action_overlay import annotate_boxes_with_action, annotate_boxes_with_track_actions, draw_metrics_panel, faint_probability
 from ai.visualization.action_overlay import format_action_overlay_text, initial_overlay_summary, update_overlay_runtime
 from ai.visualization.draw import draw_overlay
 from scripts.run_rtsp_inference import DEFAULT_ACTION_MODEL, DEFAULT_CAMERA_COOLDOWN_SECONDS, DEFAULT_FAINT_THRESHOLD, DEFAULT_MIN_CONSECUTIVE_FAINT
 from scripts.run_rtsp_inference import FaintEventPostProcessor, create_classifier, create_detector
+from ai.action.faint_post_processing import ExitEventPostProcessor, DEFAULT_EXIT_MIN_CONSECUTIVE, DEFAULT_EXIT_COOLDOWN_SECONDS
 from stream.rtsp_reader import redact_url
 from tracking.display_id_mapper import DisplayIdMapper
 from ai.publishers.event_publisher import create_event_publisher, mqtt_topic_settings_from_args
@@ -106,6 +107,8 @@ def process_frame(
     frame_buffer=None,
     dropped_frame_count=None,
     roi_mask=None,
+    exit_roi_mask=None,
+    exit_post_processor=None,
 ):
     stream_id = getattr(args, "camera_login_id", None) or args.camera_id
     frame_metadata = None
@@ -171,6 +174,28 @@ def process_frame(
     summary["max_active_tracks"] = max(summary.get("max_active_tracks", 0), active_tracks)
     if tracker is not None:
         update_tracking_summary(summary, tracker.diagnostics())
+
+    # EXIT 이탈 감지: 트래킹된 박스 center가 EXIT ROI 안에 있으면 알림
+    if exit_roi_mask is not None and exit_post_processor is not None:
+        all_track_ids = {int(float(str(b["track_id"]))) for b in boxes if b.get("track_id") is not None}
+        in_exit_zone = find_boxes_in_exit_zone(boxes, exit_roi_mask)
+        for track_id in all_track_ids - in_exit_zone:
+            exit_post_processor.reset_track(args.camera_id, track_id)
+        for track_id in in_exit_zone:
+            if exit_post_processor.should_trigger(args.camera_id, track_id, frame_packet.timestamp):
+                exit_boxes = [b for b in boxes if b.get("track_id") is not None and int(float(str(b["track_id"]))) == track_id]
+                exit_payload = build_inference_event_payload(
+                    args, frame_packet,
+                    {"label": "exit", "score": 1.0, "probabilities": {"exit": 1.0}},
+                    exit_boxes, None,
+                    frame_metadata=frame_metadata,
+                    published_at_ms=None,
+                    dropped_frame_count=dropped_frame_count,
+                )
+                topic_settings_exit = mqtt_topic_settings_from_args(args)
+                if publisher is not None:
+                    publisher.publish(exit_payload, topic=topic_settings_exit["event_topic"])
+                print(f"[exit-event] {stream_id} track_id={track_id}", flush=True)
 
     # Update display ID mapping so operator labels stay compact (1, 2, 3…)
     if display_id_mapper is not None:
@@ -524,6 +549,13 @@ class OverlayWorker:
         roi_configs = getattr(self.args, "roi_configs_parsed", [])
         cached_roi_mask = None
         cached_roi_frame_shape = None
+        exit_roi_configs = getattr(self.args, "exit_roi_configs_parsed", [])
+        cached_exit_mask = None
+        cached_exit_frame_shape = None
+        exit_post_processor = ExitEventPostProcessor(
+            min_consecutive=getattr(self.args, "exit_min_consecutive", DEFAULT_EXIT_MIN_CONSECUTIVE),
+            cooldown_seconds=getattr(self.args, "exit_cooldown_seconds", DEFAULT_EXIT_COOLDOWN_SECONDS),
+        )
 
         sequence_buffers = {}
         for cid in camera_ids:
@@ -571,6 +603,16 @@ class OverlayWorker:
                         flush=True,
                     )
 
+            if exit_roi_configs:
+                h, w = frame_packet.frame.shape[:2]
+                if cached_exit_mask is None or cached_exit_frame_shape != (h, w):
+                    cached_exit_mask = combine_roi_masks(exit_roi_configs, h, w)
+                    cached_exit_frame_shape = (h, w)
+                    print(
+                        f"[ai-overlay][exit-roi] mask built: {len(exit_roi_configs)} region(s) frame={w}x{h}",
+                        flush=True,
+                    )
+
             inference_start = time.perf_counter()
             overlay = process_frame(
                 frame_packet, detector, classifier, sequence_buffers[current_cam_id], summary, self.args,
@@ -581,6 +623,8 @@ class OverlayWorker:
                 frame_buffer=self.frame_buffer,
                 dropped_frame_count=self.queue.dropped_frame_count,
                 roi_mask=cached_roi_mask,
+                exit_roi_mask=cached_exit_mask,
+                exit_post_processor=exit_post_processor,
             )
 
             now_ms = time.time_ns() // 1_000_000
@@ -703,6 +747,13 @@ def main():
         default=None,
         help="JSON array of active ROI config objects (polygonPoints in 0~1 normalized coords)",
     )
+    parser.add_argument(
+        "--exit-roi-configs",
+        default=None,
+        help="JSON array of EXIT scenario ROI config objects",
+    )
+    parser.add_argument("--exit-min-consecutive", type=int, default=DEFAULT_EXIT_MIN_CONSECUTIVE)
+    parser.add_argument("--exit-cooldown-seconds", type=float, default=DEFAULT_EXIT_COOLDOWN_SECONDS)
     
     # MQTT Options
     parser.add_argument("--publisher", choices=["mqtt", "console"], help="Event publisher mode (default: from env or console if dry-run)")
@@ -727,6 +778,16 @@ def main():
                 print(f"[ai-overlay][roi] loaded {len(parsed)} ROI config(s)", flush=True)
         except json.JSONDecodeError:
             print("[ai-overlay][roi] warning: failed to parse --roi-configs JSON", flush=True)
+
+    args.exit_roi_configs_parsed = []
+    if args.exit_roi_configs:
+        try:
+            parsed = json.loads(args.exit_roi_configs)
+            if isinstance(parsed, list):
+                args.exit_roi_configs_parsed = parsed
+                print(f"[ai-overlay][exit-roi] loaded {len(parsed)} EXIT ROI config(s)", flush=True)
+        except json.JSONDecodeError:
+            print("[ai-overlay][exit-roi] warning: failed to parse --exit-roi-configs JSON", flush=True)
 
     # Register worker to prevent duplicate starts for same cameraLoginId
     from ai.worker_registry import register_worker, unregister_worker

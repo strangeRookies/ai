@@ -89,10 +89,10 @@ def is_alert_prediction(prediction):
 
 def faint_probability(prediction):
     """예측 결과 딕셔너리에서 실신(Faint) 확률값을 추출하여 float 형태로 반환합니다.
-    
+
     Args:
         prediction (dict): 예측 출력 결과
-        
+
     Returns:
         float or None: 실신 클래스에 대한 확률값 또는 정보가 없으면 None
     """
@@ -104,3 +104,33 @@ def faint_probability(prediction):
     if prediction.get("label") == "Faint":
         return float(prediction.get("score", 0.0))
     return None
+
+
+DEFAULT_EXIT_MIN_CONSECUTIVE = 2
+DEFAULT_EXIT_COOLDOWN_SECONDS = 15.0
+
+
+class ExitEventPostProcessor:
+    """EXIT ROI 이탈 감지 후처리기 — 사람이 EXIT 구역에 연속 N회 감지되면 알림."""
+
+    def __init__(self, min_consecutive=DEFAULT_EXIT_MIN_CONSECUTIVE, cooldown_seconds=DEFAULT_EXIT_COOLDOWN_SECONDS):
+        self.min_consecutive = max(1, int(min_consecutive))
+        self.cooldown_seconds = max(0.0, float(cooldown_seconds))
+        self._consecutive_by_track = {}
+        self._last_event_time = {}
+
+    def should_trigger(self, camera_id, track_id, timestamp):
+        key = f"{camera_id}:track:{track_id}"
+        consecutive = self._consecutive_by_track.get(key, 0) + 1
+        self._consecutive_by_track[key] = consecutive
+        if consecutive < self.min_consecutive:
+            return False
+        cooldown_key = str(camera_id)
+        last = self._last_event_time.get(cooldown_key)
+        if last is not None and float(timestamp) - last < self.cooldown_seconds:
+            return False
+        self._last_event_time[cooldown_key] = float(timestamp)
+        return True
+
+    def reset_track(self, camera_id, track_id):
+        self._consecutive_by_track[f"{camera_id}:track:{track_id}"] = 0

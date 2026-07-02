@@ -24,6 +24,9 @@ DEFAULT_BACKEND_BASE_URL: Final = "http://localhost:8080"
 DEFAULT_RTSP_BASE_URL: Final = "rtsp://localhost:8554"
 DEFAULT_VIDEO_POOL: Final = "video_pool"
 
+FAINT_SCENARIO_TYPES: Final = {"FALL_BED", "COLLAPSE", "SYNCOPE"}
+EXIT_SCENARIO_TYPES: Final = {"EXIT"}
+
 CameraSourceType = Literal["REAL_RTSP", "SIMULATED_RTSP"]
 
 
@@ -59,6 +62,7 @@ class RegisteredCamera:
     source_type: CameraSourceType
     assigned_video_path: str | None
     roi_configs: tuple[dict, ...] = field(default_factory=tuple)
+    exit_roi_configs: tuple[dict, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,16 +154,20 @@ def parse_camera(raw: RawCamera) -> RegisteredCamera | None:
             return None
 
     raw_rois = raw.get("roiConfigs") or []
-    roi_configs = tuple(
-        {
-            "roiConfigId": r.get("roiConfigId"),
-            "scenarioId": r.get("scenarioId"),
-            "scenarioType": r.get("scenarioType"),
-            "polygonPoints": r.get("polygonPoints", ""),
-        }
-        for r in raw_rois
-        if isinstance(r, dict) and r.get("polygonPoints")
-    )
+    faint_rois = [r for r in raw_rois if isinstance(r, dict) and r.get("scenarioType") in FAINT_SCENARIO_TYPES]
+    exit_rois  = [r for r in raw_rois if isinstance(r, dict) and r.get("scenarioType") in EXIT_SCENARIO_TYPES]
+
+    def _make_roi_tuple(rois):
+        return tuple(
+            {
+                "roiConfigId": r.get("roiConfigId"),
+                "scenarioId": r.get("scenarioId"),
+                "scenarioType": r.get("scenarioType"),
+                "polygonPoints": r.get("polygonPoints", ""),
+            }
+            for r in rois
+            if r.get("polygonPoints")
+        )
 
     return RegisteredCamera(
         camera_id=str(raw.get("cameraId") or login_id),
@@ -167,7 +175,8 @@ def parse_camera(raw: RawCamera) -> RegisteredCamera | None:
         rtsp_url=raw.get("rtspUrl"),
         source_type=source_type,
         assigned_video_path=raw.get("assignedVideoPath"),
-        roi_configs=roi_configs,
+        roi_configs=_make_roi_tuple(faint_rois),
+        exit_roi_configs=_make_roi_tuple(exit_rois),
     )
 
 
@@ -308,6 +317,8 @@ def build_overlay_command(
         command.append("--print-events")
     if camera.roi_configs:
         command.extend(["--roi-configs", json.dumps(list(camera.roi_configs))])
+    if camera.exit_roi_configs:
+        command.extend(["--exit-roi-configs", json.dumps(list(camera.exit_roi_configs))])
     return command
 
 

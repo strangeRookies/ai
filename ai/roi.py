@@ -75,3 +75,22 @@ def apply_roi_mask(frame: np.ndarray, mask: np.ndarray | None) -> np.ndarray:
     if mask is None:
         return frame
     return cv2.bitwise_and(frame, frame, mask=mask)
+
+
+def find_boxes_in_exit_zone(boxes: list, mask: np.ndarray | None) -> set:
+    """트래킹된 박스 중 center가 EXIT ROI 마스크 안에 있는 track_id 집합 반환."""
+    if mask is None:
+        return set()
+    h, w = mask.shape[:2]
+    result = set()
+    for box in boxes:
+        track_id = box.get("track_id")
+        if track_id is None:
+            continue
+        cx = int((float(box.get("x1", 0)) + float(box.get("x2", 0))) / 2)
+        cy = int((float(box.get("y1", 0)) + float(box.get("y2", 0))) / 2)
+        cx = max(0, min(cx, w - 1))
+        cy = max(0, min(cy, h - 1))
+        if mask[cy, cx] > 0:
+            result.add(int(float(str(track_id))))
+    return result
