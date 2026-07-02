@@ -113,7 +113,7 @@ def load_npz_sequences(row: dict[str, str], seq_length: int = 30, seq_stride: in
                     from ai.action.motion_features import append_motion_features
                     return [append_motion_features(array[i]) for i in range(array.shape[0])]
                 else: # keypoint_bbox54 or unknown
-                    return [np.pad(array[i], ((0, 0), (0, 3)), mode="constant").astype(np.float32) for i in range(array.shape[0])]
+                    raise ValueError(f"Cannot pad 51-dim keypoint to keypoint_bbox54 feature dim: actual_dim={actual_dim} -> target_dim={target_dim}")
                     
         elif array.ndim == 2:
             actual_dim = array.shape[-1]
@@ -129,8 +129,10 @@ def load_npz_sequences(row: dict[str, str], seq_length: int = 30, seq_stride: in
                         from ai.action.motion_features import append_motion_features
                         windows.append(append_motion_features(window))
                     else: # keypoint_bbox54 or unknown
-                        windows.append(np.pad(window, ((0, 0), (0, 3)), mode="constant").astype(np.float32))
+                        raise ValueError(f"Cannot pad 51-dim keypoint to keypoint_bbox54 feature dim: actual_dim={actual_dim} -> target_dim={target_dim}")
             return windows
+    except ValueError:
+        raise
     except Exception:
         pass
     return []
