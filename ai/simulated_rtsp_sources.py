@@ -15,7 +15,7 @@ def scan_video_directory(directory_path: str) -> list[Path]:
         sys.exit(1)
 
     extensions = {".mp4", ".avi", ".mov", ".mkv"}
-    video_files = [p for p in dir_path.iterdir() if p.is_file() and p.suffix.lower() in extensions]
+    video_files = [p for p in dir_path.rglob("*") if p.is_file() and p.suffix.lower() in extensions]
     video_files.sort(key=lambda x: x.name)
     return video_files
 
