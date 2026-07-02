@@ -35,13 +35,35 @@ def main():
     baseline_rows = []
     with baseline_path.open("r", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
-        fieldnames = reader.fieldnames
+        fieldnames = list(reader.fieldnames) if reader.fieldnames else []
         for row in reader:
             baseline_rows.append(dict(row))
+
+    if "split" not in fieldnames:
+        fieldnames.append("split")
 
     train_baseline = [r for r in baseline_rows if r.get("split") == "train"]
     val_baseline = [r for r in baseline_rows if r.get("split") == "val"]
     test_baseline = [r for r in baseline_rows if r.get("split") == "test"]
+
+    # If no pre-defined split exists, dynamically create 80/10/10 split
+    if len(train_baseline) == 0:
+        print("[WARNING] No pre-defined split column found or train count is 0. Dynamically creating 80% train, 10% val, 10% test split...")
+        n_total = len(baseline_rows)
+        n_train = int(n_total * 0.8)
+        n_val = int(n_total * 0.1)
+        
+        for idx, r in enumerate(baseline_rows):
+            if idx < n_train:
+                r["split"] = "train"
+            elif idx < n_train + n_val:
+                r["split"] = "val"
+            else:
+                r["split"] = "test"
+                
+        train_baseline = baseline_rows[:n_train]
+        val_baseline = baseline_rows[n_train:n_train+n_val]
+        test_baseline = baseline_rows[n_train+n_val:]
 
     n_baseline_train = len(train_baseline)
     print(f"Baseline statistics:")
