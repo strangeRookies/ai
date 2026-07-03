@@ -37,6 +37,8 @@ class CameraWorker:
     source_signature: str
     camera_login_id: str | None = None
     rtsp_url: str | None = None
+    command: list[str] | None = None
+
 
 
 def spawn_process(command: list[str], log_path: Path, env: dict[str, str] | None = None) -> subprocess.Popen[str]:
@@ -171,6 +173,7 @@ def start_camera_worker(camera: RegisteredCamera, config: RunnerConfig, port: in
             source_signature=camera_source_signature(camera, config),
             camera_login_id=camera.camera_login_id,
             rtsp_url=rtsp_url,
+            command=overlay_command,
         )
     if ffmpeg_command is not None:
         processes.append(
@@ -198,6 +201,7 @@ def start_camera_worker(camera: RegisteredCamera, config: RunnerConfig, port: in
         source_signature=camera_source_signature(camera, config),
         camera_login_id=camera.camera_login_id,
         rtsp_url=rtsp_url,
+        command=overlay_command,
     )
 
 
@@ -261,8 +265,12 @@ def run_camera_sync_loop(cameras: list[RegisteredCamera], config: RunnerConfig) 
         )
         for camera_login_id, worker in list(workers.items()):
             if worker_has_exited(worker):
+                cmd_text = safe_command_text(worker.command) if getattr(worker, "command", None) else "unknown"
+                masked_url = redact_url(worker.rtsp_url) if worker.rtsp_url else "unknown"
                 print(
-                    f"[registered-cameras][warning] worker exited; stopping camera={camera_login_id}",
+                    f"[registered-cameras][warning] worker exited; stopping camera={camera_login_id} "
+                    f"| cameraLoginId={camera_login_id} | streamId={camera_login_id} "
+                    f"| rtsp_url={masked_url} | command={cmd_text}",
                     file=sys.stderr,
                     flush=True,
                 )
