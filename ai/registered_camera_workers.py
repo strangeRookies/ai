@@ -23,6 +23,7 @@ from ai.registered_cameras import (
     camera_rtsp_url,
     input_rtsp_for_camera,
     load_active_cameras,
+    tracking_stability_fallback_enabled,
 )
 from ai.streams.video_reader import VideoReader
 from stream.rtsp_reader import redact_url
@@ -75,13 +76,40 @@ def camera_source_signature(camera: RegisteredCamera, config: RunnerConfig) -> s
     import json as _json
     roi_suffix = _json.dumps(list(camera.roi_configs), sort_keys=True)
     exit_roi_suffix = _json.dumps(list(camera.exit_roi_configs), sort_keys=True)
+    runtime_suffix = _json.dumps(
+        {
+            "bbox_smoothing_alpha": config.bbox_smoothing_alpha,
+            "classifier_input": config.classifier_input,
+            "detector_conf": config.detector_conf,
+            "detector_mode": config.detector_mode,
+            "device": config.device,
+            "match_thresh": config.match_thresh,
+            "mjpeg_debug": config.mjpeg_debug,
+            "mqtt_camera_topic": config.mqtt_camera_topic,
+            "mqtt_event_topic": config.mqtt_event_topic,
+            "mqtt_host": config.mqtt_host,
+            "mqtt_port": config.mqtt_port,
+            "mqtt_status_topic": config.mqtt_status_topic,
+            "selected_track_id": config.selected_track_id,
+            "selected_track_missing_frames": config.selected_track_missing_frames,
+            "selected_track_mode": config.selected_track_mode,
+            "sequence_length": config.sequence_length,
+            "sequence_stride": config.sequence_stride,
+            "track_buffer": config.track_buffer,
+            "track_thresh": config.track_thresh,
+            "tracking_mode": config.tracking_mode,
+            "tracking_stability_fallback": tracking_stability_fallback_enabled(camera, config),
+            "yolo_model": config.yolo_model,
+        },
+        sort_keys=True,
+    )
     match camera.source_type:
         case "REAL_RTSP":
-            return f"REAL_RTSP:{camera.rtsp_url or ''}|roi:{roi_suffix}|exit_roi:{exit_roi_suffix}"
+            return f"REAL_RTSP:{camera.rtsp_url or ''}|roi:{roi_suffix}|exit_roi:{exit_roi_suffix}|runtime:{runtime_suffix}"
         case "SIMULATED_RTSP":
             return (
                 f"SIMULATED_RTSP:{camera_rtsp_url(config.rtsp_base_url, camera.camera_login_id)}:"
-                f"{camera.assigned_video_path or ''}|roi:{roi_suffix}|exit_roi:{exit_roi_suffix}"
+                f"{camera.assigned_video_path or ''}|roi:{roi_suffix}|exit_roi:{exit_roi_suffix}|runtime:{runtime_suffix}"
             )
 
 
@@ -194,7 +222,14 @@ def start_camera_worker(camera: RegisteredCamera, config: RunnerConfig, port: in
             env=overlay_env,
         )
     )
-    report_overlay_status(camera, rtsp_url, port, config, "RUNNING", getattr(processes[-1], "pid", None))
+    if config.mjpeg_debug:
+        report_overlay_status(camera, rtsp_url, port, config, "RUNNING", getattr(processes[-1], "pid", None))
+    elif config.overlay_report_enabled:
+        print(
+            f"[registered-cameras] overlay HTTP disabled for camera={camera.camera_login_id}; "
+            "metadata is published by MQTT and video stays on MediaMTX WebRTC/HLS",
+            flush=True,
+        )
     return CameraWorker(
         processes=processes,
         overlay_port=port,

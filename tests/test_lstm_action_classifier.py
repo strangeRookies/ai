@@ -16,7 +16,9 @@ from ai.action.classifier import (
     sequence_to_lstm_features,
     threshold_prediction,
 )
+from ai.action.feature_schema import KEYPOINT_BBOX54_SCHEMA_VERSION, keypoint_bbox54_feature_names
 from ai.action.train_lstm import build_checkpoint_payload, load_training_rows, summarize_metadata, target_ranges_for_row
+from ai.inference.rtsp_runtime import classifier_contract_summary
 
 try:
     import cv2  # noqa: F401
@@ -146,6 +148,46 @@ class LSTMActionClassifierTest(unittest.TestCase):
         self.assertEqual(payload["feature_size"], 32)
         self.assertEqual(payload["input_size"], 1024)
         self.assertEqual(payload["label_mapping"], {"Normal": 0, "Faint": 1})
+
+    def test_faint_keypoint54_checkpoint_payload_defaults_to_bbox54_schema(self):
+        class Args:
+            feature_size = 32
+            sequence_length = 30
+            sequence_stride = 15
+
+        model_config = {
+            "input_size": 54,
+            "hidden_size": 128,
+            "num_layers": 1,
+            "num_classes": 2,
+            "dropout": 0.0,
+        }
+
+        payload = build_checkpoint_payload({"weight": "state"}, model_config, Args(), 0.75, {"train": 1}, {"val": 1})
+
+        self.assertEqual(payload["classes"], ["Normal", "Faint"])
+        self.assertEqual(payload["feature_type"], "keypoint")
+        self.assertEqual(payload["input_size"], 54)
+        self.assertEqual(payload["feature_schema_version"], KEYPOINT_BBOX54_SCHEMA_VERSION)
+        self.assertEqual(payload["feature_names"], keypoint_bbox54_feature_names())
+
+    def test_classifier_contract_summary_reports_checkpoint_schema_and_input_size(self):
+        class FakeClassifier:
+            checkpoint_path = "models/faint54.pt"
+            input_size = 54
+            feature_schema = "keypoint_bbox54"
+            feature_names = keypoint_bbox54_feature_names()
+            checkpoint_sequence_length = 30
+            checkpoint_sequence_stride = 15
+
+        summary = classifier_contract_summary(FakeClassifier())
+
+        self.assertEqual(summary["checkpoint_path"], "models/faint54.pt")
+        self.assertEqual(summary["checkpoint_input_size"], 54)
+        self.assertEqual(summary["feature_schema_version"], "keypoint_bbox54")
+        self.assertEqual(summary["feature_names_count"], 54)
+        self.assertEqual(summary["sequence_length"], 30)
+        self.assertEqual(summary["sequence_stride"], 15)
 
     def test_numeric_torch_device_is_normalized_for_lstm_classifier(self):
         class FakeCuda:

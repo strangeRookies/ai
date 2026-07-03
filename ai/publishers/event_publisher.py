@@ -79,6 +79,7 @@ class MqttEventPublisher(EventPublisher):
             )
             result = self.client.publish(target_topic, json.dumps(payload, ensure_ascii=False), qos=0)
             if result.rc != self.mqtt.MQTT_ERR_SUCCESS:
+                self.connected = False
                 print(
                     f"[mqtt] publish failed: {_payload_context(payload, target_topic, connected=self.connected, rc=result.rc)}",
                     file=sys.stderr,

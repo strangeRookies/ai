@@ -58,6 +58,32 @@ def create_classifier(action_model=DEFAULT_ACTION_MODEL, device="auto", action_t
     return MockActionClassifier(default_label="Faint", score=0.80), "mock_lstm"
 
 
+def classifier_contract_summary(classifier):
+    return {
+        "checkpoint_path": getattr(classifier, "checkpoint_path", None),
+        "checkpoint_input_size": getattr(classifier, "input_size", None),
+        "feature_schema_version": getattr(classifier, "feature_schema", None),
+        "feature_names_count": len(getattr(classifier, "feature_names", []) or []),
+        "sequence_length": getattr(classifier, "checkpoint_sequence_length", None),
+        "sequence_stride": getattr(classifier, "checkpoint_sequence_stride", None),
+    }
+
+
+def log_classifier_contract(prefix, camera_login_id, classifier):
+    summary = classifier_contract_summary(classifier)
+    print(
+        f"{prefix} "
+        f"cameraLoginId={camera_login_id} "
+        f"checkpoint_path={summary['checkpoint_path']} "
+        f"checkpoint_input_size={summary['checkpoint_input_size']} "
+        f"feature_schema_version={summary['feature_schema_version']} "
+        f"feature_names_count={summary['feature_names_count']} "
+        f"sequence_length={summary['sequence_length']} "
+        f"sequence_stride={summary['sequence_stride']}",
+        flush=True,
+    )
+
+
 def cheap_filter_config_from_args(args):
     return CheapFilterConfig(
         enabled=bool(getattr(args, "cheap_filter_enabled", True)),
@@ -89,6 +115,9 @@ def create_detection_postprocessor(args):
             match_thresh=getattr(args, "match_thresh", 0.20),
             frame_rate=getattr(args, "frame_rate", 30),
             bbox_smoothing_alpha=getattr(args, "bbox_smoothing_alpha", 1.0),
+            stability_fallback=bool(getattr(args, "tracking_stability_fallback", False)),
+            fallback_max_missing_seconds=getattr(args, "track_max_missing_seconds", 4.0),
+            fallback_center_match_ratio=getattr(args, "center_match_ratio", 0.70),
         )
         return SupervisionPostProcessor(config=config), "supervision"
     return SimpleTrackAssigner(
@@ -369,6 +398,11 @@ def log_classification_stage(
     faint_threshold: float,
     consecutive_count: int = 0,
     event_triggered: bool = False,
+    checkpoint_input_size=None,
+    runtime_feature_dim=None,
+    tensor_shape=None,
+    feature_schema=None,
+    checkpoint_path=None,
 ) -> None:
     """Stage 3: LSTM 분류 직후 — trackId별 faintProbability와 threshold 통과 여부 기록."""
     if not _tracking_debug_enabled():
@@ -385,6 +419,11 @@ def log_classification_stage(
         "thresholdPassed": (fp is not None and fp >= faint_threshold),
         "consecutiveCount": consecutive_count,
         "isFaintEvent": event_triggered,
+        "checkpointInputSize": checkpoint_input_size,
+        "runtimeFeatureDim": runtime_feature_dim,
+        "tensorShape": list(tensor_shape) if tensor_shape is not None else None,
+        "featureSchema": feature_schema,
+        "checkpointPath": checkpoint_path,
     }
     print(f"[stage-log] {json.dumps(record, ensure_ascii=False)}", flush=True)
 

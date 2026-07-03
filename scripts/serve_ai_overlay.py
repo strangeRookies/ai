@@ -8,8 +8,9 @@ import threading
 import time
 from pathlib import Path
 
-# sys.path 등록이 먼저 수행되어야 하위 ai 패키지 로드 가능
-sys.path.append(str(Path(__file__).resolve().parents[1]))
+# sys.path 등록이 먼저 수행되어야 하위 ai 패키지 로드 가능 (작업 디렉토리와 무관하도록 insert 사용)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 
 from ai.events.event_clip import EventClipBuffer
 from ai.events.clip_worker import ClipWriterWorker, enqueue_event_clip
@@ -19,7 +20,7 @@ from ai.action.lstm_contract import DEFAULT_KEYPOINT_INPUT_SIZE, DEFAULT_LSTM_SE
 from ai.evidence import evidence_id
 from ai.frame_sync import FrameMetadataBuffer, FramePacket, CameraFrameQueue
 from ai.inference.rtsp_runtime import build_inference_event_payload, cheap_filter_config_from_args, create_detection_postprocessor, ensure_mock_keypoints
-from ai.inference.rtsp_runtime import maybe_log_debug, normalize_detections, update_detections_with_postprocessor, update_prediction_counts, update_tracking_summary
+from ai.inference.rtsp_runtime import log_classifier_contract, maybe_log_debug, normalize_detections, update_detections_with_postprocessor, update_prediction_counts, update_tracking_summary
 from ai.inference.rtsp_runtime import (
     log_detection_stage,
     log_tracking_stage,
@@ -95,6 +96,22 @@ def _track_id(value):
 
 def mjpeg_debug_enabled(args: argparse.Namespace) -> bool:
     return bool(getattr(args, "mjpeg_debug", False))
+
+
+def env_optional_int(*names: str) -> int | None:
+    for name in names:
+        value = os.getenv(name)
+        if value:
+            return int(value)
+    return None
+
+
+def env_optional_str(*names: str) -> str | None:
+    for name in names:
+        value = os.getenv(name)
+        if value:
+            return value
+    return None
 
 
 def process_frame(
@@ -337,6 +354,9 @@ def _process_frame_impl(
         summary["lstm_predictions"] += 1
         summary["latest_prediction_label"] = prediction.get("label")
         summary["latest_faint_probability"] = faint_probability(prediction)
+        summary["latest_runtime_feature_dim"] = getattr(classifier, "last_runtime_feature_dim", None)
+        summary["latest_tensor_shape"] = getattr(classifier, "last_tensor_shape", None)
+        summary["feature_schema"] = getattr(classifier, "feature_schema", None)
         update_prediction_counts(summary, prediction)
     summary["per_track_sequences_generated"] = {
         str(track_id): count for track_id, count in sequence_buffer.sequences_generated_by_track.items()
@@ -371,6 +391,11 @@ def _process_frame_impl(
             faint_threshold=getattr(args, "action_threshold", 0.5),
             consecutive_count=consecutive_by_track.get(track_id, 0),
             event_triggered=event_triggered,
+            checkpoint_input_size=getattr(classifier, "input_size", None),
+            runtime_feature_dim=getattr(classifier, "last_runtime_feature_dim", None),
+            tensor_shape=getattr(classifier, "last_tensor_shape", None),
+            feature_schema=getattr(classifier, "feature_schema", None),
+            checkpoint_path=getattr(classifier, "checkpoint_path", None),
         )
 
     summary["latest_consecutive_faint"] = max(consecutive_by_track.values(), default=0)
@@ -671,6 +696,7 @@ class OverlayWorker:
             getattr(classifier, "checkpoint_sequence_length", None),
             getattr(classifier, "checkpoint_sequence_stride", None),
         )
+        log_classifier_contract("[lstm-checkpoint]", self.camera_login_id, classifier)
 
         summary = initial_summary()
         post_processor = FaintEventPostProcessor(
@@ -888,6 +914,12 @@ def main():
     parser.add_argument("--bbox-smoothing-alpha", type=float, default=0.60)
     parser.add_argument("--track-max-missing-seconds", type=float, default=4.0)
     parser.add_argument("--center-match-ratio", type=float, default=0.70)
+    parser.add_argument(
+        "--tracking-stability-fallback",
+        action=argparse.BooleanOptionalAction,
+        default=os.getenv("TRACKING_STABILITY_FALLBACK", "false").lower() in {"1", "true", "yes", "on"},
+        help="Use a lightweight bbox continuity tracker after supervision to stabilize final track_id values.",
+    )
     parser.add_argument("--overlay-debug-tracks", action="store_true")
     parser.add_argument("--frame-sync-debug", action=argparse.BooleanOptionalAction, default=os.getenv("FRAME_SYNC_DEBUG", "false").lower() in {"1", "true", "yes", "on"})
     parser.add_argument("--frame-sync-buffer-size", type=int, default=int(os.getenv("FRAME_SYNC_BUFFER_SIZE", "60")))
@@ -922,9 +954,31 @@ def main():
     parser.add_argument("--mqtt-client-id", help="MQTT client ID")
     parser.add_argument("--mqtt-username", help="MQTT username")
     parser.add_argument("--mqtt-password", help="MQTT password")
-    parser.add_argument("--selected-track-id", type=int, help="Selected track ID to filter overlay and predictions")
-    parser.add_argument("--selected-track-mode", default="strict", choices=["strict", "fallback"], help="Selected track filtering mode: strict or fallback")
-    parser.add_argument("--selected-track-missing-frames", type=int, default=5, help="Number of frames allowed for missing selected track in fallback mode")
+    parser.add_argument(
+        "--selected-track-id",
+        "--preferred-track-id",
+        dest="selected_track_id",
+        type=int,
+        default=env_optional_int(
+            "AI_SELECTED_TRACK_ID",
+            "SELECTED_TRACK_ID",
+            "AI_PREFERRED_TRACK_ID",
+            "PREFERRED_TRACK_ID",
+        ),
+        help="Selected track ID to filter overlay and predictions",
+    )
+    parser.add_argument(
+        "--selected-track-mode",
+        default=env_optional_str("AI_SELECTED_TRACK_MODE", "SELECTED_TRACK_MODE") or "strict",
+        choices=["strict", "fallback"],
+        help="Selected track filtering mode: strict or fallback",
+    )
+    parser.add_argument(
+        "--selected-track-missing-frames",
+        type=int,
+        default=env_optional_int("AI_SELECTED_TRACK_MISSING_FRAMES", "SELECTED_TRACK_MISSING_FRAMES") or 5,
+        help="Number of frames allowed for missing selected track in fallback mode",
+    )
     
     args = parser.parse_args()
     args.camera_login_id = args.camera_login_id or args.camera_id

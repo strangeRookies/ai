@@ -5,6 +5,8 @@ from typing import Protocol
 
 import numpy as np
 
+from tracking.simple_tracker import SimpleTrackAssigner
+
 
 class ByteTrackAdapter(Protocol):
     def update(self, detections: list[dict]) -> list[dict]:
@@ -22,6 +24,9 @@ class SupervisionPostProcessorConfig:
     match_thresh: float = 0.20
     frame_rate: int = 30
     bbox_smoothing_alpha: float = 1.0  # 1.0 means disabled (raw bbox)
+    stability_fallback: bool = False
+    fallback_max_missing_seconds: float = 4.0
+    fallback_center_match_ratio: float = 0.70
 
 
 class SupervisionPostProcessor:
@@ -37,6 +42,9 @@ class SupervisionPostProcessor:
             match_thresh=self.config.match_thresh,
             frame_rate=self.config.frame_rate,
             bbox_smoothing_alpha=self.config.bbox_smoothing_alpha,
+            stability_fallback=self.config.stability_fallback,
+            fallback_max_missing_seconds=self.config.fallback_max_missing_seconds,
+            fallback_center_match_ratio=self.config.fallback_center_match_ratio,
         )
 
     def process(self, detections: list[dict], frame: np.ndarray) -> list[dict]:
@@ -56,6 +64,9 @@ class SupervisionByteTrackAdapter:
         match_thresh: float = 0.20,
         frame_rate: int = 30,
         bbox_smoothing_alpha: float = 1.0,
+        stability_fallback: bool = False,
+        fallback_max_missing_seconds: float = 4.0,
+        fallback_center_match_ratio: float = 0.70,
     ) -> None:
         try:
             import supervision as sv
@@ -75,11 +86,27 @@ class SupervisionByteTrackAdapter:
         self._active_track_ids: set[int] = set()
         self._bbox_smoothing_alpha = bbox_smoothing_alpha
         self._previous_bboxes: dict[int, list[float]] = {}
+        self._stability_fallback = bool(stability_fallback)
+        self._fallback_assigner = (
+            SimpleTrackAssigner(
+                track_thresh=track_thresh,
+                match_thresh=match_thresh,
+                track_buffer=track_buffer,
+                min_box_area=10.0,
+                bbox_smoothing_alpha=bbox_smoothing_alpha if bbox_smoothing_alpha < 1.0 else 0.60,
+                max_missing_seconds=fallback_max_missing_seconds,
+                center_match_ratio=fallback_center_match_ratio,
+            )
+            if self._stability_fallback
+            else None
+        )
 
     def update(self, detections: list[dict]) -> list[dict]:
         if not detections:
             self._active_track_ids = set()
             self._previous_bboxes.clear()
+            if self._fallback_assigner is not None:
+                self._fallback_assigner.update([])
             return []
 
         sv_detections = self._to_supervision_detections(detections)
@@ -139,15 +166,34 @@ class SupervisionByteTrackAdapter:
             if tid not in current_active_tids:
                 del self._previous_bboxes[tid]
 
+        if self._fallback_assigner is not None:
+            fallback_input = []
+            for detection in output:
+                item = dict(detection)
+                item.pop("track_id", None)
+                fallback_input.append(item)
+            fallback_output = self._fallback_assigner.update(fallback_input)
+            self._active_track_ids = {
+                int(item["track_id"])
+                for item in fallback_output
+                if item.get("track_id") is not None
+            }
+            return fallback_output
+
         return output
 
     def diagnostics(self) -> dict:
+        if self._fallback_assigner is not None:
+            diagnostics = self._fallback_assigner.diagnostics()
+            diagnostics["stability_fallback"] = True
+            return diagnostics
         return {
             "active_tracks": len(self._active_track_ids),
             "new_tracks": 0,
             "lost_tracks": 0,
             "id_switch_like_events": 0,
             "tracks": {str(track_id): {"track_id": track_id} for track_id in sorted(self._active_track_ids)},
+            "stability_fallback": False,
         }
 
     def _to_supervision_detections(self, detections: list[dict]):

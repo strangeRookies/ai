@@ -103,6 +103,9 @@ class RunnerConfig:
     dry_run: bool
     rtsp_probe_enabled: bool
     refresh_interval_seconds: float
+    tracking_stability_fallback: bool = False
+    tracking_stability_fallback_camera_ids: tuple[str, ...] = ()
+    mjpeg_debug: bool = False
     skip_ffmpeg_spawn: bool = False
     overlay_public_base_url: str | None = None
     overlay_report_enabled: bool = False
@@ -319,6 +322,10 @@ def build_overlay_command(
         "--bbox-smoothing-alpha",
         str(config.bbox_smoothing_alpha),
     ]
+    if tracking_stability_fallback_enabled(camera, config):
+        command.append("--tracking-stability-fallback")
+    if config.mjpeg_debug:
+        command.append("--mjpeg-debug")
     optional_pairs = [
         ("--mqtt-host", config.mqtt_host),
         ("--mqtt-port", str(config.mqtt_port) if config.mqtt_port is not None else None),
@@ -344,6 +351,14 @@ def build_overlay_command(
     if camera.exit_roi_configs:
         command.extend(["--exit-roi-configs", json.dumps(list(camera.exit_roi_configs))])
     return command
+
+
+def tracking_stability_fallback_enabled(camera: RegisteredCamera, config: RunnerConfig) -> bool:
+    fallback_camera_ids = {
+        normalize_camera_login_id(camera_id)
+        for camera_id in config.tracking_stability_fallback_camera_ids
+    }
+    return bool(config.tracking_stability_fallback or camera.camera_login_id in fallback_camera_ids)
 
 
 def input_rtsp_for_camera(camera: RegisteredCamera, config: RunnerConfig) -> tuple[str, list[str] | None]:

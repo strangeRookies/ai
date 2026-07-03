@@ -5,6 +5,11 @@ from ai.action.lstm_contract import (
     DEFAULT_KEYPOINT_INPUT_SIZE,
     MOTION_KEYPOINT_INPUT_SIZE,
 )
+from ai.action.feature_schema import (
+    KEYPOINT_BBOX54_SCHEMA_VERSION,
+    KEYPOINT_MOTION54_SCHEMA_VERSION,
+    feature_dim_for_schema,
+)
 
 DEFAULT_CLASSES = ("Normal", "Faint")
 KEYPOINT_FEATURE_DIM = DEFAULT_KEYPOINT_INPUT_SIZE
@@ -71,14 +76,23 @@ class LSTMActionClassifier(ActionClassifier):
         self.checkpoint_path = str(checkpoint_path)
         self.checkpoint_sequence_length = optional_int(checkpoint.get("sequence_length"))
         self.checkpoint_sequence_stride = optional_int(checkpoint.get("sequence_stride"))
+        self.last_runtime_feature_dim = None
+        self.last_tensor_shape = None
         
         # Load feature schema metadata
-        self.feature_schema = checkpoint.get("feature_schema_version", "keypoint51" if self.input_size == 51 else "keypoint_motion54")
+        self.feature_schema = checkpoint.get("feature_schema_version")
+        if self.feature_schema is None and self.input_size == 51:
+            self.feature_schema = "keypoint51"
+        if self.feature_schema is None:
+            raise ValueError(
+                f"Checkpoint metadata missing feature_schema_version for input_size={self.input_size}. "
+                f"checkpoint={checkpoint_path}"
+            )
         self.feature_names = checkpoint.get("feature_names", [])
 
         # Safeguard: validate checkpoint metadata consistency for keypoint schemas
         if self.feature_schema in {"keypoint51", "keypoint_motion54", "keypoint_bbox54"}:
-            schema_dim = 54 if self.feature_schema in {"keypoint_motion54", "keypoint_bbox54"} else 51
+            schema_dim = feature_dim_for_schema(self.feature_schema)
             if self.input_size != schema_dim:
                 raise ValueError(
                     f"Checkpoint Metadata Mismatch: model input_size={self.input_size} "
@@ -90,13 +104,20 @@ class LSTMActionClassifier(ActionClassifier):
         if not sequence:
             return None
         features = sequence_to_lstm_features(sequence, self.input_size, self.crop_feature_size, getattr(self, "feature_schema", "keypoint51"))
+        self.last_runtime_feature_dim = int(features.shape[-1])
+        self.last_tensor_shape = (1, *tuple(int(dim) for dim in features.shape))
         
         if "detections" in sequence:
             actual_input_size = int(features.shape[-1])
             if actual_input_size != self.input_size:
                 raise ValueError(
-                    f"LSTMActionClassifier Mismatch: model expected input_size={self.input_size}, "
-                    f"but sequence generated feature size={actual_input_size}. checkpoint={self.checkpoint_path}"
+                    "LSTMActionClassifier Mismatch: "
+                    f"cameraLoginId={sequence.get('camera_login_id', '')} "
+                    f"trackId={sequence.get('track_id', '')} "
+                    f"expected input_size={self.input_size} "
+                    f"runtime_feature_dim={actual_input_size} "
+                    f"feature_schema_version={self.feature_schema} "
+                    f"checkpoint={self.checkpoint_path}"
                 )
                 
         x = self.torch.from_numpy(features).unsqueeze(0).to(self.device)
@@ -170,9 +191,9 @@ def keypoint_sequence_to_features(sequence, keypoint_count=DEFAULT_KEYPOINT_COUN
     
     expected_input_size = int(expected_input_size)
     
-    if feature_schema == "keypoint_bbox54" or (expected_input_size == 54 and feature_schema == "keypoint_bbox54"):
+    if feature_schema == KEYPOINT_BBOX54_SCHEMA_VERSION or (expected_input_size == 54 and feature_schema == KEYPOINT_BBOX54_SCHEMA_VERSION):
         return append_bbox_features(base_features, sequence)
-    elif feature_schema == "keypoint_motion54" or (expected_input_size == 54 and feature_schema == "keypoint_motion54"):
+    elif feature_schema == KEYPOINT_MOTION54_SCHEMA_VERSION or (expected_input_size == 54 and feature_schema == KEYPOINT_MOTION54_SCHEMA_VERSION):
         try:
             from .motion_features import append_motion_features
             return append_motion_features(base_features)
@@ -182,7 +203,7 @@ def keypoint_sequence_to_features(sequence, keypoint_count=DEFAULT_KEYPOINT_COUN
     if expected_input_size == 51:
         return base_features
         
-    return normalize_feature_width(base_features, expected_input_size)
+    return normalize_feature_width(base_features, expected_input_size, feature_schema=feature_schema)
 
 
 def append_bbox_features(base_features, sequence):
@@ -245,7 +266,7 @@ def keypoints_to_feature(detection, frame_shape=None, keypoint_count=17):
     return np.asarray(features, dtype=np.float32)
 
 
-def normalize_feature_width(features, expected_input_size, camera_login_id=None, checkpoint_path=None):
+def normalize_feature_width(features, expected_input_size, camera_login_id=None, checkpoint_path=None, feature_schema="keypoint51"):
     try:
         import numpy as np
     except ImportError as exc:
@@ -255,6 +276,12 @@ def normalize_feature_width(features, expected_input_size, camera_login_id=None,
     expected_input_size = int(expected_input_size)
     if actual_input_size == expected_input_size:
         return features.astype(np.float32)
+    if actual_input_size < expected_input_size and feature_schema == KEYPOINT_BBOX54_SCHEMA_VERSION:
+        raise ValueError(
+            "keypoint_bbox54 requires bbox_width_norm/bbox_height_norm/bbox_area_norm "
+            f"features; refusing silent padding: actual_input_size={actual_input_size} "
+            f"expected_input_size={expected_input_size} checkpoint={checkpoint_path or ''}"
+        )
     print(
         "[lstm-feature] "
         f"camera_login_id={camera_login_id or ''} "
