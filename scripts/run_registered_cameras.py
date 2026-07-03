@@ -107,6 +107,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=os.getenv("TRACKING_STABILITY_FALLBACK_CAMERA_IDS", ""),
         help="Comma-separated cameraLoginIds that should use tracking stability fallback without enabling it globally.",
     )
+    parser.add_argument(
+        "--mjpeg-debug",
+        action=argparse.BooleanOptionalAction,
+        default=env_bool("AI_MJPEG_DEBUG", False),
+        help="Open per-worker debug MJPEG/health HTTP ports such as 8010-8013.",
+    )
     parser.add_argument("--print-events", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--skip-rtsp-probe", action="store_true", help="Skip real RTSP preflight before starting AI workers.")
@@ -176,6 +182,7 @@ def config_from_args(args: argparse.Namespace) -> RunnerConfig:
         bbox_smoothing_alpha=args.bbox_smoothing_alpha,
         tracking_stability_fallback=args.tracking_stability_fallback,
         tracking_stability_fallback_camera_ids=split_csv(args.tracking_stability_fallback_camera_ids),
+        mjpeg_debug=args.mjpeg_debug,
         print_events=args.print_events,
         dry_run=args.dry_run,
         rtsp_probe_enabled=not args.skip_rtsp_probe,

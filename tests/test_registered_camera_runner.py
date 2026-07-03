@@ -160,6 +160,26 @@ class RegisteredCameraRunnerTest(unittest.TestCase):
         self.assertNotIn("--tracking-stability-fallback", cam4_command)
         self.assertIn("--tracking-stability-fallback", cam5_command)
 
+    def test_overlay_command_passes_mjpeg_debug_only_when_enabled(self):
+        camera = RegisteredCamera(
+            camera_id="9",
+            camera_login_id="icu_01",
+            rtsp_url="rtsp://cctv/icu",
+            source_type="REAL_RTSP",
+            assigned_video_path=None,
+        )
+
+        default_command = build_overlay_command(camera, "rtsp://cctv/icu", 8012, fake_config(Path("video_pool")))
+        debug_command = build_overlay_command(
+            camera,
+            "rtsp://cctv/icu",
+            8012,
+            replace(fake_config(Path("video_pool")), mjpeg_debug=True),
+        )
+
+        self.assertNotIn("--mjpeg-debug", default_command)
+        self.assertIn("--mjpeg-debug", debug_command)
+
     def test_load_active_cameras_reads_backend_success_data_envelope(self):
         response = FakeHttpResponse(
             b'{"success":true,"data":[{"cameraId":4,"cameraLoginId":"cam_02","rtspUrl":"rtsp://cctv/cam_02","sourceType":"REAL_RTSP","aiEnabled":true,"status":"ACTIVE"}]}'
