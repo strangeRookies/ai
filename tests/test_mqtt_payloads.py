@@ -295,6 +295,8 @@ class MqttPayloadsTest(unittest.TestCase):
 
         self.assertEqual(payload["messageType"], "frame_sync")
         self.assertEqual(payload["type"], "frame_sync")
+        self.assertEqual(payload["streamId"], "cam_01")
+        self.assertEqual(payload["cameraLoginId"], "cam_01")
         self.assertEqual(payload["evidenceId"], "cam_01-123-1782180000100")
         self.assertEqual(payload["traceId"], payload["evidenceId"])
         self.assertEqual(payload["evidence"]["frameId"], 123)

@@ -31,6 +31,7 @@ def fake_config(video_pool: Path) -> RunnerConfig:
         detector_mode="real",
         yolo_model="yolo26n-pose.pt",
         device="cuda:0",
+        detector_conf=0.15,
         action_model=None,
         action_device="cuda:0",
         action_threshold=None,
@@ -38,6 +39,10 @@ def fake_config(video_pool: Path) -> RunnerConfig:
         sequence_length=30,
         sequence_stride=15,
         tracking_mode="supervision",
+        track_thresh=0.10,
+        match_thresh=0.20,
+        track_buffer=90,
+        bbox_smoothing_alpha=0.60,
         print_events=False,
         dry_run=True,
         rtsp_probe_enabled=True,
@@ -51,6 +56,8 @@ class RegisteredCameraDockerConfigTest(unittest.TestCase):
 
         self.assertEqual(config.sequence_length, 30)
         self.assertEqual(config.sequence_stride, 15)
+        self.assertEqual(config.domain, "outside")
+        self.assertIsNone(config.label)
 
     def test_parse_args_reads_docker_environment_defaults(self):
         env = {

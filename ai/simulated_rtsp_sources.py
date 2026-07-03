@@ -3,9 +3,13 @@ from __future__ import annotations
 import hashlib
 import sys
 from pathlib import Path
+from typing import Final
 
 from ai.camera_input_safety import assigned_video_candidates, is_path_under, resolved_video_pool
 from ai.registered_cameras import RegisteredCamera
+
+
+DEFAULT_STREAM_DOMAIN: Final = "outside"
 
 
 def scan_video_directory(directory_path: str) -> list[Path]:
@@ -116,4 +120,3 @@ def stable_video_index(camera_login_id: str, video_count: int) -> int:
         raise ValueError("video_count must be positive")
     digest = hashlib.sha256(camera_login_id.encode("utf-8")).digest()
     return int.from_bytes(digest[:8], byteorder="big") % video_count
-

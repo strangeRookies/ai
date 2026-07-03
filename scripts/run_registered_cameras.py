@@ -16,6 +16,7 @@ from ai.registered_cameras import (
     RunnerConfig,
     load_active_cameras,
 )
+from ai.simulated_rtsp_sources import DEFAULT_STREAM_DOMAIN
 from ai.action.lstm_contract import DEFAULT_LSTM_SEQUENCE_LENGTH, DEFAULT_LSTM_SEQUENCE_STRIDE, DEFAULT_KEYPOINT_INPUT_SIZE, log_lstm_config
 from ai.registered_camera_workers import run_camera_sync_loop
 
@@ -59,6 +60,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--detector-mode", choices=["real", "mock"], default=os.getenv("DETECTOR_MODE", "real"))
     parser.add_argument("--yolo-model", default=os.getenv("YOLO_MODEL_PATH", os.getenv("YOLO_MODEL", "yolo26n-pose.pt")))
     parser.add_argument("--device", default=os.getenv("DEVICE", os.getenv("YOLO_DEVICE", "auto")))
+    parser.add_argument("--detector-conf", type=float, default=float(os.getenv("DETECTOR_CONF", "0.15")))
     parser.add_argument("--action-model", default=os.getenv("MODEL_CHECKPOINT_PATH", os.getenv("ACTION_MODEL")))
     parser.add_argument("--action-device", default=os.getenv("ACTION_DEVICE", os.getenv("DEVICE", "auto")))
     parser.add_argument("--action-threshold", type=float, default=float(os.getenv("ACTION_THRESHOLD")) if os.getenv("ACTION_THRESHOLD") else None)
@@ -66,12 +68,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--sequence-length", type=int, default=int(os.getenv("SEQUENCE_LENGTH", str(DEFAULT_LSTM_SEQUENCE_LENGTH))))
     parser.add_argument("--sequence-stride", type=int, default=int(os.getenv("SEQUENCE_STRIDE", str(DEFAULT_LSTM_SEQUENCE_STRIDE))))
     parser.add_argument("--tracking-mode", choices=["auto", "simple", "supervision"], default=os.getenv("TRACKING_MODE", "supervision"))
+    parser.add_argument("--track-thresh", type=float, default=float(os.getenv("TRACK_THRESH", "0.10")))
+    parser.add_argument("--match-thresh", "--tracker-iou-threshold", dest="match_thresh", type=float, default=float(os.getenv("TRACK_IOU_THRESHOLD", "0.20")))
+    parser.add_argument("--track-buffer", type=int, default=int(os.getenv("TRACK_BUFFER", "90")))
+    parser.add_argument("--bbox-smoothing-alpha", type=float, default=float(os.getenv("BBOX_SMOOTHING_ALPHA", "0.60")))
     parser.add_argument("--print-events", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--skip-rtsp-probe", action="store_true", help="Skip real RTSP preflight before starting AI workers.")
     parser.add_argument("--refresh-interval-seconds", type=float, default=float(os.getenv("CAMERA_POLL_INTERVAL_SECONDS", "30.0")))
     parser.add_argument("--skip-simulated-ffmpeg", action="store_true", help="Skip spawning internal ffmpeg for simulated cameras.")
-    parser.add_argument("--domain", default=os.getenv("VIDEO_DOMAIN"))
+    parser.add_argument("--domain", default=os.getenv("VIDEO_DOMAIN", DEFAULT_STREAM_DOMAIN))
     parser.add_argument("--label", default=os.getenv("VIDEO_LABEL"))
     parser.add_argument("--video-filter", default=os.getenv("VIDEO_FILTER"))
     return parser.parse_args(argv)
@@ -99,6 +105,7 @@ def config_from_args(args: argparse.Namespace) -> RunnerConfig:
         detector_mode=args.detector_mode,
         yolo_model=args.yolo_model,
         device=args.device,
+        detector_conf=args.detector_conf,
         action_model=args.action_model,
         action_device=args.action_device,
         action_threshold=args.action_threshold,
@@ -106,6 +113,10 @@ def config_from_args(args: argparse.Namespace) -> RunnerConfig:
         sequence_length=args.sequence_length,
         sequence_stride=args.sequence_stride,
         tracking_mode=args.tracking_mode,
+        track_thresh=args.track_thresh,
+        match_thresh=args.match_thresh,
+        track_buffer=args.track_buffer,
+        bbox_smoothing_alpha=args.bbox_smoothing_alpha,
         print_events=args.print_events,
         dry_run=args.dry_run,
         rtsp_probe_enabled=not args.skip_rtsp_probe,
