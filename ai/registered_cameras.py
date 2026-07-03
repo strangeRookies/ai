@@ -87,6 +87,7 @@ class RunnerConfig:
     detector_mode: str
     yolo_model: str
     device: str
+    detector_conf: float
     action_model: str | None
     action_device: str
     action_threshold: float | None
@@ -94,6 +95,10 @@ class RunnerConfig:
     sequence_length: int
     sequence_stride: int
     tracking_mode: str
+    track_thresh: float
+    match_thresh: float
+    track_buffer: int
+    bbox_smoothing_alpha: float
     print_events: bool
     dry_run: bool
     rtsp_probe_enabled: bool
@@ -288,6 +293,8 @@ def build_overlay_command(
         config.yolo_model,
         "--device",
         config.device,
+        "--detector-conf",
+        str(config.detector_conf),
         "--action-device",
         config.action_device,
         "--classifier-input",
@@ -298,6 +305,14 @@ def build_overlay_command(
         str(config.sequence_stride),
         "--tracking-mode",
         config.tracking_mode,
+        "--track-thresh",
+        str(config.track_thresh),
+        "--match-thresh",
+        str(config.match_thresh),
+        "--track-buffer",
+        str(config.track_buffer),
+        "--bbox-smoothing-alpha",
+        str(config.bbox_smoothing_alpha),
     ]
     optional_pairs = [
         ("--mqtt-host", config.mqtt_host),

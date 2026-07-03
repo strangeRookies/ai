@@ -12,6 +12,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 from ai.simulated_rtsp_publisher import FFMPEG_MODE_CHOICES, build_ffmpeg_cmd
 from ai.simulated_rtsp_runtime import run_simulated_rtsp_publisher
 from ai.simulated_rtsp_sources import (
+    DEFAULT_STREAM_DOMAIN,
     scan_video_directory,
     stable_video_index,
     video_for_camera as _video_for_camera,
@@ -44,7 +45,7 @@ def parse_arguments() -> argparse.Namespace:
         action="store_true",
         help="Keep the requested FFmpeg mode even after repeated failures.",
     )
-    parser.add_argument("--domain", default=os.environ.get("VIDEO_DOMAIN"), help="Domain to filter (e.g. inside, outside)")
+    parser.add_argument("--domain", default=os.environ.get("VIDEO_DOMAIN", DEFAULT_STREAM_DOMAIN), help="Domain to filter (e.g. inside, outside)")
     parser.add_argument("--label", default=os.environ.get("VIDEO_LABEL"), help="Label to filter (e.g. swoon, assault, fight)")
     parser.add_argument("--video-filter", default=os.environ.get("VIDEO_FILTER"), help="Sub-string to filter filenames (e.g. outside_swoon)")
     return parser.parse_args()

@@ -88,6 +88,31 @@ class RegisteredCameraRunnerTest(unittest.TestCase):
         self.assertEqual(command[command.index("--camera-login-id") + 1], "icu_01")
         self.assertNotIn("--rtsp-url", command)
 
+    def test_overlay_command_passes_tracker_tuning_arguments(self):
+        camera = RegisteredCamera(
+            camera_id="9",
+            camera_login_id="icu_01",
+            rtsp_url="rtsp://cctv/icu",
+            source_type="REAL_RTSP",
+            assigned_video_path=None,
+        )
+        config = replace(
+            fake_config(Path("video_pool")),
+            detector_conf=0.21,
+            track_thresh=0.07,
+            match_thresh=0.12,
+            track_buffer=150,
+            bbox_smoothing_alpha=0.45,
+        )
+
+        command = build_overlay_command(camera, "rtsp://cctv/icu", 8012, config)
+
+        self.assertEqual(command[command.index("--detector-conf") + 1], "0.21")
+        self.assertEqual(command[command.index("--track-thresh") + 1], "0.07")
+        self.assertEqual(command[command.index("--match-thresh") + 1], "0.12")
+        self.assertEqual(command[command.index("--track-buffer") + 1], "150")
+        self.assertEqual(command[command.index("--bbox-smoothing-alpha") + 1], "0.45")
+
     def test_load_active_cameras_reads_backend_success_data_envelope(self):
         response = FakeHttpResponse(
             b'{"success":true,"data":[{"cameraId":4,"cameraLoginId":"cam_02","rtspUrl":"rtsp://cctv/cam_02","sourceType":"REAL_RTSP","aiEnabled":true,"status":"ACTIVE"}]}'
@@ -274,6 +299,7 @@ def fake_config(video_pool: Path) -> RunnerConfig:
         detector_mode="real",
         yolo_model="yolo26n-pose.pt",
         device="cuda:0",
+        detector_conf=0.15,
         action_model=None,
         action_device="cuda:0",
         action_threshold=None,
@@ -281,6 +307,10 @@ def fake_config(video_pool: Path) -> RunnerConfig:
         sequence_length=30,
         sequence_stride=15,
         tracking_mode="supervision",
+        track_thresh=0.10,
+        match_thresh=0.20,
+        track_buffer=90,
+        bbox_smoothing_alpha=0.60,
         print_events=False,
         dry_run=True,
         rtsp_probe_enabled=True,

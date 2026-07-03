@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import ai.worker_registry
 from ai.registered_cameras import RegisteredCamera
 from ai.ffmpeg_command import build_ffmpeg_command
 from ai.simulated_rtsp_publisher import FfmpegRestartPolicy, PublisherLock, select_initial_ffmpeg_mode, tail_text_file
@@ -55,6 +56,21 @@ class SimulatedRtspFolderPublisherTest(unittest.TestCase):
             args = parse_arguments()
 
         self.assertEqual(args.ffmpeg_mode, "copy")
+
+    def test_cli_defaults_to_outside_domain_for_live_publisher(self):
+        argv = ["start_simulated_rtsp_from_folder.py", "--video-dir", "."]
+        with patch.dict("os.environ", {}, clear=True), patch("sys.argv", argv):
+            args = parse_arguments()
+
+        self.assertEqual(args.domain, "outside")
+        self.assertIsNone(args.label)
+
+    def test_stable_start_script_streams_outside_videos_only(self):
+        script = Path("scripts/start_ai_stable.sh").read_text(encoding="utf-8")
+
+        self.assertIn("--domain outside", script)
+        self.assertNotIn("--domain inside", script)
+        self.assertNotIn("--label swoon", script)
 
     def test_auto_restart_policy_falls_back_from_nvenc_after_exit_255(self):
         policy = FfmpegRestartPolicy(requested_mode="auto", initial_mode="nvenc")

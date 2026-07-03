@@ -68,24 +68,33 @@ class MqttEventPublisher(EventPublisher):
             if self.client is None or not self.connect():
                 print(
                     f"[mqtt] publish skipped because MQTT client is not connected: "
-                    f"{_payload_context(payload, target_topic)}",
+                    f"{_payload_context(payload, target_topic, connected=False, rc='n/a')}",
                     file=sys.stderr,
                 )
                 return False
         try:
-            print(f"[mqtt] publishing: {_payload_context(payload, target_topic)}", flush=True)
+            print(
+                f"[mqtt] publishing: {_payload_context(payload, target_topic, connected=self.connected, rc='pending')}",
+                flush=True,
+            )
             result = self.client.publish(target_topic, json.dumps(payload, ensure_ascii=False), qos=0)
             if result.rc != self.mqtt.MQTT_ERR_SUCCESS:
                 print(
-                    f"[mqtt] publish failed: {_payload_context(payload, target_topic)}, rc={result.rc}",
+                    f"[mqtt] publish failed: {_payload_context(payload, target_topic, connected=self.connected, rc=result.rc)}",
                     file=sys.stderr,
                 )
                 return False
-            print(f"[mqtt] published: {_payload_context(payload, target_topic)}", flush=True)
+            print(
+                f"[mqtt] published: {_payload_context(payload, target_topic, connected=self.connected, rc=result.rc)}",
+                flush=True,
+            )
             return True
         except (OSError, RuntimeError, ValueError) as exc:
             self.connected = False
-            print(f"[mqtt] publish failed: {_payload_context(payload, target_topic)}, error={exc}", file=sys.stderr)
+            print(
+                f"[mqtt] publish failed: {_payload_context(payload, target_topic, connected=False, rc='exception')}, error={exc}",
+                file=sys.stderr,
+            )
             return False
 
     def close(self):
@@ -153,11 +162,25 @@ def mqtt_topic_settings_from_args(args):
     }
 
 
-def _payload_context(payload, topic):
+def _payload_context(payload, topic, connected=None, rc=None):
     if not isinstance(payload, dict):
-        return f"topic={topic}, messageType=unknown, streamId=unknown"
+        return _format_payload_context(topic, "unknown", "unknown", "unknown", "unknown", connected, rc)
     message_type = payload.get("messageType") or payload.get("message_type") or payload.get("event_type") or "unknown"
     stream_id = payload.get("streamId") or payload.get("camera_login_id") or payload.get("camera_id") or "unknown"
+    camera_login_id = payload.get("cameraLoginId") or payload.get("camera_login_id") or stream_id or "unknown"
+    frame_id = payload.get("frameId") or payload.get("frame_id") or "unknown"
     event_id = payload.get("eventId")
     event_text = f", eventId={event_id}" if event_id else ""
-    return f"topic={topic}, messageType={message_type}, streamId={stream_id}{event_text}"
+    return (
+        _format_payload_context(topic, message_type, stream_id, camera_login_id, frame_id, connected, rc)
+        + event_text
+    )
+
+
+def _format_payload_context(topic, message_type, stream_id, camera_login_id, frame_id, connected, rc):
+    connected_text = "unknown" if connected is None else str(bool(connected)).lower()
+    rc_text = "unknown" if rc is None else str(rc)
+    return (
+        f"topic={topic}, messageType={message_type}, streamId={stream_id}, "
+        f"cameraLoginId={camera_login_id}, frameId={frame_id}, rc={rc_text}, connected={connected_text}"
+    )

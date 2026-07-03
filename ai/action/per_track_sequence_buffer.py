@@ -92,6 +92,9 @@ class PerTrackKeypointSequenceBuffers:
         """현재 버퍼에서 활성화되어 추적 중인 모든 트랙 ID 목록을 정렬하여 반환합니다."""
         return sorted(self._buffers.keys())
 
+    def buffer_lengths(self):
+        return {track_id: len(buffer._frames) for track_id, buffer in self._buffers.items()}
+
     def _drop_stale_tracks(self, now):
         """설정 시간(max_track_age_seconds) 동안 나타나지 않은 소실 트랙들을 탐색해 
         메모리 누수를 방지하기 위해 버퍼 리스트에서 영구히 삭제합니다.
@@ -168,6 +171,9 @@ class PerTrackCropSequenceBuffers:
     def active_track_ids(self):
         """현재 활성화되어 추적 중인 모든 크롭 트랙 ID 목록을 반환합니다."""
         return sorted(self._buffers.keys())
+
+    def buffer_lengths(self):
+        return {track_id: len(buffer._crops) for track_id, buffer in self._buffers.items()}
 
     def _drop_stale_tracks(self, now):
         """장기간 미출현 트랙의 크롭 이미지 버퍼를 비워 메모리를 정리합니다."""

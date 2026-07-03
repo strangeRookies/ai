@@ -322,13 +322,26 @@ def log_tracking_stage(
     tracked_count = sum(1 for d in post_detections if d.get("track_id") is not None)
     missing_track_count = len(post_detections) - tracked_count
     active_ids = sorted({int(d["track_id"]) for d in post_detections if d.get("track_id") is not None})
+    keypoint_confidences = [
+        float(point.get("confidence", 0.0))
+        for detection in post_detections
+        for point in detection.get("keypoints") or []
+        if point.get("confidence") is not None
+    ]
+    avg_keypoint_confidence = (
+        round(sum(keypoint_confidences) / len(keypoint_confidences), 4)
+        if keypoint_confidences
+        else None
+    )
     track_details = []
     for d in post_detections:
         bbox = d.get("bbox") or []
         track_details.append({
             "trackId": d.get("track_id"),
+            "displayId": d.get("display_id"),
             "bbox": [round(float(v), 2) for v in bbox[:4]] if bbox else [],
             "confidence": round(float(d.get("confidence", 0.0)), 4),
+            "keypointCount": len(d.get("keypoints") or []),
             "fallbackRisk": d.get("track_id") is None,
         })
     record = {
@@ -338,6 +351,7 @@ def log_tracking_stage(
         "detectionCount": len(pre_detections),
         "trackedCount": tracked_count,
         "missingTrackCount": missing_track_count,
+        "avgKeypointConfidence": avg_keypoint_confidence,
         "activeTrackIds": active_ids,
         "newTracks": diagnostics.get("new_tracks", 0),
         "lostTracks": diagnostics.get("lost_tracks", 0),
