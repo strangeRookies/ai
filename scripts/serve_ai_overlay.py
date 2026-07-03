@@ -1,11 +1,15 @@
 import argparse
 import json
 import os
+import queue
 import signal
 import sys
 import threading
 import time
 from pathlib import Path
+
+from ai.events.event_clip import EventClipBuffer
+from ai.events.clip_worker import ClipWriterWorker, enqueue_event_clip
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
@@ -348,6 +352,29 @@ def process_frame(
                 publisher.publish(payload, topic=topic_settings["event_topic"])
             except Exception as exc:
                 print(f"[ai-worker][error] failed to publish event payload for camera={stream_id}: {exc}", file=sys.stderr, flush=True)
+
+        # 낙상 감지 시 10초 스냅샷 버퍼 트리거 작동
+        if state is not None and getattr(state, "clip_buffer", None) is not None:
+            target_bbox = []
+            for b in boxes:
+                if b.get("track_id") is not None and int(b["track_id"]) == track_id:
+                    target_bbox = b.get("box", [])
+                    break
+            
+            task_metadata = {
+                "evidenceId": payload.get("eventId"),
+                "event_timestamp": payload.get("timestamp"),
+                "track_id": track_id,
+                "bbox": target_bbox
+            }
+            
+            state.clip_buffer.trigger_event(
+                event_type=payload.get("type", "fall_detected"),
+                camera_id=stream_id,
+                metadata=task_metadata,
+                queue=state.clip_queue
+            )
+            print(f"[ai-overlay-event] triggered snapshot recording for camera={stream_id} eventId={payload.get('eventId')}", flush=True)
     maybe_log_debug(frame_packet, boxes, summary, prediction, args, prefix="[ai-overlay-debug]")
 
     update_overlay_runtime(summary)
@@ -424,6 +451,11 @@ class OverlayWorker:
         self.queue = CameraFrameQueue(self.camera_login_id, maxsize=getattr(self.args, "frame_queue_maxsize", 3))
         self.frame_buffer = FrameMetadataBuffer(maxlen=self.args.frame_sync_buffer_size)
 
+        # 10초 스냅샷 비디오 클립 버퍼 및 큐 초기화 (state에 공유하여 process_frame에서도 접근 가능케 함)
+        self.state.clip_queue = queue.Queue(maxsize=10)
+        self.state.clip_buffer = EventClipBuffer()
+        self.clip_worker = None
+
     def start(self):
         self.reader_thread = threading.Thread(target=self._reader_run, name="ai-overlay-reader", daemon=True)
         self.reader_thread.start()
@@ -434,6 +466,11 @@ class OverlayWorker:
         if self.reader_thread is not None:
             self.reader_thread.join(timeout=3)
         self.thread.join(timeout=3)
+
+        # 스냅샷 비디오 클립 워커 종료
+        if hasattr(self, "clip_worker") and self.clip_worker is not None:
+            self.clip_worker.stop()
+            print(f"[ai-overlay-inference] stopped clip writer worker for camera={self.camera_login_id}", flush=True)
 
     def _reader_run(self):
         publisher = None
@@ -523,6 +560,15 @@ class OverlayWorker:
         classifier, _classifier_mode = create_classifier(self.args.action_model, self.args.action_device, self.args.action_threshold)
         publisher, publisher_mode = create_event_publisher(self.args)
         print(f"[ai-overlay-inference] initialized event publisher: {publisher_mode}", flush=True)
+        
+        # S3 업로더 및 MQTT 발행 연동 스레드 시작
+        self.clip_worker = ClipWriterWorker(
+            self.state.clip_queue,
+            publisher=publisher,
+            mqtt_event_topic=self.args.mqtt_event_topic
+        )
+        self.clip_worker.start()
+        print(f"[ai-overlay-inference] started clip writer worker for camera={self.camera_login_id}", flush=True)
         log_lstm_config(
             "[lstm-config]",
             self.args.sequence_length,
@@ -592,6 +638,10 @@ class OverlayWorker:
             if frame_packet is None:
                 time.sleep(0.005)
                 continue
+
+            # 매 프레임마다 스냅샷 클립 버퍼에 기록
+            if self.state.clip_buffer is not None:
+                self.state.clip_buffer.add_frame(frame_packet.frame)
 
             if roi_configs:
                 h, w = frame_packet.frame.shape[:2]
