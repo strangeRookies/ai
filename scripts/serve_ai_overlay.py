@@ -98,6 +98,22 @@ def mjpeg_debug_enabled(args: argparse.Namespace) -> bool:
     return bool(getattr(args, "mjpeg_debug", False))
 
 
+def env_optional_int(*names: str) -> int | None:
+    for name in names:
+        value = os.getenv(name)
+        if value:
+            return int(value)
+    return None
+
+
+def env_optional_str(*names: str) -> str | None:
+    for name in names:
+        value = os.getenv(name)
+        if value:
+            return value
+    return None
+
+
 def process_frame(
     frame_packet,
     detector,
@@ -889,6 +905,12 @@ def main():
     parser.add_argument("--bbox-smoothing-alpha", type=float, default=0.60)
     parser.add_argument("--track-max-missing-seconds", type=float, default=4.0)
     parser.add_argument("--center-match-ratio", type=float, default=0.70)
+    parser.add_argument(
+        "--tracking-stability-fallback",
+        action=argparse.BooleanOptionalAction,
+        default=os.getenv("TRACKING_STABILITY_FALLBACK", "false").lower() in {"1", "true", "yes", "on"},
+        help="Use a lightweight bbox continuity tracker after supervision to stabilize final track_id values.",
+    )
     parser.add_argument("--overlay-debug-tracks", action="store_true")
     parser.add_argument("--frame-sync-debug", action=argparse.BooleanOptionalAction, default=os.getenv("FRAME_SYNC_DEBUG", "false").lower() in {"1", "true", "yes", "on"})
     parser.add_argument("--frame-sync-buffer-size", type=int, default=int(os.getenv("FRAME_SYNC_BUFFER_SIZE", "60")))
@@ -923,9 +945,31 @@ def main():
     parser.add_argument("--mqtt-client-id", help="MQTT client ID")
     parser.add_argument("--mqtt-username", help="MQTT username")
     parser.add_argument("--mqtt-password", help="MQTT password")
-    parser.add_argument("--selected-track-id", type=int, help="Selected track ID to filter overlay and predictions")
-    parser.add_argument("--selected-track-mode", default="strict", choices=["strict", "fallback"], help="Selected track filtering mode: strict or fallback")
-    parser.add_argument("--selected-track-missing-frames", type=int, default=5, help="Number of frames allowed for missing selected track in fallback mode")
+    parser.add_argument(
+        "--selected-track-id",
+        "--preferred-track-id",
+        dest="selected_track_id",
+        type=int,
+        default=env_optional_int(
+            "AI_SELECTED_TRACK_ID",
+            "SELECTED_TRACK_ID",
+            "AI_PREFERRED_TRACK_ID",
+            "PREFERRED_TRACK_ID",
+        ),
+        help="Selected track ID to filter overlay and predictions",
+    )
+    parser.add_argument(
+        "--selected-track-mode",
+        default=env_optional_str("AI_SELECTED_TRACK_MODE", "SELECTED_TRACK_MODE") or "strict",
+        choices=["strict", "fallback"],
+        help="Selected track filtering mode: strict or fallback",
+    )
+    parser.add_argument(
+        "--selected-track-missing-frames",
+        type=int,
+        default=env_optional_int("AI_SELECTED_TRACK_MISSING_FRAMES", "SELECTED_TRACK_MISSING_FRAMES") or 5,
+        help="Number of frames allowed for missing selected track in fallback mode",
+    )
     
     args = parser.parse_args()
     args.camera_login_id = args.camera_login_id or args.camera_id

@@ -163,6 +163,7 @@ def _duplicate_index(unique, detection, iou_threshold):
         if track_id is not None and existing_track_id is not None:
             if int(float(str(track_id))) == int(float(str(existing_track_id))):
                 return index
+            continue
         if _bbox_iou(existing.get("bbox"), detection.get("bbox")) >= iou_threshold:
             return index
     return None
@@ -171,7 +172,8 @@ def _duplicate_index(unique, detection, iou_threshold):
 def _selection_score(detection):
     keypoint_count = len(detection.get("keypoints") or [])
     confidence = float(detection.get("confidence", 0.0))
-    return keypoint_count, confidence, _bbox_area(detection.get("bbox"))
+    has_track_id = detection.get("track_id") is not None
+    return has_track_id, keypoint_count, confidence, _bbox_area(detection.get("bbox"))
 
 
 def _bbox_iou(left, right):

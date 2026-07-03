@@ -53,6 +53,28 @@ class TrackSelectionTest(unittest.TestCase):
         self.assertEqual(unique[0]["confidence"], 0.70)
         self.assertEqual(removed, ["track_id=7 reason=duplicate_bbox"])
 
+    def test_deduplicate_keeps_distinct_track_ids_even_when_boxes_overlap(self):
+        detections = [
+            {"bbox": [0, 0, 100, 100], "track_id": 1, "confidence": 0.90},
+            {"bbox": [2, 2, 102, 102], "track_id": 2, "confidence": 0.80},
+        ]
+
+        unique, removed = deduplicate_tracked_detections(detections)
+
+        self.assertEqual([item["track_id"] for item in unique], [1, 2])
+        self.assertEqual(removed, [])
+
+    def test_deduplicate_prefers_tracked_box_over_untracked_overlap(self):
+        detections = [
+            {"bbox": [0, 0, 100, 100], "confidence": 0.99},
+            {"bbox": [2, 2, 102, 102], "track_id": 4, "confidence": 0.70},
+        ]
+
+        unique, removed = deduplicate_tracked_detections(detections)
+
+        self.assertEqual([item.get("track_id") for item in unique], [4])
+        self.assertEqual(removed, ["track_id=None reason=duplicate_bbox"])
+
 
     def test_track_selector_strict_mode_keeps_only_matching(self):
         from ai.inference.track_selection import TrackSelector
@@ -158,4 +180,3 @@ class TrackSelectionTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

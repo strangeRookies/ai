@@ -16,6 +16,17 @@ class RegisteredCameraSelectedTrackTest(unittest.TestCase):
 
         self.assertEqual(config.selected_track_id, 7)
 
+    def test_runner_reads_ai_selected_track_id_before_legacy_environment(self):
+        with patch.dict("os.environ", {"AI_SELECTED_TRACK_ID": "8", "SELECTED_TRACK_ID": "7"}, clear=False):
+            config = config_from_args(parse_args([]))
+
+        self.assertEqual(config.selected_track_id, 8)
+
+    def test_runner_accepts_preferred_track_id_alias(self):
+        config = config_from_args(parse_args(["--preferred-track-id", "9"]))
+
+        self.assertEqual(config.selected_track_id, 9)
+
     def test_overlay_command_passes_selected_track_id_to_worker(self):
         camera = RegisteredCamera(
             camera_id="12",
@@ -64,4 +75,3 @@ class RegisteredCameraSelectedTrackTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

@@ -36,6 +36,20 @@ def env_optional_int(*names: str) -> int | None:
     return None
 
 
+def env_optional_str(*names: str) -> str | None:
+    for name in names:
+        value = os.getenv(name)
+        if value:
+            return value
+    return None
+
+
+def split_csv(value: str | None) -> tuple[str, ...]:
+    if not value:
+        return ()
+    return tuple(item.strip() for item in value.split(",") if item.strip())
+
+
 
 def run_cameras(cameras: list[RegisteredCamera], config: RunnerConfig) -> None:
     run_camera_sync_loop(cameras, config)
@@ -82,6 +96,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--match-thresh", "--tracker-iou-threshold", dest="match_thresh", type=float, default=float(os.getenv("TRACK_IOU_THRESHOLD", "0.20")))
     parser.add_argument("--track-buffer", type=int, default=int(os.getenv("TRACK_BUFFER", "90")))
     parser.add_argument("--bbox-smoothing-alpha", type=float, default=float(os.getenv("BBOX_SMOOTHING_ALPHA", "0.60")))
+    parser.add_argument(
+        "--tracking-stability-fallback",
+        action=argparse.BooleanOptionalAction,
+        default=env_bool("TRACKING_STABILITY_FALLBACK", False),
+        help="Use a lightweight bbox continuity tracker after supervision to stabilize final track_id values.",
+    )
+    parser.add_argument(
+        "--tracking-stability-fallback-camera-ids",
+        default=os.getenv("TRACKING_STABILITY_FALLBACK_CAMERA_IDS", ""),
+        help="Comma-separated cameraLoginIds that should use tracking stability fallback without enabling it globally.",
+    )
     parser.add_argument("--print-events", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--skip-rtsp-probe", action="store_true", help="Skip real RTSP preflight before starting AI workers.")
@@ -90,9 +115,27 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--domain", default=os.getenv("VIDEO_DOMAIN", DEFAULT_STREAM_DOMAIN))
     parser.add_argument("--label", default=os.getenv("VIDEO_LABEL"))
     parser.add_argument("--video-filter", default=os.getenv("VIDEO_FILTER"))
-    parser.add_argument("--selected-track-id", type=int, default=env_optional_int("SELECTED_TRACK_ID", "PREFERRED_TRACK_ID"))
-    parser.add_argument("--selected-track-mode", default=os.getenv("SELECTED_TRACK_MODE", "strict"))
-    parser.add_argument("--selected-track-missing-frames", type=int, default=int(os.getenv("SELECTED_TRACK_MISSING_FRAMES", "5")))
+    parser.add_argument(
+        "--selected-track-id",
+        "--preferred-track-id",
+        dest="selected_track_id",
+        type=int,
+        default=env_optional_int(
+            "AI_SELECTED_TRACK_ID",
+            "SELECTED_TRACK_ID",
+            "AI_PREFERRED_TRACK_ID",
+            "PREFERRED_TRACK_ID",
+        ),
+    )
+    parser.add_argument(
+        "--selected-track-mode",
+        default=env_optional_str("AI_SELECTED_TRACK_MODE", "SELECTED_TRACK_MODE") or "strict",
+    )
+    parser.add_argument(
+        "--selected-track-missing-frames",
+        type=int,
+        default=env_optional_int("AI_SELECTED_TRACK_MISSING_FRAMES", "SELECTED_TRACK_MISSING_FRAMES") or 5,
+    )
     return parser.parse_args(argv)
 
 
@@ -131,6 +174,8 @@ def config_from_args(args: argparse.Namespace) -> RunnerConfig:
         match_thresh=args.match_thresh,
         track_buffer=args.track_buffer,
         bbox_smoothing_alpha=args.bbox_smoothing_alpha,
+        tracking_stability_fallback=args.tracking_stability_fallback,
+        tracking_stability_fallback_camera_ids=split_csv(args.tracking_stability_fallback_camera_ids),
         print_events=args.print_events,
         dry_run=args.dry_run,
         rtsp_probe_enabled=not args.skip_rtsp_probe,
