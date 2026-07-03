@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -53,6 +55,31 @@ def split_csv(value: str | None) -> tuple[str, ...]:
 
 def run_cameras(cameras: list[RegisteredCamera], config: RunnerConfig) -> None:
     run_camera_sync_loop(cameras, config)
+
+
+def warn_if_multiple_registered_camera_runners(current_pid: int | None = None) -> dict | None:
+    current_pid = os.getpid() if current_pid is None else int(current_pid)
+    try:
+        completed = subprocess.run(
+            ["pgrep", "-af", "run_registered_cameras.py"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        return None
+    lines = [line.strip() for line in completed.stdout.splitlines() if "run_registered_cameras.py" in line and "pgrep -af" not in line]
+    if len(lines) <= 1:
+        return None
+    warning = {
+        "messageType": "runner_duplicate_warning",
+        "currentPid": current_pid,
+        "runnerCount": len(lines),
+        "runners": lines,
+        "cleanupCommand": "pkill -f 'scripts/run_registered_cameras.py'",
+    }
+    print(f"[registered-cameras][warning] {json.dumps(warning, ensure_ascii=False)}", flush=True)
+    return warning
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -204,6 +231,7 @@ def config_from_args(args: argparse.Namespace) -> RunnerConfig:
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     config = config_from_args(args)
+    warn_if_multiple_registered_camera_runners()
     print(
         "[registered-cameras] sequence config: "
         f"sequence_length={config.sequence_length} "

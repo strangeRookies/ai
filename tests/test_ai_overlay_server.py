@@ -1,15 +1,20 @@
+import json
+import os
 import unittest
 from contextlib import redirect_stdout
 from argparse import Namespace
 from io import StringIO
+from unittest.mock import patch
 
 import numpy as np
 
 from ai.streams.video_reader import FramePacket
 from ai.frame_sync import FrameMetadataBuffer
+from ai.inference.rtsp_runtime import log_tracking_stage
+from ai.inference.tracking_debug import log_sequence_stage
 from scripts.run_rtsp_inference import create_classifier, create_detector
-from scripts.serve_ai_overlay import OverlayPublishState, format_action_overlay_text, initial_summary, log_frame_sync, process_frame
-from ai.action.per_track_sequence_buffer import PerTrackCropSequenceBuffers
+from scripts.serve_ai_overlay import OverlayPublishState, format_action_overlay_text, initial_summary, log_frame_sync, log_worker_startup_contract, process_frame
+from ai.action.per_track_sequence_buffer import PerTrackCropSequenceBuffers, PerTrackKeypointSequenceBuffers
 from ai.visualization.action_overlay import annotate_boxes_with_action
 from tracking.simple_tracker import SimpleTrackAssigner
 from tracking.display_id_mapper import DisplayIdMapper
@@ -299,6 +304,96 @@ class AiOverlayServerTest(unittest.TestCase):
         second = state.next_timestamp_ms()
 
         self.assertEqual(second, first + 101)
+
+    def test_keypoint_sequence_buffer_reports_buffer_not_full_reason(self):
+        buffer = PerTrackKeypointSequenceBuffers(sequence_length=3, stride=1)
+        detection = {
+            "track_id": 7,
+            "bbox": [1, 2, 30, 40],
+            "confidence": 0.82,
+            "keypoints": [{"x": 1, "y": 2, "confidence": 0.9}],
+        }
+
+        sequences = buffer.add(1, [detection], (64, 64, 3), now=1.0)
+
+        self.assertEqual(sequences, [])
+        self.assertEqual(buffer.buffer_lengths(), {7: 1})
+        self.assertEqual(buffer.last_sequence_diagnostics[7]["reason"], "buffer_not_full")
+        self.assertEqual(buffer.last_sequence_diagnostics[7]["buffer_length"], 1)
+        self.assertEqual(buffer.last_sequence_diagnostics[7]["required_sequence_length"], 3)
+
+    def test_tracking_stage_log_classifies_tracker_gating(self):
+        output = StringIO()
+
+        with patch.dict(os.environ, {"TRACKING_DEBUG": "true"}), redirect_stdout(output):
+            log_tracking_stage(
+                "cam_dynamic",
+                42,
+                [{"bbox": [1, 2, 20, 40], "confidence": 0.24, "keypoints": [{"confidence": 0.8}]}],
+                [{"bbox": [1, 2, 20, 40], "confidence": 0.24, "keypoints": [{"confidence": 0.8}]}],
+                {"new_tracks": 0, "lost_tracks": 0},
+            )
+
+        record = json.loads(output.getvalue().split(" ", 1)[1])
+        self.assertEqual(record["trackerInputCount"], 1)
+        self.assertEqual(record["trackedCount"], 0)
+        self.assertEqual(record["diagnosis"], "tracker_gating")
+        self.assertEqual(record["trackDetails"][0]["avgKeypointConfidence"], 0.8)
+
+    def test_sequence_stage_log_includes_buffer_reason_and_lstm_shape_contract(self):
+        output = StringIO()
+
+        with patch.dict(os.environ, {"TRACKING_DEBUG": "true"}), redirect_stdout(output):
+            log_sequence_stage(
+                "cam_dynamic",
+                43,
+                active_track_ids=[7],
+                buffer_lengths={7: 12},
+                sequences_generated=0,
+                sequences_generated_by_track={},
+                latest_faint_prob=None,
+                sequence_diagnostics={
+                    7: {
+                        "reason": "buffer_not_full",
+                        "buffer_length": 12,
+                        "required_sequence_length": 30,
+                        "stride": 15,
+                        "missing_count": 18,
+                    }
+                },
+                checkpoint_input_size=54,
+                runtime_feature_dim=None,
+                tensor_shape=None,
+                sequence_length=30,
+            )
+
+        record = json.loads(output.getvalue().split(" ", 1)[1])
+        self.assertEqual(record["diagnosis"], "sequence_buffer_not_full")
+        self.assertEqual(record["checkpointInputSize"], 54)
+        self.assertEqual(record["sequenceLength"], 30)
+        self.assertEqual(record["trackDiagnostics"]["7"]["reason"], "buffer_not_full")
+
+    def test_worker_startup_log_includes_runtime_mapping_and_selected_track_warning(self):
+        args = Namespace(
+            camera_login_id="cam_dynamic",
+            camera_id="legacy",
+            rtsp_url="rtsp://127.0.0.1:8554/cam_dynamic",
+            action_model="runs/model.pt",
+            classifier_input="keypoints",
+            selected_track_id=None,
+            selected_track_mode="strict",
+        )
+        output = StringIO()
+
+        with redirect_stdout(output):
+            log_worker_startup_contract(args)
+
+        text = output.getvalue()
+        self.assertIn("[ai-worker-startup]", text)
+        self.assertIn("cameraLoginId=cam_dynamic", text)
+        self.assertIn("action_model=runs/model.pt", text)
+        self.assertIn("classifier_input=keypoints", text)
+        self.assertIn("[selected-track-warning]", text)
 
 
 class FakePublisher:

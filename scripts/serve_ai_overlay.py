@@ -98,6 +98,27 @@ def mjpeg_debug_enabled(args: argparse.Namespace) -> bool:
     return bool(getattr(args, "mjpeg_debug", False))
 
 
+def log_worker_startup_contract(args: argparse.Namespace) -> None:
+    camera_login_id = getattr(args, "camera_login_id", None) or getattr(args, "camera_id", "")
+    print(
+        "[ai-worker-startup] "
+        f"cameraLoginId={camera_login_id} "
+        f"cameraId={getattr(args, 'camera_id', '')} "
+        f"rtsp_url={redact_url(getattr(args, 'rtsp_url', '') or '')} "
+        f"action_model={getattr(args, 'action_model', None)} "
+        f"classifier_input={getattr(args, 'classifier_input', None)} "
+        f"selected_track_mode={getattr(args, 'selected_track_mode', None)} "
+        f"selected_track_id={getattr(args, 'selected_track_id', None)}",
+        flush=True,
+    )
+    if getattr(args, "selected_track_mode", "strict") == "strict" and getattr(args, "selected_track_id", None) is None:
+        print(
+            "[selected-track-warning] "
+            "strict mode set but selected_track_id is None; selected filtering inactive.",
+            flush=True,
+        )
+
+
 def env_optional_int(*names: str) -> int | None:
     for name in names:
         value = os.getenv(name)
@@ -222,15 +243,25 @@ def _process_frame_impl(
         max_conf = max(confs) if confs else 0.0
         conf_range = f"{min_conf:.2f}-{max_conf:.2f}"
         matched_details = [f"det_{idx}->tid_{item.get('track_id')}" for idx, item in enumerate(detections)]
+        keypoint_details = [
+            f"tid_{item.get('track_id')}:kp_{len(item.get('keypoints') or [])}"
+            for item in detections
+        ]
+        if len(_pre_track_detections) > 0 and tracked_cnt == 0:
+            tracker_diagnosis = "tracker_gating"
+        elif tracked_cnt > 0 and int(_tracker_diag.get("active_tracks", tracked_cnt)) == 0:
+            tracker_diagnosis = "active_track_filtering"
+        else:
+            tracker_diagnosis = "tracking_ok"
         diag = _tracker_diag
         new_cnt = diag.get("new_tracks", 0)
         lost_cnt = diag.get("lost_tracks", 0)
         print(
             f"[Tracking Debug] camera: {stream_id} | frameId: {frame_id} | "
-            f"detections: {det_cnt} | tracked: {tracked_cnt} | "
+            f"detections: {det_cnt} | tracker_input_count: {len(_pre_track_detections)} | tracked: {tracked_cnt} | "
             f"new_tracks: {new_cnt} | lost_tracks: {lost_cnt} | "
             f"active_ids: {active_tids} | conf_range: {conf_range} | "
-            f"mapping: {matched_details}",
+            f"keypoints: {keypoint_details} | diagnosis: {tracker_diagnosis} | mapping: {matched_details}",
             flush=True
         )
 
@@ -369,6 +400,11 @@ def _process_frame_impl(
         sequences_generated=len(sequences),
         sequences_generated_by_track=sequence_buffer.sequences_generated_by_track,
         latest_faint_prob=summary.get("latest_faint_probability"),
+        sequence_diagnostics=sequence_buffer.sequence_diagnostics() if hasattr(sequence_buffer, "sequence_diagnostics") else {},
+        checkpoint_input_size=getattr(classifier, "input_size", None),
+        runtime_feature_dim=getattr(classifier, "last_runtime_feature_dim", None),
+        tensor_shape=getattr(classifier, "last_tensor_shape", None),
+        sequence_length=getattr(args, "sequence_length", None),
     )
     for track_id, track_prediction in predictions_by_track.items():
         event_triggered = False
@@ -696,6 +732,7 @@ class OverlayWorker:
             getattr(classifier, "checkpoint_sequence_length", None),
             getattr(classifier, "checkpoint_sequence_stride", None),
         )
+        log_worker_startup_contract(self.args)
         log_classifier_contract("[lstm-checkpoint]", self.camera_login_id, classifier)
 
         summary = initial_summary()
