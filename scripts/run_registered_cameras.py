@@ -28,6 +28,15 @@ def env_bool(name: str, default: bool) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def env_optional_int(*names: str) -> int | None:
+    for name in names:
+        value = os.getenv(name)
+        if value:
+            return int(value)
+    return None
+
+
+
 def run_cameras(cameras: list[RegisteredCamera], config: RunnerConfig) -> None:
     run_camera_sync_loop(cameras, config)
 
@@ -54,6 +63,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--mqtt-topic", default=os.getenv("MQTT_TOPIC"))
     parser.add_argument("--mqtt-camera-topic", default=os.getenv("MQTT_CAMERA_TOPIC", "camera"))
     parser.add_argument("--mqtt-event-topic", default=os.getenv("MQTT_EVENT_TOPIC", os.getenv("MQTT_TOPIC", "event")))
+    parser.add_argument("--mqtt-status-topic", default=os.getenv("MQTT_STATUS_TOPIC", "safety/cameras/status"))
     parser.add_argument("--mqtt-client-id-prefix", default=os.getenv("MQTT_CLIENT_ID_PREFIX", "strange-ai"))
     parser.add_argument("--mqtt-username", default=os.getenv("MQTT_USERNAME"))
     parser.add_argument("--mqtt-password", default=os.getenv("MQTT_PASSWORD"))
@@ -80,7 +90,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--domain", default=os.getenv("VIDEO_DOMAIN", DEFAULT_STREAM_DOMAIN))
     parser.add_argument("--label", default=os.getenv("VIDEO_LABEL"))
     parser.add_argument("--video-filter", default=os.getenv("VIDEO_FILTER"))
+    parser.add_argument("--selected-track-id", type=int, default=env_optional_int("SELECTED_TRACK_ID", "PREFERRED_TRACK_ID"))
+    parser.add_argument("--selected-track-mode", default=os.getenv("SELECTED_TRACK_MODE", "strict"))
+    parser.add_argument("--selected-track-missing-frames", type=int, default=int(os.getenv("SELECTED_TRACK_MISSING_FRAMES", "5")))
     return parser.parse_args(argv)
+
 
 
 def config_from_args(args: argparse.Namespace) -> RunnerConfig:
@@ -127,7 +141,12 @@ def config_from_args(args: argparse.Namespace) -> RunnerConfig:
         domain=args.domain,
         label=args.label,
         video_filter=args.video_filter,
+        selected_track_id=args.selected_track_id,
+        selected_track_mode=args.selected_track_mode,
+        selected_track_missing_frames=args.selected_track_missing_frames,
+        mqtt_status_topic=args.mqtt_status_topic,
     )
+
 
 
 def main(argv: list[str] | None = None) -> None:

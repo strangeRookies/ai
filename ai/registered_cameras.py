@@ -109,6 +109,11 @@ class RunnerConfig:
     domain: str | None = None
     label: str | None = None
     video_filter: str | None = None
+    selected_track_id: int | None = None
+    selected_track_mode: str = "strict"
+    selected_track_missing_frames: int = 5
+    mqtt_status_topic: str | None = None
+
 
 
 def normalize_camera_login_id(login_id: str) -> str:
@@ -320,10 +325,14 @@ def build_overlay_command(
         ("--mqtt-topic", config.mqtt_topic),
         ("--mqtt-camera-topic", config.mqtt_camera_topic),
         ("--mqtt-event-topic", config.mqtt_event_topic),
+        ("--mqtt-status-topic", config.mqtt_status_topic),
         ("--mqtt-client-id", f"{config.mqtt_client_id_prefix}-{camera.camera_login_id}"),
         ("--mqtt-username", config.mqtt_username),
         ("--action-model", config.action_model),
         ("--action-threshold", str(config.action_threshold) if config.action_threshold is not None else None),
+        ("--selected-track-id", str(config.selected_track_id) if config.selected_track_id is not None else None),
+        ("--selected-track-mode", config.selected_track_mode),
+        ("--selected-track-missing-frames", str(config.selected_track_missing_frames) if config.selected_track_missing_frames is not None else None),
     ]
     for key, value in optional_pairs:
         if value:

@@ -78,7 +78,7 @@ class MqttEventPublisherTest(unittest.TestCase):
 
         self.assertEqual(
             context,
-            "topic=camera, messageType=frame_sync, streamId=cam_05, cameraLoginId=cam_05, frameId=42, rc=0, connected=true",
+            "topic=camera, messageType=frame_sync, streamId=cam_05, cameraLoginId=cam_05, frameId=42, eventId=none, rc=0, connected=true, payloadBytes=93",
         )
 
 

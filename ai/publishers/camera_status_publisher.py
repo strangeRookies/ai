@@ -88,19 +88,23 @@ class CameraStatusPublisher:
     CAMERA_STATUS_TOPIC = "safety/cameras/status"
 
     def __init__(self, mqtt_publisher, camera_login_id: str,
-                 edge_device_id: str | None = None, rtsp_url: str | None = None):
+                 edge_device_id: str | None = None, rtsp_url: str | None = None,
+                 status_topic: str | None = None):
         """
         Args:
             mqtt_publisher:   MqttEventPublisher 인스턴스 (publish 메서드가 있으면 모두 수용)
             camera_login_id:  DB cameras.camera_login_id 와 일치하는 식별자
             edge_device_id:   엣지 디바이스 ID (서버 hostname 등)
             rtsp_url:         RTSP URL (로깅용, 마스킹 후 페이로드에 포함)
+            status_topic:     카메라 상태 발행 토픽 (기본: safety/cameras/status)
         """
         self._publisher = mqtt_publisher
         self._camera_login_id = camera_login_id
         self._edge_device_id = edge_device_id or os.getenv("EDGE_DEVICE_ID", "edge-ai-01")
         self._rtsp_url_masked = _mask_rtsp_url(rtsp_url)
+        self._status_topic = status_topic or os.getenv("MQTT_STATUS_TOPIC", self.CAMERA_STATUS_TOPIC)
         self._current_status: str | None = None  # 마지막으로 발행한 상태
+
 
     def notify_connected(self):
         """RTSP 연결 성공 시 호출."""
@@ -137,7 +141,7 @@ class CameraStatusPublisher:
         if hasattr(self._publisher, "client") and self._publisher.client is not None:
             try:
                 self._publisher.client.publish(
-                    self.CAMERA_STATUS_TOPIC,
+                    self._status_topic,
                     json.dumps(payload, ensure_ascii=False),
                     qos=0,
                 )
