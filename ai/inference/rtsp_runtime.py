@@ -365,19 +365,37 @@ def log_tracking_stage(
     track_details = []
     for d in post_detections:
         bbox = d.get("bbox") or []
+        per_track_keypoint_confidences = [
+            float(point.get("confidence", 0.0))
+            for point in d.get("keypoints") or []
+            if point.get("confidence") is not None
+        ]
+        per_track_avg_confidence = (
+            round(sum(per_track_keypoint_confidences) / len(per_track_keypoint_confidences), 4)
+            if per_track_keypoint_confidences
+            else None
+        )
         track_details.append({
             "trackId": d.get("track_id"),
             "displayId": d.get("display_id"),
             "bbox": [round(float(v), 2) for v in bbox[:4]] if bbox else [],
             "confidence": round(float(d.get("confidence", 0.0)), 4),
             "keypointCount": len(d.get("keypoints") or []),
+            "avgKeypointConfidence": per_track_avg_confidence,
             "fallbackRisk": d.get("track_id") is None,
         })
+    if len(pre_detections) > 0 and tracked_count == 0:
+        diagnosis = "tracker_gating"
+    elif tracked_count > 0 and int(diagnostics.get("active_tracks", tracked_count)) == 0:
+        diagnosis = "active_track_filtering"
+    else:
+        diagnosis = "tracking_ok"
     record = {
         "stage": "tracking",
         "cameraLoginId": camera_login_id,
         "frameId": frame_id,
         "detectionCount": len(pre_detections),
+        "trackerInputCount": len(pre_detections),
         "trackedCount": tracked_count,
         "missingTrackCount": missing_track_count,
         "avgKeypointConfidence": avg_keypoint_confidence,
@@ -385,6 +403,7 @@ def log_tracking_stage(
         "newTracks": diagnostics.get("new_tracks", 0),
         "lostTracks": diagnostics.get("lost_tracks", 0),
         "idSwitchLike": diagnostics.get("id_switch_like_events", 0),
+        "diagnosis": diagnosis,
         "trackDetails": track_details,
     }
     print(f"[stage-log] {json.dumps(record, ensure_ascii=False)}", flush=True)

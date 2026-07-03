@@ -3,6 +3,7 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
+from argparse import Namespace
 
 from ai.registered_cameras import (
     RegisteredCamera,
@@ -14,6 +15,7 @@ from ai.registered_cameras import (
     parse_camera,
 )
 from ai.registered_camera_workers import CameraWorker, next_overlay_port, publish_unavailable_camera_status, sync_camera_workers
+from scripts.run_registered_cameras import warn_if_multiple_registered_camera_runners
 
 
 class RegisteredCameraRunnerTest(unittest.TestCase):
@@ -309,6 +311,24 @@ class RegisteredCameraRunnerTest(unittest.TestCase):
             port = next_overlay_port({}, config)
 
         self.assertEqual(port, occupied_port + 1)
+
+    def test_runner_warns_when_multiple_registered_camera_runners_exist(self):
+        completed = Namespace(
+            returncode=0,
+            stdout=(
+                "111 python scripts/run_registered_cameras.py --backend-base-url http://127.0.0.1:8080\n"
+                "222 python scripts/run_registered_cameras.py --backend-base-url http://127.0.0.1:18080\n"
+            ),
+            stderr="",
+        )
+
+        with patch("subprocess.run", return_value=completed):
+            warning = warn_if_multiple_registered_camera_runners(current_pid=222)
+
+        self.assertIsNotNone(warning)
+        assert warning is not None
+        self.assertEqual(warning["runnerCount"], 2)
+        self.assertIn("pkill -f 'scripts/run_registered_cameras.py'", warning["cleanupCommand"])
 
 
 class FakeHttpResponse:

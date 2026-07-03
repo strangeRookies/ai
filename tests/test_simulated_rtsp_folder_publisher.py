@@ -80,6 +80,16 @@ class SimulatedRtspFolderPublisherTest(unittest.TestCase):
         self.assertIn("ACTION_MODEL checkpoint not found", script)
         self.assertIn("--action-model \"$ACTION_MODEL\"", script)
 
+    def test_click_launcher_cleanup_kills_relative_ai_processes(self):
+        for script_path in (Path("AI_실행_딸깍.bat"), Path("../AI_실행_딸깍.bat")):
+            with self.subTest(script_path=script_path):
+                script = script_path.read_text(encoding="utf-8")
+
+                self.assertIn("pkill -f 'scripts/run_registered_cameras.py'", script)
+                self.assertIn("pkill -f 'scripts/start_simulated_rtsp_from_folder.py'", script)
+                self.assertIn("pkill -f 'scripts/serve_ai_overlay.py'", script)
+                self.assertNotIn("pkill -f '%REMOTE_ROOT%/scripts/run_registered_cameras.py'", script)
+
     def test_auto_restart_policy_falls_back_from_nvenc_after_exit_255(self):
         policy = FfmpegRestartPolicy(requested_mode="auto", initial_mode="nvenc")
 
