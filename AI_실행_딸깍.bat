@@ -44,7 +44,7 @@ if not defined STABLE_ROOT (
 )
 
 set "REMOTE_ROOT=%STABLE_ROOT%"
-set "BRANCH=codex/ai-worker-flow-improvements"
+set "BRANCH=develop"
 set "MQTT_HOST=15.165.248.37"
 set "MQTT_PORT=1883"
 
