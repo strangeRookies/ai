@@ -175,13 +175,13 @@ def process_frame(
     if tracker is not None:
         update_tracking_summary(summary, tracker.diagnostics())
 
-    # EXIT 이탈 감지: 트래킹된 박스 center가 EXIT ROI 안에 있으면 알림
+    # EXIT 이탈 감지: 트래킹된 박스 center가 안전구역(EXIT ROI) 밖에 있으면 알림
     if exit_roi_mask is not None and exit_post_processor is not None:
         all_track_ids = {int(float(str(b["track_id"]))) for b in boxes if b.get("track_id") is not None}
-        in_exit_zone = find_boxes_in_exit_zone(boxes, exit_roi_mask)
-        for track_id in all_track_ids - in_exit_zone:
+        in_safe_zone = find_boxes_in_exit_zone(boxes, exit_roi_mask)
+        for track_id in in_safe_zone:
             exit_post_processor.reset_track(args.camera_id, track_id)
-        for track_id in in_exit_zone:
+        for track_id in all_track_ids - in_safe_zone:
             if exit_post_processor.should_trigger(args.camera_id, track_id, frame_packet.timestamp):
                 exit_boxes = [b for b in boxes if b.get("track_id") is not None and int(float(str(b["track_id"]))) == track_id]
                 exit_payload = build_inference_event_payload(
