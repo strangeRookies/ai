@@ -111,7 +111,7 @@ DEFAULT_EXIT_COOLDOWN_SECONDS = 15.0
 
 
 class ExitEventPostProcessor:
-    """EXIT ROI 이탈 감지 후처리기 — 사람이 EXIT 구역에 연속 N회 감지되면 알림."""
+    """EXIT ROI 이탈 감지 후처리기 — 사람이 안전구역(EXIT ROI) 밖에 연속 N회 감지되면 알림."""
 
     def __init__(self, min_consecutive=DEFAULT_EXIT_MIN_CONSECUTIVE, cooldown_seconds=DEFAULT_EXIT_COOLDOWN_SECONDS):
         self.min_consecutive = max(1, int(min_consecutive))
