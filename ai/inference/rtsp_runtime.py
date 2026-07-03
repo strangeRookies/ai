@@ -89,6 +89,9 @@ def create_detection_postprocessor(args):
             match_thresh=getattr(args, "match_thresh", 0.20),
             frame_rate=getattr(args, "frame_rate", 30),
             bbox_smoothing_alpha=getattr(args, "bbox_smoothing_alpha", 1.0),
+            stability_fallback=bool(getattr(args, "tracking_stability_fallback", False)),
+            fallback_max_missing_seconds=getattr(args, "track_max_missing_seconds", 4.0),
+            fallback_center_match_ratio=getattr(args, "center_match_ratio", 0.70),
         )
         return SupervisionPostProcessor(config=config), "supervision"
     return SimpleTrackAssigner(

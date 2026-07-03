@@ -103,12 +103,20 @@ class RunnerConfig:
     dry_run: bool
     rtsp_probe_enabled: bool
     refresh_interval_seconds: float
+    tracking_stability_fallback: bool = False
+    tracking_stability_fallback_camera_ids: tuple[str, ...] = ()
+    mjpeg_debug: bool = False
     skip_ffmpeg_spawn: bool = False
     overlay_public_base_url: str | None = None
     overlay_report_enabled: bool = False
     domain: str | None = None
     label: str | None = None
     video_filter: str | None = None
+    selected_track_id: int | None = None
+    selected_track_mode: str = "strict"
+    selected_track_missing_frames: int = 5
+    mqtt_status_topic: str | None = None
+
 
 
 def normalize_camera_login_id(login_id: str) -> str:
@@ -314,16 +322,24 @@ def build_overlay_command(
         "--bbox-smoothing-alpha",
         str(config.bbox_smoothing_alpha),
     ]
+    if tracking_stability_fallback_enabled(camera, config):
+        command.append("--tracking-stability-fallback")
+    if config.mjpeg_debug:
+        command.append("--mjpeg-debug")
     optional_pairs = [
         ("--mqtt-host", config.mqtt_host),
         ("--mqtt-port", str(config.mqtt_port) if config.mqtt_port is not None else None),
         ("--mqtt-topic", config.mqtt_topic),
         ("--mqtt-camera-topic", config.mqtt_camera_topic),
         ("--mqtt-event-topic", config.mqtt_event_topic),
+        ("--mqtt-status-topic", config.mqtt_status_topic),
         ("--mqtt-client-id", f"{config.mqtt_client_id_prefix}-{camera.camera_login_id}"),
         ("--mqtt-username", config.mqtt_username),
         ("--action-model", config.action_model),
         ("--action-threshold", str(config.action_threshold) if config.action_threshold is not None else None),
+        ("--selected-track-id", str(config.selected_track_id) if config.selected_track_id is not None else None),
+        ("--selected-track-mode", config.selected_track_mode),
+        ("--selected-track-missing-frames", str(config.selected_track_missing_frames) if config.selected_track_missing_frames is not None else None),
     ]
     for key, value in optional_pairs:
         if value:
@@ -335,6 +351,14 @@ def build_overlay_command(
     if camera.exit_roi_configs:
         command.extend(["--exit-roi-configs", json.dumps(list(camera.exit_roi_configs))])
     return command
+
+
+def tracking_stability_fallback_enabled(camera: RegisteredCamera, config: RunnerConfig) -> bool:
+    fallback_camera_ids = {
+        normalize_camera_login_id(camera_id)
+        for camera_id in config.tracking_stability_fallback_camera_ids
+    }
+    return bool(config.tracking_stability_fallback or camera.camera_login_id in fallback_camera_ids)
 
 
 def input_rtsp_for_camera(camera: RegisteredCamera, config: RunnerConfig) -> tuple[str, list[str] | None]:

@@ -79,6 +79,7 @@ class MqttEventPublisher(EventPublisher):
             )
             result = self.client.publish(target_topic, json.dumps(payload, ensure_ascii=False), qos=0)
             if result.rc != self.mqtt.MQTT_ERR_SUCCESS:
+                self.connected = False
                 print(
                     f"[mqtt] publish failed: {_payload_context(payload, target_topic, connected=self.connected, rc=result.rc)}",
                     file=sys.stderr,
@@ -113,6 +114,7 @@ def mqtt_settings_from_env():
         "topic": legacy_topic or "event",
         "camera_topic": os.getenv("MQTT_CAMERA_TOPIC", "camera"),
         "event_topic": os.getenv("MQTT_EVENT_TOPIC") or legacy_topic or "event",
+        "status_topic": os.getenv("MQTT_STATUS_TOPIC", "safety/cameras/status"),
         "client_id": os.getenv("MQTT_CLIENT_ID", "strange-ai-local"),
         "username": os.getenv("MQTT_USERNAME") or None,
         "password": os.getenv("MQTT_PASSWORD") or None,
@@ -164,23 +166,23 @@ def mqtt_topic_settings_from_args(args):
 
 def _payload_context(payload, topic, connected=None, rc=None):
     if not isinstance(payload, dict):
-        return _format_payload_context(topic, "unknown", "unknown", "unknown", "unknown", connected, rc)
+        return _format_payload_context(topic, "unknown", "unknown", "unknown", "unknown", connected, rc, "none", "unknown")
     message_type = payload.get("messageType") or payload.get("message_type") or payload.get("event_type") or "unknown"
     stream_id = payload.get("streamId") or payload.get("camera_login_id") or payload.get("camera_id") or "unknown"
     camera_login_id = payload.get("cameraLoginId") or payload.get("camera_login_id") or stream_id or "unknown"
     frame_id = payload.get("frameId") or payload.get("frame_id") or "unknown"
-    event_id = payload.get("eventId")
-    event_text = f", eventId={event_id}" if event_id else ""
-    return (
-        _format_payload_context(topic, message_type, stream_id, camera_login_id, frame_id, connected, rc)
-        + event_text
+    event_id = payload.get("eventId") or "none"
+    payload_bytes = len(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+    return _format_payload_context(
+        topic, message_type, stream_id, camera_login_id, frame_id, connected, rc, event_id, payload_bytes
     )
 
 
-def _format_payload_context(topic, message_type, stream_id, camera_login_id, frame_id, connected, rc):
+def _format_payload_context(topic, message_type, stream_id, camera_login_id, frame_id, connected, rc, event_id, payload_bytes):
     connected_text = "unknown" if connected is None else str(bool(connected)).lower()
     rc_text = "unknown" if rc is None else str(rc)
     return (
         f"topic={topic}, messageType={message_type}, streamId={stream_id}, "
-        f"cameraLoginId={camera_login_id}, frameId={frame_id}, rc={rc_text}, connected={connected_text}"
+        f"cameraLoginId={camera_login_id}, frameId={frame_id}, eventId={event_id}, "
+        f"rc={rc_text}, connected={connected_text}, payloadBytes={payload_bytes}"
     )

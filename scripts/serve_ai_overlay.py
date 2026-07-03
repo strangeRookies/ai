@@ -8,10 +8,12 @@ import threading
 import time
 from pathlib import Path
 
+# Ensure the repo root is on sys.path before any ai.* imports,
+# so serve_ai_overlay.py works regardless of the working directory.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from ai.events.event_clip import EventClipBuffer
 from ai.events.clip_worker import ClipWriterWorker, enqueue_event_clip
-
-sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from ai.action.per_track_sequence_buffer import PerTrackCropSequenceBuffers, PerTrackKeypointSequenceBuffers
 from ai.action.lstm_contract import DEFAULT_KEYPOINT_INPUT_SIZE, DEFAULT_LSTM_SEQUENCE_LENGTH, DEFAULT_LSTM_SEQUENCE_STRIDE, log_lstm_config
@@ -96,6 +98,22 @@ def mjpeg_debug_enabled(args: argparse.Namespace) -> bool:
     return bool(getattr(args, "mjpeg_debug", False))
 
 
+def env_optional_int(*names: str) -> int | None:
+    for name in names:
+        value = os.getenv(name)
+        if value:
+            return int(value)
+    return None
+
+
+def env_optional_str(*names: str) -> str | None:
+    for name in names:
+        value = os.getenv(name)
+        if value:
+            return value
+    return None
+
+
 def process_frame(
     frame_packet,
     detector,
@@ -114,6 +132,56 @@ def process_frame(
     roi_mask=None,
     exit_roi_mask=None,
     exit_post_processor=None,
+    track_selector=None,
+):
+    try:
+        return _process_frame_impl(
+            frame_packet,
+            detector,
+            classifier,
+            sequence_buffer,
+            summary,
+            args,
+            post_processor=post_processor,
+            tracker=tracker,
+            state=state,
+            display_id_mapper=display_id_mapper,
+            publisher=publisher,
+            overlay_publish_state=overlay_publish_state,
+            frame_buffer=frame_buffer,
+            dropped_frame_count=dropped_frame_count,
+            roi_mask=roi_mask,
+            exit_roi_mask=exit_roi_mask,
+            exit_post_processor=exit_post_processor,
+            track_selector=track_selector,
+        )
+    except Exception as exc:
+        stage = getattr(exc, "stage", "yolo_inference")
+        import traceback
+        print(f"[ai-worker-error] stage={stage} error={type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+        traceback.print_exc(file=sys.stderr)
+        raise
+
+
+def _process_frame_impl(
+    frame_packet,
+    detector,
+    classifier,
+    sequence_buffer,
+    summary,
+    args,
+    post_processor=None,
+    tracker=None,
+    state=None,
+    display_id_mapper=None,
+    publisher=None,
+    overlay_publish_state=None,
+    frame_buffer=None,
+    dropped_frame_count=None,
+    roi_mask=None,
+    exit_roi_mask=None,
+    exit_post_processor=None,
+    track_selector=None,
 ):
     stream_id = getattr(args, "camera_login_id", None) or args.camera_id
     frame_metadata = None
@@ -165,6 +233,36 @@ def process_frame(
             f"mapping: {matched_details}",
             flush=True
         )
+
+
+    from ai.inference.track_selection import deduplicate_tracked_detections
+    detections, duplicate_skips = deduplicate_tracked_detections(detections, iou_threshold=0.85)
+
+    selected_skips = []
+    diag_info = {}
+    if track_selector is not None:
+        detections, selected_skips, diag_info = track_selector.filter(detections)
+        summary["selected_track_id"] = track_selector.selected_track_id
+        if selected_skips:
+            summary["selected_track_skipped"] = summary.get("selected_track_skipped", 0) + len(selected_skips)
+        if diag_info.get("fallback_active"):
+            summary["selected_track_fallbacks"] = summary.get("selected_track_fallbacks", 0) + 1
+
+        if os.getenv("TRACKING_DEBUG", "false").lower() in {"1", "true", "yes", "on"}:
+            print(
+                f"[Selected Track Debug] camera: {stream_id} | "
+                f"fallback_active: {diag_info.get('fallback_active')} | "
+                f"fallback_track_id: {diag_info.get('fallback_track_id')} | "
+                f"skipped_reason: {diag_info.get('skipped_reason')} | "
+                f"missing_frames_count: {diag_info.get('missing_frames_count')}",
+                flush=True
+            )
+    elif getattr(args, "selected_track_id", None) is not None:
+        from ai.inference.track_selection import filter_selected_track
+        detections, selected_skips = filter_selected_track(detections, args.selected_track_id)
+        summary["selected_track_id"] = args.selected_track_id
+        if selected_skips:
+            summary["selected_track_skipped"] = summary.get("selected_track_skipped", 0) + len(selected_skips)
 
 
     boxes = normalize_detections(detections)
@@ -493,6 +591,7 @@ class OverlayWorker:
                 mqtt_publisher=publisher,
                 camera_login_id=self.camera_login_id,
                 rtsp_url=self.args.rtsp_url,
+                status_topic=getattr(self.args, "mqtt_status_topic", None),
             )
             while not self.stop_event.is_set():
                 try:
@@ -600,6 +699,12 @@ class OverlayWorker:
         print(f"[ai-overlay-inference] tracking postprocessor: {postprocessing_mode}", flush=True)
         display_id_mapper = DisplayIdMapper()
         overlay_publish_state = OverlayPublishState()
+        from ai.inference.track_selection import TrackSelector
+        track_selector = TrackSelector(
+            selected_track_id=getattr(self.args, "selected_track_id", None),
+            selected_track_mode=getattr(self.args, "selected_track_mode", "strict"),
+            missing_frames_threshold=getattr(self.args, "selected_track_missing_frames", 5),
+        )
         camera_ids = [self.camera_login_id]
         camera_index = 0
 
@@ -686,6 +791,7 @@ class OverlayWorker:
                 roi_mask=cached_roi_mask,
                 exit_roi_mask=cached_exit_mask,
                 exit_post_processor=exit_post_processor,
+                track_selector=track_selector,
             )
 
             now_ms = time.time_ns() // 1_000_000
@@ -799,6 +905,12 @@ def main():
     parser.add_argument("--bbox-smoothing-alpha", type=float, default=0.60)
     parser.add_argument("--track-max-missing-seconds", type=float, default=4.0)
     parser.add_argument("--center-match-ratio", type=float, default=0.70)
+    parser.add_argument(
+        "--tracking-stability-fallback",
+        action=argparse.BooleanOptionalAction,
+        default=os.getenv("TRACKING_STABILITY_FALLBACK", "false").lower() in {"1", "true", "yes", "on"},
+        help="Use a lightweight bbox continuity tracker after supervision to stabilize final track_id values.",
+    )
     parser.add_argument("--overlay-debug-tracks", action="store_true")
     parser.add_argument("--frame-sync-debug", action=argparse.BooleanOptionalAction, default=os.getenv("FRAME_SYNC_DEBUG", "false").lower() in {"1", "true", "yes", "on"})
     parser.add_argument("--frame-sync-buffer-size", type=int, default=int(os.getenv("FRAME_SYNC_BUFFER_SIZE", "60")))
@@ -829,9 +941,35 @@ def main():
     parser.add_argument("--mqtt-topic", help="Legacy MQTT event topic alias")
     parser.add_argument("--mqtt-camera-topic", default=os.getenv("MQTT_CAMERA_TOPIC"), help="MQTT overlay topic (default: camera)")
     parser.add_argument("--mqtt-event-topic", default=os.getenv("MQTT_EVENT_TOPIC"), help="MQTT confirmed event topic (default: event or MQTT_TOPIC)")
+    parser.add_argument("--mqtt-status-topic", default=os.getenv("MQTT_STATUS_TOPIC"), help="MQTT status topic (default: safety/cameras/status)")
     parser.add_argument("--mqtt-client-id", help="MQTT client ID")
     parser.add_argument("--mqtt-username", help="MQTT username")
     parser.add_argument("--mqtt-password", help="MQTT password")
+    parser.add_argument(
+        "--selected-track-id",
+        "--preferred-track-id",
+        dest="selected_track_id",
+        type=int,
+        default=env_optional_int(
+            "AI_SELECTED_TRACK_ID",
+            "SELECTED_TRACK_ID",
+            "AI_PREFERRED_TRACK_ID",
+            "PREFERRED_TRACK_ID",
+        ),
+        help="Selected track ID to filter overlay and predictions",
+    )
+    parser.add_argument(
+        "--selected-track-mode",
+        default=env_optional_str("AI_SELECTED_TRACK_MODE", "SELECTED_TRACK_MODE") or "strict",
+        choices=["strict", "fallback"],
+        help="Selected track filtering mode: strict or fallback",
+    )
+    parser.add_argument(
+        "--selected-track-missing-frames",
+        type=int,
+        default=env_optional_int("AI_SELECTED_TRACK_MISSING_FRAMES", "SELECTED_TRACK_MISSING_FRAMES") or 5,
+        help="Number of frames allowed for missing selected track in fallback mode",
+    )
     
     args = parser.parse_args()
     args.camera_login_id = args.camera_login_id or args.camera_id
@@ -868,6 +1006,23 @@ def main():
     except RuntimeError as exc:
         print(f"[ai-overlay][error] Duplicate worker detected: {exc}", file=sys.stderr, flush=True)
         sys.exit(1)
+
+    from ai.publishers.event_publisher import mqtt_topic_settings_from_args, mqtt_settings_from_env
+    topic_settings = mqtt_topic_settings_from_args(args)
+    settings = mqtt_settings_from_env()
+    mqtt_host = getattr(args, "mqtt_host", None) or settings["host"]
+    mqtt_port = getattr(args, "mqtt_port", None) or settings["port"]
+    publisher_mode = getattr(args, "publisher", None) or ("console" if getattr(args, "dry_run", False) else "mqtt")
+    status_topic = getattr(args, "mqtt_status_topic", None) or settings["status_topic"]
+
+    print(
+        f"[mqtt-topic-audit] cameraLoginId={args.camera_login_id} "
+        f"streamId={args.camera_id} host={mqtt_host} port={mqtt_port} "
+        f"camera_topic={topic_settings['camera_topic']} "
+        f"event_topic={topic_settings['event_topic']} "
+        f"status_topic={status_topic} publisher={publisher_mode}",
+        flush=True,
+    )
 
     state = OverlayState()
     worker = OverlayWorker(args, state)

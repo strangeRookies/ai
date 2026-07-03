@@ -142,6 +142,46 @@ class SupervisionPostProcessorTest(unittest.TestCase):
         out_next = proc.process(dets_next, np.zeros((200, 200, 3), dtype=np.uint8))
         self.assertEqual(out_next[0]["bbox"], [16.0, 16.0, 56.0, 56.0])
 
+    def test_default_supervision_does_not_invent_track_id_when_bytetrack_omits_it(self):
+        from ai.postprocess.supervision_postprocessor import SupervisionByteTrackAdapter
+        adapter = SupervisionByteTrackAdapter()
+        adapter._tracker = FakeNoTrackRoboflowByteTrack()
+        proc = SupervisionPostProcessor(byte_tracker=adapter)
+
+        output = proc.process(
+            [{"bbox": [20, 20, 60, 60], "confidence": 0.85}],
+            np.zeros((200, 200, 3), dtype=np.uint8),
+        )
+
+        self.assertIsNone(output[0].get("track_id"))
+        self.assertFalse(proc.diagnostics()["stability_fallback"])
+
+    def test_stability_fallback_assigns_stable_track_id_when_bytetrack_omits_it(self):
+        from ai.postprocess.supervision_postprocessor import SupervisionByteTrackAdapter
+        adapter = SupervisionByteTrackAdapter(
+            track_thresh=0.10,
+            track_buffer=30,
+            match_thresh=0.20,
+            bbox_smoothing_alpha=0.60,
+            stability_fallback=True,
+        )
+        adapter._tracker = FakeNoTrackRoboflowByteTrack()
+        proc = SupervisionPostProcessor(byte_tracker=adapter)
+
+        first = proc.process(
+            [{"bbox": [20, 20, 60, 60], "confidence": 0.85}],
+            np.zeros((200, 200, 3), dtype=np.uint8),
+        )
+        second = proc.process(
+            [{"bbox": [22, 22, 62, 62], "confidence": 0.84}],
+            np.zeros((200, 200, 3), dtype=np.uint8),
+        )
+
+        self.assertIsNotNone(first[0].get("track_id"))
+        self.assertEqual(first[0]["track_id"], second[0]["track_id"])
+        self.assertEqual(proc.diagnostics()["active_tracks"], 1)
+        self.assertTrue(proc.diagnostics()["stability_fallback"])
+
 
 class FakeByteTrackAdapter:
     def __init__(self, track_ids):
@@ -184,6 +224,17 @@ class FakeReorderedRoboflowByteTrack:
             confidence=np.asarray([detections.confidence[1], detections.confidence[0]], dtype=np.float32),
             class_id=np.asarray([detections.class_id[1], detections.class_id[0]], dtype=int),
             tracker_id=np.asarray([22, 11], dtype=int),
+        )
+
+
+class FakeNoTrackRoboflowByteTrack:
+    def update_with_detections(self, detections):
+        import supervision as sv
+        return sv.Detections(
+            xyxy=detections.xyxy,
+            confidence=detections.confidence,
+            class_id=detections.class_id,
+            tracker_id=np.asarray([None for _ in range(len(detections.xyxy))], dtype=object),
         )
 
 

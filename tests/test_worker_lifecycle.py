@@ -1,4 +1,5 @@
 import unittest
+import dataclasses
 import os
 import time
 import tempfile
@@ -80,6 +81,7 @@ class TestWorkerLifecycle(unittest.TestCase):
             detector_mode="mock",
             yolo_model="yolo.pt",
             device="cpu",
+            detector_conf=0.15,
             action_model=None,
             action_device="cpu",
             action_threshold=None,
@@ -87,6 +89,10 @@ class TestWorkerLifecycle(unittest.TestCase):
             sequence_length=30,
             sequence_stride=15,
             tracking_mode="auto",
+            track_thresh=0.10,
+            match_thresh=0.20,
+            track_buffer=90,
+            bbox_smoothing_alpha=0.60,
             print_events=False,
             dry_run=False,
             rtsp_probe_enabled=False,
@@ -137,6 +143,43 @@ class TestWorkerLifecycle(unittest.TestCase):
         mock_stop.assert_called_once()
         # verify start was called for new worker
         mock_start.assert_called_once_with(cameras[0], config, 8010)
+
+    @patch("ai.registered_camera_workers.start_camera_worker")
+    @patch("ai.registered_camera_workers.stop_processes")
+    def test_sync_camera_workers_restarts_when_runtime_tracking_config_changes(self, mock_stop, mock_start):
+        camera = RegisteredCamera(
+            camera_id=1,
+            camera_login_id="cam_05",
+            source_type="REAL_RTSP",
+            rtsp_url="rtsp://mock_input",
+            assigned_video_path=None,
+        )
+        base_config = self.get_test_config()
+        changed_config = dataclasses.replace(
+            base_config,
+            tracking_stability_fallback_camera_ids=("cam_05",),
+        )
+        workers = {
+            "cam_05": CameraWorker(
+                processes=[MagicMock()],
+                overlay_port=8010,
+                source_signature="REAL_RTSP:rtsp://mock_input|roi:[]|exit_roi:[]",
+                camera_login_id="cam_05",
+                rtsp_url="rtsp://mock_input",
+            )
+        }
+        mock_start.return_value = CameraWorker(
+            processes=[MagicMock()],
+            overlay_port=8010,
+            source_signature="new",
+            camera_login_id="cam_05",
+            rtsp_url="rtsp://mock_input",
+        )
+
+        sync_camera_workers(workers, [camera], changed_config)
+
+        mock_stop.assert_called_once()
+        mock_start.assert_called_once_with(camera, changed_config, 8010)
 
     @patch("ai.registered_camera_workers.stop_processes")
     def test_sync_camera_workers_handles_deletions(self, mock_stop):

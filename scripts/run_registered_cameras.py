@@ -28,6 +28,29 @@ def env_bool(name: str, default: bool) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def env_optional_int(*names: str) -> int | None:
+    for name in names:
+        value = os.getenv(name)
+        if value:
+            return int(value)
+    return None
+
+
+def env_optional_str(*names: str) -> str | None:
+    for name in names:
+        value = os.getenv(name)
+        if value:
+            return value
+    return None
+
+
+def split_csv(value: str | None) -> tuple[str, ...]:
+    if not value:
+        return ()
+    return tuple(item.strip() for item in value.split(",") if item.strip())
+
+
+
 def run_cameras(cameras: list[RegisteredCamera], config: RunnerConfig) -> None:
     run_camera_sync_loop(cameras, config)
 
@@ -54,6 +77,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--mqtt-topic", default=os.getenv("MQTT_TOPIC"))
     parser.add_argument("--mqtt-camera-topic", default=os.getenv("MQTT_CAMERA_TOPIC", "camera"))
     parser.add_argument("--mqtt-event-topic", default=os.getenv("MQTT_EVENT_TOPIC", os.getenv("MQTT_TOPIC", "event")))
+    parser.add_argument("--mqtt-status-topic", default=os.getenv("MQTT_STATUS_TOPIC", "safety/cameras/status"))
     parser.add_argument("--mqtt-client-id-prefix", default=os.getenv("MQTT_CLIENT_ID_PREFIX", "strange-ai"))
     parser.add_argument("--mqtt-username", default=os.getenv("MQTT_USERNAME"))
     parser.add_argument("--mqtt-password", default=os.getenv("MQTT_PASSWORD"))
@@ -72,6 +96,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--match-thresh", "--tracker-iou-threshold", dest="match_thresh", type=float, default=float(os.getenv("TRACK_IOU_THRESHOLD", "0.20")))
     parser.add_argument("--track-buffer", type=int, default=int(os.getenv("TRACK_BUFFER", "90")))
     parser.add_argument("--bbox-smoothing-alpha", type=float, default=float(os.getenv("BBOX_SMOOTHING_ALPHA", "0.60")))
+    parser.add_argument(
+        "--tracking-stability-fallback",
+        action=argparse.BooleanOptionalAction,
+        default=env_bool("TRACKING_STABILITY_FALLBACK", False),
+        help="Use a lightweight bbox continuity tracker after supervision to stabilize final track_id values.",
+    )
+    parser.add_argument(
+        "--tracking-stability-fallback-camera-ids",
+        default=os.getenv("TRACKING_STABILITY_FALLBACK_CAMERA_IDS", ""),
+        help="Comma-separated cameraLoginIds that should use tracking stability fallback without enabling it globally.",
+    )
+    parser.add_argument(
+        "--mjpeg-debug",
+        action=argparse.BooleanOptionalAction,
+        default=env_bool("AI_MJPEG_DEBUG", False),
+        help="Open per-worker debug MJPEG/health HTTP ports such as 8010-8013.",
+    )
     parser.add_argument("--print-events", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--skip-rtsp-probe", action="store_true", help="Skip real RTSP preflight before starting AI workers.")
@@ -80,7 +121,29 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--domain", default=os.getenv("VIDEO_DOMAIN", DEFAULT_STREAM_DOMAIN))
     parser.add_argument("--label", default=os.getenv("VIDEO_LABEL"))
     parser.add_argument("--video-filter", default=os.getenv("VIDEO_FILTER"))
+    parser.add_argument(
+        "--selected-track-id",
+        "--preferred-track-id",
+        dest="selected_track_id",
+        type=int,
+        default=env_optional_int(
+            "AI_SELECTED_TRACK_ID",
+            "SELECTED_TRACK_ID",
+            "AI_PREFERRED_TRACK_ID",
+            "PREFERRED_TRACK_ID",
+        ),
+    )
+    parser.add_argument(
+        "--selected-track-mode",
+        default=env_optional_str("AI_SELECTED_TRACK_MODE", "SELECTED_TRACK_MODE") or "strict",
+    )
+    parser.add_argument(
+        "--selected-track-missing-frames",
+        type=int,
+        default=env_optional_int("AI_SELECTED_TRACK_MISSING_FRAMES", "SELECTED_TRACK_MISSING_FRAMES") or 5,
+    )
     return parser.parse_args(argv)
+
 
 
 def config_from_args(args: argparse.Namespace) -> RunnerConfig:
@@ -117,6 +180,9 @@ def config_from_args(args: argparse.Namespace) -> RunnerConfig:
         match_thresh=args.match_thresh,
         track_buffer=args.track_buffer,
         bbox_smoothing_alpha=args.bbox_smoothing_alpha,
+        tracking_stability_fallback=args.tracking_stability_fallback,
+        tracking_stability_fallback_camera_ids=split_csv(args.tracking_stability_fallback_camera_ids),
+        mjpeg_debug=args.mjpeg_debug,
         print_events=args.print_events,
         dry_run=args.dry_run,
         rtsp_probe_enabled=not args.skip_rtsp_probe,
@@ -127,7 +193,12 @@ def config_from_args(args: argparse.Namespace) -> RunnerConfig:
         domain=args.domain,
         label=args.label,
         video_filter=args.video_filter,
+        selected_track_id=args.selected_track_id,
+        selected_track_mode=args.selected_track_mode,
+        selected_track_missing_frames=args.selected_track_missing_frames,
+        mqtt_status_topic=args.mqtt_status_topic,
     )
+
 
 
 def main(argv: list[str] | None = None) -> None:
