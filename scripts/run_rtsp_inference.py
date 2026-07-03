@@ -25,6 +25,7 @@ from ai.inference.rtsp_runtime import (
     create_detection_postprocessor,
     create_detector,
     ensure_mock_keypoints,
+    log_classifier_contract,
     maybe_log_debug,
     normalize_detections,
     save_inference_event_log,
@@ -45,6 +46,7 @@ from scripts.rtsp_inference_args import parse_args
 def run(args):
     detector = create_detector(args.detector_mode, args.yolo_model, args.device, getattr(args, "imgsz", 640), conf=getattr(args, "detector_conf", 0.25))
     classifier, classifier_mode = create_classifier(args.action_model, args.action_device, getattr(args, "action_threshold", DEFAULT_FAINT_THRESHOLD))
+    camera_login_id = getattr(args, "camera_login_id", None) or args.camera_id
     classifier_input = getattr(args, "classifier_input", "keypoints")
     detection_postprocessor, postprocessing_mode = create_detection_postprocessor(args)
     cheap_filter_config = cheap_filter_config_from_args(args)
@@ -139,6 +141,7 @@ def run(args):
             getattr(classifier, "checkpoint_sequence_length", None),
             getattr(classifier, "checkpoint_sequence_stride", None),
         )
+        log_classifier_contract("[lstm-checkpoint]", camera_login_id, classifier)
         return summary
 
     publisher, publisher_mode = create_event_publisher(args)
@@ -159,9 +162,9 @@ def run(args):
         getattr(classifier, "checkpoint_sequence_length", None),
         getattr(classifier, "checkpoint_sequence_stride", None),
     )
+    log_classifier_contract("[lstm-checkpoint]", camera_login_id, classifier)
 
     writer = None
-    camera_login_id = getattr(args, "camera_login_id", None) or args.camera_id
     rtsp_url_str = str(getattr(args, "rtsp_url", "") or "")
     is_offline_video = rtsp_url_str.endswith((".mp4", ".avi", ".mkv", ".mov")) or args.detector_mode == "mock" or getattr(args, "max_frames", 0) > 0
     max_q_size = 10000 if is_offline_video else getattr(args, "frame_queue_maxsize", 3)

@@ -16,7 +16,7 @@ from scripts.run_rtsp_inference import (
     is_alert_prediction,
     run,
 )
-from ai.inference.rtsp_runtime import log_tracking_stage
+from ai.inference.rtsp_runtime import log_classification_stage, log_tracking_stage
 from ai.inference.tracking_debug import log_sequence_stage
 from ai.visualization.draw import draw_overlay
 
@@ -279,6 +279,41 @@ class RtspInferenceTest(unittest.TestCase):
         self.assertEqual(record["trackDetails"][0]["trackId"], 987654321)
         self.assertEqual(record["trackDetails"][0]["displayId"], 1)
         self.assertEqual(record["trackDetails"][1]["fallbackRisk"], True)
+
+    def test_classification_stage_log_includes_lstm_feature_shape_contract(self):
+        previous = os.environ.get("TRACKING_DEBUG")
+        os.environ["TRACKING_DEBUG"] = "true"
+        output = StringIO()
+        try:
+            with redirect_stdout(output):
+                log_classification_stage(
+                    "cam_05",
+                    42,
+                    7,
+                    {"label": "Faint", "score": 0.91, "probabilities": {"Normal": 0.09, "Faint": 0.91}},
+                    faint_threshold=0.5,
+                    consecutive_count=2,
+                    event_triggered=True,
+                    checkpoint_input_size=54,
+                    runtime_feature_dim=54,
+                    tensor_shape=(1, 30, 54),
+                    feature_schema="keypoint_bbox54",
+                    checkpoint_path="models/faint54.pt",
+                )
+        finally:
+            if previous is None:
+                os.environ.pop("TRACKING_DEBUG", None)
+            else:
+                os.environ["TRACKING_DEBUG"] = previous
+
+        record = json.loads(output.getvalue().strip().removeprefix("[stage-log] "))
+
+        self.assertEqual(record["stage"], "classification")
+        self.assertEqual(record["checkpointInputSize"], 54)
+        self.assertEqual(record["runtimeFeatureDim"], 54)
+        self.assertEqual(record["tensorShape"], [1, 30, 54])
+        self.assertEqual(record["featureSchema"], "keypoint_bbox54")
+        self.assertEqual(record["checkpointPath"], "models/faint54.pt")
 
 if __name__ == "__main__":
     unittest.main()

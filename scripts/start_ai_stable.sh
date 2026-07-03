@@ -5,6 +5,8 @@ set -e
 REMOTE_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MQTT_HOST="${1:-15.165.248.37}"
 MQTT_PORT="${2:-1883}"
+DEFAULT_ACTION_MODEL="runs/evaluation_manifest_v2_bbox54_balanced/retrained_best.pt"
+ACTION_MODEL="${3:-${ACTION_MODEL:-$DEFAULT_ACTION_MODEL}}"
 
 cd "$REMOTE_ROOT"
 
@@ -24,6 +26,13 @@ else
     echo "[start_ai_stable][error] .venv/bin/activate not found!"
     exit 1
 fi
+
+if [ ! -f "$ACTION_MODEL" ]; then
+    echo "[start_ai_stable][error] ACTION_MODEL checkpoint not found: $ACTION_MODEL"
+    exit 1
+fi
+
+echo "[start_ai_stable] Using ACTION_MODEL=$ACTION_MODEL"
 
 echo "[start_ai_stable] Starting start_simulated_rtsp_from_folder.py..."
 nohup python scripts/start_simulated_rtsp_from_folder.py \
@@ -45,6 +54,7 @@ nohup python scripts/run_registered_cameras.py \
     --overlay-report-enabled \
     --detector-mode real \
     --yolo-model yolo26n-pose.pt \
+    --action-model "$ACTION_MODEL" \
     --publisher mqtt \
     --mqtt-host "$MQTT_HOST" \
     --mqtt-port "$MQTT_PORT" \
