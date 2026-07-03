@@ -8,9 +8,9 @@ import threading
 import time
 from pathlib import Path
 
-# Ensure the repo root is on sys.path before any ai.* imports,
-# so serve_ai_overlay.py works regardless of the working directory.
+# sys.path 등록이 먼저 수행되어야 하위 ai 패키지 로드 가능 (작업 디렉토리와 무관하도록 insert 사용)
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 
 from ai.events.event_clip import EventClipBuffer
 from ai.events.clip_worker import ClipWriterWorker, enqueue_event_clip
