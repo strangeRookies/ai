@@ -10,6 +10,11 @@ from ai.action.classifier import (
     LSTMActionClassifier,
     LSTMActionModel,
 )
+from ai.action.feature_schema import (
+    KEYPOINT_BBOX54_INPUT_SIZE,
+    KEYPOINT_BBOX54_SCHEMA_VERSION,
+    keypoint_bbox54_feature_names,
+)
 from ai.action.motion_features import append_motion_features
 
 
@@ -171,6 +176,29 @@ class TestFeatureSchema51Vs54(unittest.TestCase):
             with self.assertRaises(ValueError):
                 LSTMActionClassifier(str(ckpt_bad_path), device="cpu")
 
+    def test_54_dim_checkpoint_without_schema_fails_clearly(self):
+        model_config = {
+            "input_size": 54,
+            "hidden_size": 64,
+            "num_layers": 1,
+            "num_classes": 2,
+            "dropout": 0.0,
+        }
+        model = LSTMActionModel(**model_config)
+        checkpoint_payload = {
+            "model_state": model.model.state_dict(),
+            "model_config": model_config,
+            "classes": ["Normal", "Faint"],
+            "input_size": 54,
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ckpt_path = Path(tmpdir) / "test_model_54_no_schema.pt"
+            torch.save(checkpoint_payload, ckpt_path)
+
+            with self.assertRaisesRegex(ValueError, "feature_schema_version"):
+                LSTMActionClassifier(str(ckpt_path), device="cpu")
+
     def test_feature_builders_are_identical(self):
         # Verify training-time keypoint extraction matches inference-time extraction
         feat_train = keypoint_sequence_to_features(
@@ -183,6 +211,66 @@ class TestFeatureSchema51Vs54(unittest.TestCase):
         )
         
         np.testing.assert_array_equal(feat_train, feat_inf)
+
+    def test_keypoint_bbox54_schema_documents_exact_feature_order(self):
+        names = keypoint_bbox54_feature_names()
+
+        self.assertEqual(KEYPOINT_BBOX54_SCHEMA_VERSION, "keypoint_bbox54")
+        self.assertEqual(KEYPOINT_BBOX54_INPUT_SIZE, 54)
+        self.assertEqual(len(names), 54)
+        self.assertEqual(names[:6], ["kp0_x", "kp0_y", "kp0_conf", "kp1_x", "kp1_y", "kp1_conf"])
+        self.assertEqual(names[51:], ["bbox_width_norm", "bbox_height_norm", "bbox_area_norm"])
+
+    def test_keypoint_bbox54_appends_normalized_bbox_width_height_area(self):
+        features = sequence_to_lstm_features(
+            self.sequence, input_size=54, feature_schema="keypoint_bbox54"
+        )
+
+        self.assertAlmostEqual(float(features[0][51]), 100.0 / 1920.0)
+        self.assertAlmostEqual(float(features[0][52]), 200.0 / 1080.0)
+        self.assertAlmostEqual(float(features[0][53]), (100.0 / 1920.0) * (200.0 / 1080.0))
+
+    def test_keypoint_bbox54_rejects_silent_padding_from_51_dim_features(self):
+        features = np.ones((self.seq_len, 51), dtype=np.float32)
+
+        with self.assertRaisesRegex(ValueError, "keypoint_bbox54"):
+            from ai.action.classifier import normalize_feature_width
+
+            normalize_feature_width(features, 54, feature_schema="keypoint_bbox54")
+
+    def test_classifier_shape_mismatch_error_includes_camera_and_track_context(self):
+        model_config = {
+            "input_size": 54,
+            "hidden_size": 64,
+            "num_layers": 1,
+            "num_classes": 2,
+            "dropout": 0.0,
+        }
+        model = LSTMActionModel(**model_config)
+        checkpoint_payload = {
+            "model_state": model.model.state_dict(),
+            "model_config": model_config,
+            "classes": ["Normal", "Faint"],
+            "input_size": 54,
+            "feature_schema_version": "keypoint_bbox54",
+            "feature_names": keypoint_bbox54_feature_names(),
+        }
+        sequence = dict(self.sequence)
+        sequence["camera_login_id"] = "cam_05"
+        sequence["track_id"] = 7
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ckpt_path = Path(tmpdir) / "test_model_54.pt"
+            torch.save(checkpoint_payload, ckpt_path)
+            classifier = LSTMActionClassifier(str(ckpt_path), device="cpu")
+            import ai.action.classifier
+            original = ai.action.classifier.sequence_to_lstm_features
+            try:
+                ai.action.classifier.sequence_to_lstm_features = lambda *args, **kwargs: np.zeros((self.seq_len, 51), dtype=np.float32)
+                with self.assertRaisesRegex(ValueError, "cameraLoginId=cam_05.*trackId=7.*expected input_size=54.*runtime_feature_dim=51"):
+                    classifier.predict(sequence)
+            finally:
+                ai.action.classifier.sequence_to_lstm_features = original
 
 
 if __name__ == "__main__":

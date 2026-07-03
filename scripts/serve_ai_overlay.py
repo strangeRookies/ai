@@ -20,7 +20,7 @@ from ai.action.lstm_contract import DEFAULT_KEYPOINT_INPUT_SIZE, DEFAULT_LSTM_SE
 from ai.evidence import evidence_id
 from ai.frame_sync import FrameMetadataBuffer, FramePacket, CameraFrameQueue
 from ai.inference.rtsp_runtime import build_inference_event_payload, cheap_filter_config_from_args, create_detection_postprocessor, ensure_mock_keypoints
-from ai.inference.rtsp_runtime import maybe_log_debug, normalize_detections, update_detections_with_postprocessor, update_prediction_counts, update_tracking_summary
+from ai.inference.rtsp_runtime import log_classifier_contract, maybe_log_debug, normalize_detections, update_detections_with_postprocessor, update_prediction_counts, update_tracking_summary
 from ai.inference.rtsp_runtime import (
     log_detection_stage,
     log_tracking_stage,
@@ -354,6 +354,9 @@ def _process_frame_impl(
         summary["lstm_predictions"] += 1
         summary["latest_prediction_label"] = prediction.get("label")
         summary["latest_faint_probability"] = faint_probability(prediction)
+        summary["latest_runtime_feature_dim"] = getattr(classifier, "last_runtime_feature_dim", None)
+        summary["latest_tensor_shape"] = getattr(classifier, "last_tensor_shape", None)
+        summary["feature_schema"] = getattr(classifier, "feature_schema", None)
         update_prediction_counts(summary, prediction)
     summary["per_track_sequences_generated"] = {
         str(track_id): count for track_id, count in sequence_buffer.sequences_generated_by_track.items()
@@ -388,6 +391,11 @@ def _process_frame_impl(
             faint_threshold=getattr(args, "action_threshold", 0.5),
             consecutive_count=consecutive_by_track.get(track_id, 0),
             event_triggered=event_triggered,
+            checkpoint_input_size=getattr(classifier, "input_size", None),
+            runtime_feature_dim=getattr(classifier, "last_runtime_feature_dim", None),
+            tensor_shape=getattr(classifier, "last_tensor_shape", None),
+            feature_schema=getattr(classifier, "feature_schema", None),
+            checkpoint_path=getattr(classifier, "checkpoint_path", None),
         )
 
     summary["latest_consecutive_faint"] = max(consecutive_by_track.values(), default=0)
@@ -688,6 +696,7 @@ class OverlayWorker:
             getattr(classifier, "checkpoint_sequence_length", None),
             getattr(classifier, "checkpoint_sequence_stride", None),
         )
+        log_classifier_contract("[lstm-checkpoint]", self.camera_login_id, classifier)
 
         summary = initial_summary()
         post_processor = FaintEventPostProcessor(

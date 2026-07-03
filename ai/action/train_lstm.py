@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 
 from ai.action.classifier import DEFAULT_CLASSES, LSTMActionModel, crops_to_features
+from ai.action.feature_schema import KEYPOINT_BBOX54_SCHEMA_VERSION, KEYPOINT51_SCHEMA_VERSION, keypoint_bbox54_feature_names, keypoint51_feature_names
 from ai.action.lstm_contract import DEFAULT_LSTM_SEQUENCE_LENGTH, DEFAULT_LSTM_SEQUENCE_STRIDE
 from ai.action.sequence_buffer import CropSequenceBuffer
 from ai.detection.yolo_person_detector import MockPersonDetector, YoloPersonDetector
@@ -197,12 +198,12 @@ def write_preprocess_outputs(output_dir, split_name, sequence_metadata, clip_sum
 def build_checkpoint_payload(model_state, model_config, args, best_acc, train_summary, val_summary):
     input_size = int(model_config["input_size"])
     crop_feature_size = int(args.feature_size)
-    schema = getattr(args, "feature_schema", "keypoint51" if input_size == 51 else "keypoint_motion54")
-    
-    names = [f"kp{i}_{coord}" for i in range(17) for coord in ("x", "y", "conf")]
+    schema = getattr(args, "feature_schema", KEYPOINT51_SCHEMA_VERSION if input_size == 51 else KEYPOINT_BBOX54_SCHEMA_VERSION)
+
+    names = keypoint51_feature_names()
     if input_size == 54:
         if schema == "keypoint_bbox54":
-            names += ["bbox_width_norm", "bbox_height_norm", "bbox_area_norm"]
+            names = keypoint_bbox54_feature_names()
         else:
             names += ["center_drop", "velocity", "torso_angle_norm"]
             

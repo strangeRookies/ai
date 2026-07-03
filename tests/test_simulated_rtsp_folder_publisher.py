@@ -72,6 +72,14 @@ class SimulatedRtspFolderPublisherTest(unittest.TestCase):
         self.assertNotIn("--domain inside", script)
         self.assertNotIn("--label swoon", script)
 
+    def test_stable_start_script_pins_bbox54_lstm_checkpoint(self):
+        script = Path("scripts/start_ai_stable.sh").read_text(encoding="utf-8")
+
+        self.assertIn("DEFAULT_ACTION_MODEL=\"runs/evaluation_manifest_v2_bbox54_balanced/retrained_best.pt\"", script)
+        self.assertIn("ACTION_MODEL=\"${3:-${ACTION_MODEL:-$DEFAULT_ACTION_MODEL}}\"", script)
+        self.assertIn("ACTION_MODEL checkpoint not found", script)
+        self.assertIn("--action-model \"$ACTION_MODEL\"", script)
+
     def test_auto_restart_policy_falls_back_from_nvenc_after_exit_255(self):
         policy = FfmpegRestartPolicy(requested_mode="auto", initial_mode="nvenc")
 
