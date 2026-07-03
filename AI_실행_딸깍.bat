@@ -111,7 +111,7 @@ if errorlevel 1 (
 )
 
 call :LOG "Stopping previous AI runtime processes..."
-ssh %GPU_USER%@%GPU_HOST% "pkill -f '%REMOTE_ROOT%/scripts/run_registered_cameras.py' 2>/dev/null || true; pkill -f '%REMOTE_ROOT%/scripts/start_simulated_rtsp_from_folder.py' 2>/dev/null || true; pkill -f '%REMOTE_ROOT%/scripts/serve_ai_overlay.py' 2>/dev/null || true; pkill -f 'ffmpeg' 2>/dev/null || true; rm -f %REMOTE_ROOT%/runs/camera_worker_registry.json 2>/dev/null || true; docker rm -f mediamtx 2>/dev/null || true"
+ssh %GPU_USER%@%GPU_HOST% "pkill -f 'scripts/run_registered_cameras.py' 2>/dev/null || true; pkill -f 'scripts/start_simulated_rtsp_from_folder.py' 2>/dev/null || true; pkill -f 'scripts/serve_ai_overlay.py' 2>/dev/null || true; pkill -f 'ffmpeg' 2>/dev/null || true; rm -f %REMOTE_ROOT%/runs/camera_worker_registry.json 2>/dev/null || true; docker rm -f mediamtx 2>/dev/null || true"
 if errorlevel 1 (
   set "CURRENT_STEP=[2/5] 기존 AI 프로세스 정리"
   goto FAIL
@@ -217,7 +217,7 @@ if /i not "%MODE%"=="3" (
 )
 echo.
 call :LOG "Stopping remote AI runtime processes..."
-ssh %GPU_USER%@%GPU_HOST% "pkill -f '%REMOTE_ROOT%/scripts/run_registered_cameras.py' 2>/dev/null || true; pkill -f '%REMOTE_ROOT%/scripts/start_simulated_rtsp_from_folder.py' 2>/dev/null || true; pkill -f '%REMOTE_ROOT%/scripts/serve_ai_overlay.py' 2>/dev/null || true; pkill -f 'ffmpeg' 2>/dev/null || true; rm -f %REMOTE_ROOT%/runs/camera_worker_registry.json 2>/dev/null || true; docker rm -f mediamtx 2>/dev/null || true"
+ssh %GPU_USER%@%GPU_HOST% "pkill -f 'scripts/run_registered_cameras.py' 2>/dev/null || true; pkill -f 'scripts/start_simulated_rtsp_from_folder.py' 2>/dev/null || true; pkill -f 'scripts/serve_ai_overlay.py' 2>/dev/null || true; pkill -f 'ffmpeg' 2>/dev/null || true; rm -f %REMOTE_ROOT%/runs/camera_worker_registry.json 2>/dev/null || true; docker rm -f mediamtx 2>/dev/null || true"
 call :LOG "Remote AI processes stopped."
 goto SUCCESS
 
