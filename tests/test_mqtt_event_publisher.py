@@ -1,7 +1,7 @@
 import os
 import unittest
 
-from ai.publishers.event_publisher import MqttEventPublisher, mqtt_settings_from_env
+from ai.publishers.event_publisher import MqttEventPublisher, _payload_context, mqtt_settings_from_env
 
 
 class MqttEventPublisherTest(unittest.TestCase):
@@ -62,6 +62,24 @@ class MqttEventPublisherTest(unittest.TestCase):
 
         self.assertFalse(connected)
         self.assertFalse(published)
+
+    def test_payload_context_includes_publish_diagnostics(self):
+        context = _payload_context(
+            {
+                "messageType": "frame_sync",
+                "streamId": "cam_05",
+                "cameraLoginId": "cam_05",
+                "frameId": 42,
+            },
+            "camera",
+            connected=True,
+            rc=0,
+        )
+
+        self.assertEqual(
+            context,
+            "topic=camera, messageType=frame_sync, streamId=cam_05, cameraLoginId=cam_05, frameId=42, rc=0, connected=true",
+        )
 
 
 def mqtt_env_names():

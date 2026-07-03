@@ -33,8 +33,7 @@ nohup python scripts/start_simulated_rtsp_from_folder.py \
     --rtsp-port 8554 \
     --poll-interval 30 \
     --ffmpeg-mode auto \
-    --domain inside \
-    --label swoon > publisher.log 2>&1 </dev/null &
+    --domain outside > publisher.log 2>&1 </dev/null &
 
 sleep 8
 
@@ -51,7 +50,6 @@ nohup python scripts/run_registered_cameras.py \
     --mqtt-port "$MQTT_PORT" \
     --mqtt-topic safety/events \
     --skip-simulated-ffmpeg \
-    --domain inside \
-    --label swoon > ai_runner.log 2>&1 </dev/null &
+    --domain outside > ai_runner.log 2>&1 </dev/null &
 
 echo "[start_ai_stable] All processes spawned in background."

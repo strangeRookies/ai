@@ -22,6 +22,7 @@ from ai.inference.rtsp_runtime import (
     log_payload_stage,
     update_quantitative_summary,
 )
+from ai.inference.tracking_debug import log_sequence_stage
 from ai.overlay_http import OverlayState, create_overlay_server
 from ai.roi import apply_roi_mask, combine_roi_masks
 from ai.streams.video_reader import VideoReader
@@ -208,6 +209,7 @@ def process_frame(
             frame_id=frame_id,
             captured_at_ms=captured_at_ms,
         )
+    buffer_lengths = sequence_buffer.buffer_lengths() if hasattr(sequence_buffer, "buffer_lengths") else {}
     prediction = None
     predictions_by_track = {}
     sequences_by_track = {}
@@ -229,6 +231,15 @@ def process_frame(
     summary["per_track_sequences_generated"] = {
         str(track_id): count for track_id, count in sequence_buffer.sequences_generated_by_track.items()
     }
+    log_sequence_stage(
+        stream_id,
+        _log_frame_id,
+        active_track_ids=sequence_buffer.active_track_ids(),
+        buffer_lengths=buffer_lengths,
+        sequences_generated=len(sequences),
+        sequences_generated_by_track=sequence_buffer.sequences_generated_by_track,
+        latest_faint_prob=summary.get("latest_faint_probability"),
+    )
     for track_id, track_prediction in predictions_by_track.items():
         event_triggered = False
         if post_processor is not None:

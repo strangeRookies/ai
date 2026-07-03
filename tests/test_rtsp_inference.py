@@ -1,6 +1,10 @@
+import json
+import os
 import tempfile
 import unittest
 from argparse import Namespace
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 
 import numpy as np
@@ -12,6 +16,8 @@ from scripts.run_rtsp_inference import (
     is_alert_prediction,
     run,
 )
+from ai.inference.rtsp_runtime import log_tracking_stage
+from ai.inference.tracking_debug import log_sequence_stage
 from ai.visualization.draw import draw_overlay
 
 try:
@@ -186,6 +192,93 @@ class RtspInferenceTest(unittest.TestCase):
         self.assertEqual({item["track_id"] for item in sequences}, {1, 2})
         self.assertEqual(buffer.sequences_generated_by_track[1], 1)
         self.assertEqual(buffer.sequences_generated_by_track[2], 1)
+
+    def test_per_track_keypoint_buffer_reports_per_track_accumulation(self):
+        buffer = PerTrackKeypointSequenceBuffers(sequence_length=3, stride=1)
+        detection = {"track_id": 5, "bbox": [0, 0, 10, 10], "keypoints": [{"x": 1, "y": 1, "confidence": 0.9}]}
+
+        buffer.add(0, [detection], (100, 100, 3))
+        buffer.add(1, [detection], (100, 100, 3))
+
+        self.assertEqual(buffer.buffer_lengths(), {5: 2})
+
+    def test_sequence_stage_log_includes_buffer_accumulation_and_lstm_status(self):
+        previous = os.environ.get("TRACKING_DEBUG")
+        os.environ["TRACKING_DEBUG"] = "true"
+        output = StringIO()
+        try:
+            with redirect_stdout(output):
+                log_sequence_stage(
+                    "cam_05",
+                    42,
+                    active_track_ids=[7],
+                    buffer_lengths={7: 29},
+                    sequences_generated=0,
+                    sequences_generated_by_track={7: 0},
+                    latest_faint_prob=None,
+                )
+        finally:
+            if previous is None:
+                os.environ.pop("TRACKING_DEBUG", None)
+            else:
+                os.environ["TRACKING_DEBUG"] = previous
+
+        record = json.loads(output.getvalue().strip().removeprefix("[stage-log] "))
+
+        self.assertEqual(record["stage"], "sequence")
+        self.assertEqual(record["cameraLoginId"], "cam_05")
+        self.assertEqual(record["frameId"], 42)
+        self.assertEqual(record["activeTrackIds"], [7])
+        self.assertEqual(record["bufferLengths"], {"7": 29})
+        self.assertEqual(record["sequencesGenerated"], 0)
+        self.assertFalse(record["lstmSequenceGenerated"])
+        self.assertIsNone(record["latestFaintProbability"])
+
+    def test_tracking_stage_log_includes_track_display_and_keypoint_diagnostics(self):
+        previous = os.environ.get("TRACKING_DEBUG")
+        os.environ["TRACKING_DEBUG"] = "true"
+        output = StringIO()
+        try:
+            with redirect_stdout(output):
+                log_tracking_stage(
+                    "cam_05",
+                    42,
+                    pre_detections=[{"bbox": [0, 0, 10, 10]}],
+                    post_detections=[
+                        {
+                            "bbox": [0, 0, 10, 10],
+                            "confidence": 0.81,
+                            "track_id": 987654321,
+                            "display_id": 1,
+                            "keypoints": [
+                                {"x": 1, "y": 2, "confidence": 0.9},
+                                {"x": 3, "y": 4, "confidence": 0.7},
+                            ],
+                        },
+                        {
+                            "bbox": [20, 0, 30, 10],
+                            "confidence": 0.72,
+                            "keypoints": [{"x": 5, "y": 6, "confidence": 0.6}],
+                        },
+                    ],
+                    diagnostics={"new_tracks": 1, "lost_tracks": 0, "id_switch_like_events": 0},
+                )
+        finally:
+            if previous is None:
+                os.environ.pop("TRACKING_DEBUG", None)
+            else:
+                os.environ["TRACKING_DEBUG"] = previous
+
+        line = output.getvalue().strip()
+        record = json.loads(line.removeprefix("[stage-log] "))
+
+        self.assertEqual(record["cameraLoginId"], "cam_05")
+        self.assertEqual(record["trackedCount"], 1)
+        self.assertEqual(record["missingTrackCount"], 1)
+        self.assertEqual(record["avgKeypointConfidence"], 0.7333)
+        self.assertEqual(record["trackDetails"][0]["trackId"], 987654321)
+        self.assertEqual(record["trackDetails"][0]["displayId"], 1)
+        self.assertEqual(record["trackDetails"][1]["fallbackRisk"], True)
 
 if __name__ == "__main__":
     unittest.main()

@@ -78,6 +78,7 @@ def build_frame_sync_payload(
         "schemaVersion": SCHEMA_VERSION,
         "messageType": "frame_sync",
         "type": "frame_sync",
+        "streamId": camera_login_id,
         "cameraLoginId": camera_login_id,
         "frameId": int(frame_id),
         "capturedAtMs": int(captured_at_ms),
