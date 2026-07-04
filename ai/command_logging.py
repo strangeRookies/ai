@@ -12,5 +12,5 @@ def safe_command_text(command: list[str]) -> str:
             redact_next = False
             continue
         masked.append(redact_url(value) if value.startswith("rtsp://") else value)
-        redact_next = value == "--mqtt-password"
+        redact_next = value in {"--mqtt-password", "--webrtc-sync-token"}
     return " ".join(masked)

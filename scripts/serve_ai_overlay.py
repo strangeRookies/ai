@@ -15,6 +15,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from ai.events.event_clip import EventClipBuffer
 from ai.events.clip_worker import ClipWriterWorker, enqueue_event_clip
 
+from ai.events.event_clip import EventClipBuffer
+from ai.events.clip_worker import ClipWriterWorker, enqueue_event_clip
 from ai.action.per_track_sequence_buffer import PerTrackCropSequenceBuffers, PerTrackKeypointSequenceBuffers
 from ai.action.lstm_contract import DEFAULT_KEYPOINT_INPUT_SIZE, DEFAULT_LSTM_SEQUENCE_LENGTH, DEFAULT_LSTM_SEQUENCE_STRIDE, log_lstm_config
 from ai.evidence import evidence_id
@@ -59,6 +61,14 @@ def initial_summary():
 #RTSP 스트림을 캡처하여 AI 분석(YOLO Pose 및 LSTM)을 수행
 #감지된 객체의 바운딩 박스(bbox), 트래킹 ID 및 상태 메타데이터를 MQTT camera 토픽으로 실시간 발행
 class OverlayPublishState:
+    """MQTT overlay payload에 넣을 track별 최신 행동 신호를 보존한다.
+
+    LSTM sequence는 매 프레임 만들어지지 않는다. 그래서 어떤 프레임에서는 bbox는
+    살아 있지만 faint_probability/event flag가 새로 계산되지 않을 수 있다. 이 상태
+    객체는 같은 track_id가 유지되는 동안 마지막 행동 신호를 bbox에 다시 붙여 frontend
+    overlay가 한두 프레임마다 깜빡이지 않도록 한다.
+    """
+
     def __init__(self):
         self.signals_by_track = {}
         self.last_timestamp_ms = 0
@@ -102,7 +112,11 @@ def _track_id(value):
 
 
 def mjpeg_debug_enabled(args: argparse.Namespace) -> bool:
-    return bool(getattr(args, "mjpeg_debug", False))
+    return bool(getattr(args, "mjpeg_enabled", False) or getattr(args, "mjpeg_debug", False))
+
+
+def mjpeg_overlay_enabled(args: argparse.Namespace) -> bool:
+    return bool(getattr(args, "mjpeg_enable_overlay", True))
 
 
 def log_worker_startup_contract(args: argparse.Namespace) -> None:
@@ -161,8 +175,16 @@ def process_frame(
     exit_roi_mask=None,
     exit_post_processor=None,
     track_selector=None,
+    sync_sink=None,
     pose_reporter=None,
 ):
+    """프레임 처리 중 예외가 나면 stage 정보를 붙여 worker log에 남긴다.
+
+    실제 AI 처리 단계는 `_process_frame_impl()`에 있고, 이 wrapper는 장시간 worker가
+    실패했을 때 YOLO/Tracking/LSTM/Payload 중 어느 구간에서 터졌는지 찾기 위한
+    진입점이다.
+    """
+
     try:
         return _process_frame_impl(
             frame_packet,
@@ -183,6 +205,7 @@ def process_frame(
             exit_roi_mask=exit_roi_mask,
             exit_post_processor=exit_post_processor,
             track_selector=track_selector,
+            sync_sink=sync_sink,
             pose_reporter=pose_reporter,
         )
     except Exception as exc:
@@ -212,8 +235,19 @@ def _process_frame_impl(
     exit_roi_mask=None,
     exit_post_processor=None,
     track_selector=None,
+    sync_sink=None,
     pose_reporter=None,
 ):
+    """RTSP frame 하나를 YOLO Pose -> tracking -> LSTM -> MQTT payload로 처리한다.
+
+    핵심 순서:
+    1. frame metadata를 기록해 frameId/timestampMs를 payload와 diagnostics에 맞춘다.
+    2. ROI mask 적용 후 YOLO Pose raw detections를 얻고, mock 모드면 keypoint를 보강한다.
+    3. ByteTrack/Simple tracker가 detection에 track_id를 붙인다.
+    4. per-track sequence buffer가 충분히 찬 track만 LSTM classifier로 보낸다.
+    5. bbox/keypoint/tracking/LSTM 결과를 overlay payload와 진단 로그로 발행한다.
+    """
+
     stream_id = getattr(args, "camera_login_id", None) or args.camera_id
     frame_metadata = None
     if frame_buffer is not None:
@@ -232,7 +266,8 @@ def _process_frame_impl(
         detections = ensure_mock_keypoints(detections)
     raw_detections = [dict(item) for item in detections]
 
-    # Stage 1: Detection log
+    # Stage 1: detector 품질 확인용 raw detection 로그. ByteTrack 문제로 보기 전에
+    # YOLO가 사람 bbox/keypoint를 안정적으로 잡는지 먼저 확인한다.
     _log_frame_id = frame_metadata.frame_id if frame_metadata is not None else getattr(frame_packet, "frame_idx", 0)
     _log_ts = frame_metadata.captured_at_ms if frame_metadata is not None else None
     log_detection_stage(stream_id, _log_frame_id, _log_ts, detections)
@@ -241,7 +276,8 @@ def _process_frame_impl(
     if tracker is not None:
         detections = update_detections_with_postprocessor(tracker, detections, frame_packet.frame, frame_packet.timestamp)
 
-    # Stage 2: Tracking log
+    # Stage 2: tracking association 로그. raw detection은 있는데 active track이 0이면
+    # detector가 아니라 tracker threshold/association 문제로 분류할 수 있다.
     _tracker_diag = tracker.diagnostics() if tracker is not None else {}
     log_tracking_stage(stream_id, _log_frame_id, _pre_track_detections, detections, _tracker_diag)
     if os.getenv("TRACKING_DEBUG", "false").lower() in {"1", "true", "yes", "on"}:
@@ -320,13 +356,13 @@ def _process_frame_impl(
     if tracker is not None:
         update_tracking_summary(summary, tracker.diagnostics())
 
-    # EXIT 이탈 감지: 트래킹된 박스 center가 EXIT ROI 안에 있으면 알림
+    # EXIT 이탈 감지: 트래킹된 박스 center가 안전구역(EXIT ROI) 밖에 있으면 알림
     if exit_roi_mask is not None and exit_post_processor is not None:
         all_track_ids = {int(float(str(b["track_id"]))) for b in boxes if b.get("track_id") is not None}
-        in_exit_zone = find_boxes_in_exit_zone(boxes, exit_roi_mask)
-        for track_id in all_track_ids - in_exit_zone:
+        in_safe_zone = find_boxes_in_exit_zone(boxes, exit_roi_mask)
+        for track_id in in_safe_zone:
             exit_post_processor.reset_track(args.camera_id, track_id)
-        for track_id in in_exit_zone:
+        for track_id in all_track_ids - in_safe_zone:
             if exit_post_processor.should_trigger(args.camera_id, track_id, frame_packet.timestamp):
                 exit_boxes = [b for b in boxes if b.get("track_id") is not None and int(float(str(b["track_id"]))) == track_id]
                 exit_payload = build_inference_event_payload(
@@ -503,6 +539,15 @@ def _process_frame_impl(
     log_payload_stage(stream_id, _payload_frame_id, overlay_payload)
     update_quantitative_summary(summary, boxes, _tracker_diag if tracker is not None else None)
     summary["latest_overlay_event_count"] = len(overlay_payload["events"])
+    if sync_sink is not None:
+        try:
+            sync_sink.publish_frame(frame_packet.frame, overlay_payload)
+        except Exception as exc:
+            print(
+                f"[ai-worker][error] failed to publish WebRTC sync frame for camera={stream_id}: {exc}",
+                file=sys.stderr,
+                flush=True,
+            )
     if publisher is not None:
         try:
             publisher.publish(overlay_payload, topic=topic_settings["camera_topic"])
@@ -532,13 +577,12 @@ def _process_frame_impl(
                 publisher.publish(payload, topic=topic_settings["event_topic"])
             except Exception as exc:
                 print(f"[ai-worker][error] failed to publish event payload for camera={stream_id}: {exc}", file=sys.stderr, flush=True)
-
         # 낙상 감지 시 10초 스냅샷 버퍼 트리거 작동
         if state is not None and getattr(state, "clip_buffer", None) is not None:
             target_bbox = []
             for b in boxes:
                 if b.get("track_id") is not None and int(b["track_id"]) == track_id:
-                    target_bbox = b.get("box", [])
+                    target_bbox = b.get("bbox", b.get("box", []))
                     break
             
             task_metadata = {
@@ -560,6 +604,8 @@ def _process_frame_impl(
     update_overlay_runtime(summary)
     if not mjpeg_debug_enabled(args):
         return None
+    if not mjpeg_overlay_enabled(args):
+        return frame_packet.frame
     overlay_frame_id = frame_metadata.frame_id if frame_metadata is not None else frame_packet.frame_idx
     overlay = draw_overlay(frame_packet.frame, boxes, prediction, overlay_frame_id)
     draw_metrics_panel(overlay, summary, args, prediction)
@@ -621,9 +667,10 @@ def log_lstm_event(args, stream_id, sequence, prediction):
 
 
 class OverlayWorker:
-    def __init__(self, args, state):
+    def __init__(self, args, state, sync_sink=None):
         self.args = args
         self.state = state
+        self.sync_sink = sync_sink
         self.stop_event = threading.Event()
         self.thread = threading.Thread(target=self._run, name="ai-overlay-worker", daemon=True)
         self.reader_thread = None
@@ -836,8 +883,9 @@ class OverlayWorker:
 
             # 매 프레임마다 스냅샷 클립 버퍼에 기록
             if self.state.clip_buffer is not None:
-                self.state.clip_buffer.add_frame(frame_packet.frame)
-
+                clip_task = self.state.clip_buffer.add_frame(frame_packet.frame)
+                if clip_task is not None:
+                    enqueue_event_clip(self.state.clip_queue, clip_task)
             if roi_configs:
                 h, w = frame_packet.frame.shape[:2]
                 if cached_roi_mask is None or cached_roi_frame_shape != (h, w):
@@ -871,6 +919,7 @@ class OverlayWorker:
                 exit_roi_mask=cached_exit_mask,
                 exit_post_processor=exit_post_processor,
                 track_selector=track_selector,
+                sync_sink=self.sync_sink,
                 pose_reporter=pose_reporter,
             )
 
@@ -917,11 +966,15 @@ class OverlayWorker:
             inference_ms = (time.perf_counter() - inference_start) * 1000.0
             every_n = max(0, int(getattr(self.args, "debug_every_n", 30)))
             if every_n > 0 and frame_packet.frame_id % every_n == 0:
+                mjpeg_summary = self.state.status()["summary"]
                 print(
                     f"[ai-worker] {current_cam_id} "
                     f"frame_id={frame_packet.frame_id} "
                     f"inference_ms={inference_ms:.1f} "
-                    f"queue_lag_ms={queue_lag_ms}",
+                    f"queue_lag_ms={queue_lag_ms} "
+                    f"mjpeg_client_count={mjpeg_summary.get('mjpeg_client_count', 0)} "
+                    f"mjpeg_queue_drop_count={self.queue.dropped_frame_count} "
+                    f"mjpeg_encode_latency_ms={float(mjpeg_summary.get('mjpeg_encode_latency_ms', 0.0)):.1f}",
                     flush=True
                 )
 
@@ -950,12 +1003,27 @@ def main():
                         help="DB cameras.camera_login_id 와 일치하는 식별자. 미지정 시 --camera-id 값 사용")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8010)
-    parser.add_argument("--mjpeg-fps", type=float, default=8.0)
+    parser.add_argument("--mjpeg-fps", type=float, default=float(os.getenv("MJPEG_FPS", "8.0")))
+    parser.add_argument("--mjpeg-width", type=int, default=int(os.getenv("MJPEG_WIDTH", "640")))
+    parser.add_argument("--mjpeg-height", type=int, default=int(os.getenv("MJPEG_HEIGHT", "360")))
+    parser.add_argument("--mjpeg-jpeg-quality", type=int, default=int(os.getenv("MJPEG_JPEG_QUALITY", "70")))
+    parser.add_argument("--mjpeg-base-path", default=os.getenv("MJPEG_BASE_PATH", "/mjpeg"))
+    parser.add_argument(
+        "--mjpeg-enable-overlay",
+        action=argparse.BooleanOptionalAction,
+        default=os.getenv("MJPEG_ENABLE_OVERLAY", "false").lower() in {"1", "true", "yes", "on"},
+    )
     parser.add_argument(
         "--mjpeg-debug",
         action=argparse.BooleanOptionalAction,
         default=os.getenv("AI_MJPEG_DEBUG", "false").lower() in {"1", "true", "yes", "on"},
         help="Expose annotated MJPEG only for local debugging.",
+    )
+    parser.add_argument(
+        "--mjpeg-enabled",
+        action=argparse.BooleanOptionalAction,
+        default=os.getenv("MJPEG_ENABLED", "false").lower() in {"1", "true", "yes", "on"},
+        help="Expose bounded MJPEG stream for demo/browser viewing.",
     )
     parser.add_argument("--detector-mode", choices=["real", "mock"], default="mock")
     parser.add_argument("--yolo-model", default="yolo26n-pose.pt")
@@ -1010,6 +1078,16 @@ def main():
     parser.add_argument("--frame-sync-buffer-size", type=int, default=int(os.getenv("FRAME_SYNC_BUFFER_SIZE", "60")))
     parser.add_argument("--frame-sync-delay-warning-ms", type=int, default=int(os.getenv("FRAME_SYNC_DELAY_WARNING_MS", "300")))
     parser.add_argument("--frame-queue-maxsize", type=int, default=int(os.getenv("FRAME_QUEUE_MAXSIZE", "3")))
+    parser.add_argument(
+        "--webrtc-sync-enabled",
+        action=argparse.BooleanOptionalAction,
+        default=os.getenv("AI_WEBRTC_SYNC_ENABLED", "false").lower() in {"1", "true", "yes", "on"},
+        help="Expose an optional AI-origin WebRTC video track plus overlay-sync DataChannel.",
+    )
+    parser.add_argument("--webrtc-sync-host", default=os.getenv("AI_WEBRTC_SYNC_HOST", "0.0.0.0"))
+    parser.add_argument("--webrtc-sync-port", type=int, default=int(os.getenv("AI_WEBRTC_SYNC_PORT", "8090")))
+    parser.add_argument("--webrtc-sync-stream-id", default=os.getenv("AI_WEBRTC_SYNC_STREAM_ID"))
+    parser.add_argument("--webrtc-sync-token", default=os.getenv("AI_WEBRTC_SYNC_TOKEN"))
     parser.add_argument("--max-frames", type=int, default=0)
     parser.add_argument("--reconnect-delay", type=float, default=2.0)
     parser.add_argument("--debug-every-n", type=int, default=30)
@@ -1117,14 +1195,53 @@ def main():
         f"status_topic={status_topic} publisher={publisher_mode}",
         flush=True,
     )
+    print(
+        "[mjpeg-config] "
+        f"enabled={mjpeg_debug_enabled(args)} "
+        f"host={args.host} "
+        f"port={args.port} "
+        f"base_path={args.mjpeg_base_path} "
+        f"stream_path={args.mjpeg_base_path.rstrip('/')}/{args.camera_login_id} "
+        f"fps={args.mjpeg_fps:g} "
+        f"width={args.mjpeg_width} "
+        f"height={args.mjpeg_height} "
+        f"jpeg_quality={args.mjpeg_jpeg_quality} "
+        f"enable_overlay={args.mjpeg_enable_overlay}",
+        flush=True,
+    )
 
     state = OverlayState()
-    worker = OverlayWorker(args, state)
+    webrtc_sync_server = None
+    if args.webrtc_sync_enabled:
+        try:
+            from ai.webrtc_sync import WebRtcSyncConfig, WebRtcSyncServer
+
+            sync_stream_id = args.webrtc_sync_stream_id or f"{args.camera_login_id}_ai"
+            webrtc_sync_server = WebRtcSyncServer(
+                WebRtcSyncConfig(
+                    host=args.webrtc_sync_host,
+                    port=args.webrtc_sync_port,
+                    stream_id=sync_stream_id,
+                    token=args.webrtc_sync_token,
+                )
+            )
+            webrtc_sync_server.start()
+        except Exception as exc:
+            print(
+                f"[ai-webrtc-sync][error] failed to start; continuing with MQTT/STOMP overlay only: "
+                f"{type(exc).__name__}: {exc}",
+                file=sys.stderr,
+                flush=True,
+            )
+            webrtc_sync_server = None
+    worker = OverlayWorker(args, state, sync_sink=webrtc_sync_server)
     server = None
 
     def shutdown(_signum, _frame):
         print(f"[ai-overlay] Shutdown signal received for camera={args.camera_login_id}. Cleaning up.", flush=True)
         worker.stop()
+        if webrtc_sync_server is not None:
+            webrtc_sync_server.stop()
         if server is not None:
             server.shutdown()
         unregister_worker(args.camera_login_id)
@@ -1136,15 +1253,36 @@ def main():
         worker.start()
         print(f"[ai-overlay] input={redact_url(args.rtsp_url)} detector={args.detector_mode}", flush=True)
         if mjpeg_debug_enabled(args):
-            server = create_overlay_server(args.host, args.port, state, args.camera_id, args.mjpeg_fps)
-            print(f"[ai-overlay] debug MJPEG serving http://{args.host}:{args.port}/stream", flush=True)
+            server = create_overlay_server(
+                args.host,
+                args.port,
+                state,
+                args.camera_login_id,
+                args.mjpeg_fps,
+                base_path=args.mjpeg_base_path,
+                jpeg_quality=args.mjpeg_jpeg_quality,
+                width=args.mjpeg_width,
+                height=args.mjpeg_height,
+            )
+            print(
+                f"[ai-overlay] MJPEG serving http://{args.host}:{args.port}{args.mjpeg_base_path.rstrip('/')}/{args.camera_login_id}",
+                flush=True,
+            )
             server.serve_forever()
         else:
-            print("[ai-overlay] metadata-only mode; WebRTC stays on the MediaMTX stream", flush=True)
+            if webrtc_sync_server is None:
+                print("[ai-overlay] metadata-only mode; WebRTC stays on the MediaMTX stream", flush=True)
+            else:
+                print(
+                    f"[ai-overlay] WebRTC sync mode enabled; offerUrl={webrtc_sync_server.url}",
+                    flush=True,
+                )
             while worker.thread.is_alive():
                 worker.thread.join(timeout=1)
     finally:
         worker.stop()
+        if webrtc_sync_server is not None:
+            webrtc_sync_server.stop()
         if server is not None:
             server.server_close()
         unregister_worker(args.camera_login_id)

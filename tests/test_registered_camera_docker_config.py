@@ -76,6 +76,14 @@ class RegisteredCameraDockerConfigTest(unittest.TestCase):
             "SEQUENCE_LENGTH": "12",
             "SEQUENCE_STRIDE": "6",
             "CAMERA_POLL_INTERVAL_SECONDS": "15",
+            "MJPEG_ENABLED": "true",
+            "MJPEG_PORT": "8020",
+            "MJPEG_FPS": "6",
+            "MJPEG_WIDTH": "640",
+            "MJPEG_HEIGHT": "360",
+            "MJPEG_JPEG_QUALITY": "65",
+            "MJPEG_BASE_PATH": "/mjpeg",
+            "MJPEG_ENABLE_OVERLAY": "false",
         }
 
         with patch.dict("os.environ", env, clear=False):
@@ -86,11 +94,16 @@ class RegisteredCameraDockerConfigTest(unittest.TestCase):
             config.mqtt_port, config.mqtt_topic, config.mqtt_camera_topic, config.mqtt_event_topic,
             config.yolo_model, config.action_model,
             config.device, config.sequence_length, config.sequence_stride, config.refresh_interval_seconds,
+            config.mjpeg_enabled, config.overlay_base_port, config.mjpeg_fps, config.mjpeg_width,
+            config.mjpeg_height, config.mjpeg_jpeg_quality, config.mjpeg_base_path,
+            config.mjpeg_enable_overlay,
         )
         expected = (
             "http://backend:8080", "rtsp://mediamtx:8554", Path("/app/video_pool"), "mqtt",
             1884, "safety/custom", "camera/custom", "event/custom", "/models/yolo26n-pose.pt", "/models/lstm.pt",
             "cpu", 12, 6, 15.0,
+            True, 8020, 6.0, 640, 360, 65, "/mjpeg",
+            False,
         )
         self.assertEqual(actual, expected)
 
@@ -147,6 +160,34 @@ class RegisteredCameraDockerConfigTest(unittest.TestCase):
         env = overlay_call.kwargs["env"]
         self.assertNotIn("--rtsp-url", command)
         self.assertEqual(env["RTSP_URL"], "rtsp://user:secret@cctv/icu")
+
+    def test_overlay_worker_receives_webrtc_sync_token_from_environment(self):
+        camera = RegisteredCamera(
+            camera_id="9",
+            camera_login_id="icu_01",
+            rtsp_url="rtsp://cctv/icu",
+            source_type="REAL_RTSP",
+            assigned_video_path=None,
+        )
+        config = replace(
+            fake_config(Path("video_pool")),
+            dry_run=False,
+            webrtc_sync_enabled=True,
+            webrtc_sync_token="sync-secret",
+        )
+
+        with (
+            patch("ai.registered_camera_workers.rtsp_has_readable_frame", return_value=True),
+            patch("ai.registered_camera_workers.spawn_process", return_value=object()) as spawn_process,
+        ):
+            start_camera_worker(camera, config, 8012)
+
+        overlay_call = spawn_process.call_args_list[-1]
+        command = overlay_call.args[0]
+        env = overlay_call.kwargs["env"]
+        self.assertNotIn("--webrtc-sync-token", command)
+        self.assertNotIn("sync-secret", safe_command_text(command))
+        self.assertEqual(env["AI_WEBRTC_SYNC_TOKEN"], "sync-secret")
 
     def test_rtsp_inference_reads_docker_model_environment_aliases(self):
         env = {

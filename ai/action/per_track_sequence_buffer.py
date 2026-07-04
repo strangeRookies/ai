@@ -18,6 +18,14 @@ def _avg_keypoint_confidence(detection):
 
 
 class PerTrackKeypointSequenceBuffers:
+    """track_id별 keypoint frame을 모아 LSTM 입력 sequence를 만든다.
+
+    YOLO Pose/ByteTrack은 매 프레임 결과이고, LSTM은 일정 길이의 시간 창을 필요로 한다.
+    이 클래스는 track별 ring buffer를 유지하면서 sequence_length/stride가 찼을 때만
+    sequence를 반환한다. track이 잠깐 사라져도 grace period 동안 buffer를 유지하고,
+    새 track_id가 이전 bbox와 충분히 겹치면 re-link해서 sequence가 끊기지 않게 한다.
+    """
+
     def __init__(
         self,
         sequence_length=30,
@@ -53,6 +61,13 @@ class PerTrackKeypointSequenceBuffers:
         self.buffer_deleted_count = 0
 
     def add(self, frame_idx, detections, frame_shape=None, now=None, frame_id=None, captured_at_ms=None):
+        """현재 프레임의 tracked detections를 buffer에 넣고 준비된 sequence들을 반환한다.
+
+        detection에 `track_id`가 없으면 LSTM 대상이 될 수 없으므로 diagnostics만 남긴다.
+        `keypoints`가 없거나 부족한 경우도 buffer에 넣지 않는다. sequence가 만들어진 뒤에는
+        cheap filter가 빠른 1차 위험도 검사를 하고, 통과한 sequence만 LSTM classifier로 간다.
+        """
+
         now = time.time() if now is None else float(now)
         self._drop_stale_tracks(now, frame_idx, frame_shape, frame_id, captured_at_ms)
         sequences = []
@@ -147,6 +162,13 @@ class PerTrackKeypointSequenceBuffers:
         }
 
     def _drop_stale_tracks(self, now, frame_idx, frame_shape, frame_id, captured_at_ms):
+        """사라진 track buffer를 grace period 기준으로 유지하거나 삭제한다.
+
+        `max_track_age_seconds`를 넘었지만 `missing_track_grace_seconds` 이내인 track은
+        곧 다시 잡힐 수 있으므로 buffer를 남긴다. grace까지 넘은 track은 메모리 누수와
+        잘못된 re-link를 막기 위해 삭제한다.
+        """
+
         stale_track_ids = [
             track_id
             for track_id, last_seen_at in self._last_seen_at.items()
@@ -179,6 +201,13 @@ class PerTrackKeypointSequenceBuffers:
             self.buffer_deleted_count += 1
 
     def _relink_track_id(self, incoming_track_id, detection, now):
+        """새 track_id가 기존 buffer의 사람과 같은지 bbox IoU/중심거리로 추정한다.
+
+        ByteTrack이 ID를 바꿨더라도 bbox가 충분히 겹치거나 중심점 이동이 작고, 마지막
+        관측 시간 차이가 짧으면 기존 track buffer에 이어 붙인다. 이 로직이 성공하면
+        sequence_length를 처음부터 다시 채우지 않아도 되어 LSTM 지연이 줄어든다.
+        """
+
         if incoming_track_id in self._buffers:
             return None
         best_track_id = None

@@ -103,7 +103,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--rtsp-base-url", default=os.getenv("MEDIAMTX_RTSP_BASE_URL", os.getenv("RTSP_BASE_URL", DEFAULT_RTSP_BASE_URL)))
     parser.add_argument("--video-pool", default=os.getenv("VIDEO_POOL_DIR", DEFAULT_VIDEO_POOL))
     parser.add_argument("--overlay-host", default=os.getenv("OVERLAY_HOST", "0.0.0.0"))
-    parser.add_argument("--overlay-base-port", type=int, default=int(os.getenv("OVERLAY_BASE_PORT", "8010")))
+    parser.add_argument("--overlay-base-port", type=int, default=int(os.getenv("MJPEG_PORT", os.getenv("OVERLAY_BASE_PORT", "8010"))))
     parser.add_argument("--overlay-public-base-url", default=os.getenv("OVERLAY_PUBLIC_BASE_URL"))
     parser.add_argument(
         "--overlay-report-enabled",
@@ -165,6 +165,31 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action=argparse.BooleanOptionalAction,
         default=env_bool("AI_MJPEG_DEBUG", False),
         help="Open per-worker debug MJPEG/health HTTP ports such as 8010-8013.",
+    )
+    parser.add_argument(
+        "--webrtc-sync-enabled",
+        action=argparse.BooleanOptionalAction,
+        default=env_bool("AI_WEBRTC_SYNC_ENABLED", False),
+        help="Open per-worker AI-origin WebRTC video plus overlay-sync DataChannel endpoints.",
+    )
+    parser.add_argument("--webrtc-sync-host", default=os.getenv("AI_WEBRTC_SYNC_HOST", "0.0.0.0"))
+    parser.add_argument("--webrtc-sync-base-port", type=int, default=int(os.getenv("AI_WEBRTC_SYNC_BASE_PORT", "8090")))
+    parser.add_argument("--webrtc-sync-token", default=os.getenv("AI_WEBRTC_SYNC_TOKEN"))
+    parser.add_argument(
+        "--mjpeg-enabled",
+        action=argparse.BooleanOptionalAction,
+        default=env_bool("MJPEG_ENABLED", False),
+        help="Open bounded per-worker MJPEG streams for demo/browser viewing.",
+    )
+    parser.add_argument("--mjpeg-fps", type=float, default=float(os.getenv("MJPEG_FPS", "8.0")))
+    parser.add_argument("--mjpeg-width", type=int, default=int(os.getenv("MJPEG_WIDTH", "640")))
+    parser.add_argument("--mjpeg-height", type=int, default=int(os.getenv("MJPEG_HEIGHT", "360")))
+    parser.add_argument("--mjpeg-jpeg-quality", type=int, default=int(os.getenv("MJPEG_JPEG_QUALITY", "70")))
+    parser.add_argument("--mjpeg-base-path", default=os.getenv("MJPEG_BASE_PATH", "/mjpeg"))
+    parser.add_argument(
+        "--mjpeg-enable-overlay",
+        action=argparse.BooleanOptionalAction,
+        default=env_bool("MJPEG_ENABLE_OVERLAY", False),
     )
     parser.add_argument("--print-events", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
@@ -249,6 +274,17 @@ def config_from_args(args: argparse.Namespace) -> RunnerConfig:
         tracking_stability_fallback=args.tracking_stability_fallback,
         tracking_stability_fallback_camera_ids=split_csv(args.tracking_stability_fallback_camera_ids),
         mjpeg_debug=args.mjpeg_debug,
+        webrtc_sync_enabled=args.webrtc_sync_enabled,
+        webrtc_sync_host=args.webrtc_sync_host,
+        webrtc_sync_base_port=args.webrtc_sync_base_port,
+        webrtc_sync_token=args.webrtc_sync_token,
+        mjpeg_enabled=args.mjpeg_enabled,
+        mjpeg_fps=args.mjpeg_fps,
+        mjpeg_width=args.mjpeg_width,
+        mjpeg_height=args.mjpeg_height,
+        mjpeg_jpeg_quality=args.mjpeg_jpeg_quality,
+        mjpeg_base_path=args.mjpeg_base_path,
+        mjpeg_enable_overlay=args.mjpeg_enable_overlay,
         print_events=args.print_events,
         dry_run=args.dry_run,
         rtsp_probe_enabled=not args.skip_rtsp_probe,

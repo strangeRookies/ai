@@ -18,6 +18,7 @@ from ai.registered_cameras import (
     parse_camera,
 )
 from ai.registered_camera_workers import CameraWorker, next_overlay_port, publish_unavailable_camera_status, sync_camera_workers
+from ai.overlay_registry_client import overlay_stream_url
 from scripts.run_registered_cameras import log_camera_api_config, warn_if_multiple_registered_camera_runners
 
 
@@ -198,6 +199,76 @@ class RegisteredCameraRunnerTest(unittest.TestCase):
 
         self.assertNotIn("--mjpeg-debug", default_command)
         self.assertIn("--mjpeg-debug", debug_command)
+
+    def test_overlay_command_passes_webrtc_sync_options_only_when_enabled(self):
+        camera = RegisteredCamera(
+            camera_id="9",
+            camera_login_id="icu_01",
+            rtsp_url="rtsp://cctv/icu",
+            source_type="REAL_RTSP",
+            assigned_video_path=None,
+        )
+
+        default_command = build_overlay_command(camera, "rtsp://cctv/icu", 8012, fake_config(Path("video_pool")))
+        sync_command = build_overlay_command(
+            camera,
+            "rtsp://cctv/icu",
+            8012,
+            replace(
+                fake_config(Path("video_pool")),
+                webrtc_sync_enabled=True,
+                webrtc_sync_host="127.0.0.1",
+                webrtc_sync_base_port=8090,
+                webrtc_sync_token="secret-token",
+            ),
+        )
+
+        self.assertNotIn("--webrtc-sync-enabled", default_command)
+        self.assertIn("--webrtc-sync-enabled", sync_command)
+        self.assertIn("--webrtc-sync-host", sync_command)
+        self.assertIn("127.0.0.1", sync_command)
+        self.assertIn("--webrtc-sync-port", sync_command)
+        self.assertIn("8092", sync_command)
+        self.assertIn("--webrtc-sync-stream-id", sync_command)
+        self.assertIn("icu_01_ai", sync_command)
+        self.assertNotIn("--webrtc-sync-token", sync_command)
+        self.assertNotIn("secret-token", sync_command)
+
+    def test_overlay_command_passes_bounded_mjpeg_demo_settings(self):
+        camera = RegisteredCamera(
+            camera_id="9",
+            camera_login_id="icu_01",
+            rtsp_url="rtsp://cctv/icu",
+            source_type="REAL_RTSP",
+            assigned_video_path=None,
+        )
+        config = replace(
+            fake_config(Path("video_pool")),
+            mjpeg_enabled=True,
+            mjpeg_base_path="/mjpeg",
+            mjpeg_fps=6.0,
+            mjpeg_width=640,
+            mjpeg_height=360,
+            mjpeg_jpeg_quality=65,
+            mjpeg_enable_overlay=False,
+        )
+
+        command = build_overlay_command(camera, "rtsp://cctv/icu", 8012, config)
+
+        self.assertIn("--mjpeg-enabled", command)
+        self.assertEqual(command[command.index("--mjpeg-base-path") + 1], "/mjpeg")
+        self.assertEqual(command[command.index("--mjpeg-fps") + 1], "6.0")
+        self.assertEqual(command[command.index("--mjpeg-width") + 1], "640")
+        self.assertEqual(command[command.index("--mjpeg-height") + 1], "360")
+        self.assertEqual(command[command.index("--mjpeg-jpeg-quality") + 1], "65")
+        self.assertIn("--no-mjpeg-enable-overlay", command)
+
+    def test_overlay_registry_reports_mjpeg_camera_path(self):
+        config = replace(fake_config(Path("video_pool")), mjpeg_base_path="/mjpeg")
+
+        url = overlay_stream_url(config, 8012, "cam_09")
+
+        self.assertEqual(url, "http://localhost:8012/mjpeg/cam_09")
 
     def test_load_active_cameras_reads_backend_success_data_envelope(self):
         response = FakeHttpResponse(

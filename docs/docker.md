@@ -102,6 +102,7 @@ Do not use `http://localhost:18080` from inside the AI container unless the back
 | `8554` | MediaMTX RTSP |
 | `8888` | MediaMTX HLS |
 | `8889` | MediaMTX WebRTC/WHEP |
+| `8010-8020` | AI per-worker MJPEG demo streams by default, `/mjpeg/{cameraLoginId}` |
 | `1883` | MQTT broker |
 
 ## GPU
@@ -141,6 +142,14 @@ docker run --rm --gpus all \
 | `DEVICE` | `auto` | YOLO device: `auto`, `cpu`, `0`, or `cuda:0` |
 | `ACTION_DEVICE` | `auto` | LSTM device |
 | `VIDEO_POOL_DIR` | `video_pool` | Local video pool for `SIMULATED_RTSP` |
+| `MJPEG_ENABLED` | `true` in compose, `false` in direct worker unless set | Enable per-worker MJPEG stream server |
+| `MJPEG_PORT` | `8010` | First per-worker MJPEG port; additional cameras use following free ports |
+| `MJPEG_FPS` | `8` | MJPEG output FPS limit |
+| `MJPEG_WIDTH` | `640` | MJPEG output width |
+| `MJPEG_HEIGHT` | `360` | MJPEG output height |
+| `MJPEG_JPEG_QUALITY` | `70` | JPEG quality cap for MJPEG encoding |
+| `MJPEG_BASE_PATH` | `/mjpeg` | MJPEG route prefix, yielding `/mjpeg/{cameraLoginId}` |
+| `MJPEG_ENABLE_OVERLAY` | `false` | Draw AI annotations into MJPEG frames; keep false to reduce demo load and rely on MQTT metadata overlay |
 | `EVENT_CLIP_OUTPUT_DIR` | `clips` | Event clip output directory |
 | `LOG_LEVEL` | `INFO` | Runtime logging level |
 
@@ -187,6 +196,14 @@ MediaMTX/RTSP:
 ```bash
 ffprobe rtsp://localhost:8554/cam_01
 ```
+
+MJPEG:
+
+```bash
+curl -i --max-time 5 http://localhost:8010/mjpeg/cam_01
+```
+
+For Docker, publish the per-worker port range and use browser-visible URLs such as `http://<host>:8010/mjpeg/cam_01`. Do not use container-internal hostnames in the frontend.
 
 AI preflight:
 

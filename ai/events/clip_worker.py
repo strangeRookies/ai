@@ -139,7 +139,7 @@ class ClipWriterWorker:
                     print(f"[clip-worker] clip ready: path={output_path}", file=sys.stderr)
 
                     # 업로드 성공 후 publisher가 있으면 최종 MQTT 이벤트 발행
-                    if upload_result.get("uploaded") and upload_result.get("url") and self.publisher:
+                    if upload_result and upload_result.get("uploaded") and upload_result.get("url") and self.publisher:
                         s3_url = upload_result["url"]
                         meta = task.metadata or {}
 
@@ -159,7 +159,10 @@ class ClipWriterWorker:
                         }
 
                         topic = self.mqtt_event_topic or "safety/events"
-                        self.publisher.publish_event(event_payload)
+                        if hasattr(self.publisher, "publish_event"):
+                            self.publisher.publish_event(event_payload)
+                        else:
+                            self.publisher.publish(event_payload, topic=topic)
                         print(f"[clip-worker] published final event with clip_url: url={s3_url} to topic={topic}", file=sys.stderr)
                 except Exception as exc:
                     print(f"[clip-worker] upload failed; local file retained: {exc}", file=sys.stderr)

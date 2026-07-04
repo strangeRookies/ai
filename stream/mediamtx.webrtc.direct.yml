@@ -8,6 +8,11 @@ webrtcAddress: :8889
 webrtcICETCPMuxAddress: :8189
 srt: no
 
+pathDefaults:
+  # Preserve absolute frame timestamps from RTSP/WebRTC/HLS publishers.
+  # MediaMTX otherwise replaces incoming frame timestamps with its own system time.
+  useAbsoluteTimestamp: true
+
 paths:
   all_others:
     source: publisher
