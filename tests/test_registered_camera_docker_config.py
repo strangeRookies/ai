@@ -54,6 +54,7 @@ class RegisteredCameraDockerConfigTest(unittest.TestCase):
     def test_parse_args_defaults_to_sequence_30_stride_15(self):
         config = config_from_args(parse_registered_args([]))
 
+        self.assertEqual(config.backend_base_url, "http://localhost:18080")
         self.assertEqual(config.sequence_length, 30)
         self.assertEqual(config.sequence_stride, 15)
         self.assertEqual(config.domain, "outside")
