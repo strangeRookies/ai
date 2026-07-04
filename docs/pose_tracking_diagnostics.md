@@ -47,6 +47,14 @@ python scripts/summarize_pose_tracking_diag.py runs/diagnostics/pose_tracking_di
 
 The script outputs per-`cameraLoginId` values for `avg_raw_detection_count`, `avg_bbox_confidence`, `avg_keypoint_confidence`, `tracker_active_rate`, and `sequence_ready_count`.
 
+To verify a GPU PC run, use:
+
+```powershell
+python scripts/verify_pose_diagnostics.py --log-path ai_runner.log --jsonl-path runs/diagnostics/pose_tracking_diag.jsonl
+```
+
+`run_registered_cameras.py` writes parent logs to the console log and child AI worker logs to `runs/registered_cameras/*-overlay.log`; the verifier scans those overlay logs by default because `[pose-tracking-config]` and `[pose-diagnostics]` are emitted by the child worker.
+
 ## Diagnosis Rules
 
 - YOLO Pose raw detection missing + `active_tracks=0`: detector is not finding people.
