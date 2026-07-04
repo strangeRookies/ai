@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import queue
 import signal
 import sys
 import threading
@@ -9,6 +10,8 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
+from ai.events.event_clip import EventClipBuffer
+from ai.events.clip_worker import ClipWriterWorker, enqueue_event_clip
 from ai.action.per_track_sequence_buffer import PerTrackCropSequenceBuffers, PerTrackKeypointSequenceBuffers
 from ai.action.lstm_contract import DEFAULT_KEYPOINT_INPUT_SIZE, DEFAULT_LSTM_SEQUENCE_LENGTH, DEFAULT_LSTM_SEQUENCE_STRIDE, log_lstm_config
 from ai.evidence import evidence_id
@@ -321,6 +324,28 @@ def process_frame(
                 publisher.publish(payload, topic=topic_settings["event_topic"])
             except Exception as exc:
                 print(f"[ai-worker][error] failed to publish event payload for camera={stream_id}: {exc}", file=sys.stderr, flush=True)
+        # 낙상 감지 시 10초 스냅샷 버퍼 트리거 작동
+        if state is not None and getattr(state, "clip_buffer", None) is not None:
+            target_bbox = []
+            for b in boxes:
+                if b.get("track_id") is not None and int(b["track_id"]) == track_id:
+                    target_bbox = b.get("bbox", b.get("box", []))
+                    break
+            
+            task_metadata = {
+                "evidenceId": payload.get("eventId"),
+                "event_timestamp": payload.get("timestamp"),
+                "track_id": track_id,
+                "bbox": target_bbox
+            }
+            
+            state.clip_buffer.trigger_event(
+                event_type=payload.get("type", "fall_detected"),
+                camera_id=stream_id,
+                metadata=task_metadata,
+                queue=state.clip_queue
+            )
+            print(f"[ai-overlay-event] triggered snapshot recording for camera={stream_id} eventId={payload.get('eventId')}", flush=True)
     maybe_log_debug(frame_packet, boxes, summary, prediction, args, prefix="[ai-overlay-debug]")
 
     update_overlay_runtime(summary)
@@ -559,6 +584,11 @@ class OverlayWorker:
                 time.sleep(0.005)
                 continue
 
+            # 매 프레임마다 스냅샷 클립 버퍼에 기록
+            if self.state.clip_buffer is not None:
+                clip_task = self.state.clip_buffer.add_frame(frame_packet.frame)
+                if clip_task is not None:
+                    enqueue_event_clip(self.state.clip_queue, clip_task)
             if roi_configs:
                 h, w = frame_packet.frame.shape[:2]
                 if cached_roi_mask is None or cached_roi_frame_shape != (h, w):

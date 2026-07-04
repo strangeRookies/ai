@@ -100,8 +100,35 @@ class ClipWriterWorker:
             try:
                 output_path = save_clip_to_mp4(task)
                 try:
-                    self.uploader(output_path, task.metadata)
+                    upload_result = self.uploader(output_path, task.metadata)
                     print(f"[clip-worker] clip ready: path={output_path}", file=sys.stderr)
+
+                    # 업로드 성공 후 publisher가 있으면 최종 MQTT 이벤트 발행
+                    if upload_result and upload_result.get("uploaded") and upload_result.get("url") and self.publisher:
+                        s3_url = upload_result["url"]
+                        meta = task.metadata or {}
+
+                        # 백엔드 DTO(SafetyEventDto) 규격에 맞게 페이로드 작성
+                        event_payload = {
+                            "type": task.event_type,
+                            "camera_id": task.camera_id,
+                            "camera_login_id": task.camera_id,
+                            "timestamp": meta.get("event_timestamp") or datetime.now(timezone.utc).isoformat(),
+                            "severity": "HIGH",
+                            "message": "Fall-like safety event detected. (Video Uploaded)",
+                            "source": "edge-ai",
+                            "eventId": meta.get("evidenceId") or meta.get("event_timestamp"),
+                            "track_id": str(meta.get("track_id", "")),
+                            "clip_url": s3_url,
+                            "clip_path": str(output_path)
+                        }
+
+                        topic = self.mqtt_event_topic or "safety/events"
+                        if hasattr(self.publisher, "publish_event"):
+                            self.publisher.publish_event(event_payload)
+                        else:
+                            self.publisher.publish(event_payload, topic=topic)
+                        print(f"[clip-worker] published final event with clip_url: url={s3_url} to topic={topic}", file=sys.stderr)
                 except Exception as exc:
                     print(f"[clip-worker] upload failed; local file retained: {exc}", file=sys.stderr)
             except Exception as exc:
