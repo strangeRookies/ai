@@ -39,7 +39,7 @@ AI 분석 엔진이 프레임 분석을 거쳐 쓰러짐(Faint) 등의 이상행
   "bbox": [100, 150, 280, 390],
   "track_id": 7,
   "clip_path": "/home/welabs/yolo_training/clips/cam_01_faint.mp4",
-  "clip_url": "http://127.0.0.1:8080/clips/cam_01_faint.mp4"
+  "clip_url": "http://127.0.0.1:18080/clips/cam_01_faint.mp4"
 }
 ```
 

@@ -36,7 +36,7 @@
 왜 이 순서인가:
 
 - AI runner는 backend의 `/api/cameras/active`를 조회해야 합니다.
-- GPU PC에서 backend를 `127.0.0.1:8080`으로 보려면 Windows SSH 터널의 `-R 8080:127.0.0.1:8080`이 먼저 살아 있어야 합니다.
+- GPU PC에서 backend를 `127.0.0.1:18080`으로 보려면 Windows SSH 터널의 `-R 18080:127.0.0.1:18080`이 먼저 살아 있어야 합니다.
 - MediaMTX `8554/8888/8889`가 떠 있어야 RTSP publisher와 WebRTC/HLS 재생이 정상 동작합니다.
 
 ---
@@ -72,7 +72,7 @@ docker compose -f strange_infra/docker-compose.yml ps
 
 이 compose가 올리는 주요 서비스:
 
-- `strange-backend`: `localhost:8080`
+- `strange-backend`: `localhost:18080` (host port; container internal port may be 8080)
 - `strange-frontend`: `localhost:3000`
 - `strange-postgres`: `localhost:5432`
 - `strange-mosquitto`: `localhost:1883`
@@ -81,7 +81,7 @@ docker compose -f strange_infra/docker-compose.yml ps
 확인:
 
 ```powershell
-curl http://localhost:8080/api/cameras/active
+curl http://localhost:18080/api/cameras/active
 docker ps
 ```
 
@@ -97,7 +97,7 @@ docker ps
 새 PowerShell 또는 CMD 창을 열고 아래의 **한 줄 명령어**를 복사하여 실행하고 창을 계속 켜 둡니다. (백틱 없이 한 줄로 복사하여 붙여넣기에 가장 편리합니다)
 
 ```powershell
-ssh -N -L 8888:127.0.0.1:8888 -L 8889:127.0.0.1:8889 -L 8189:127.0.0.1:8189 -L 8010:127.0.0.1:8010 -L 8011:127.0.0.1:8011 -L 8012:127.0.0.1:8012 -L 8013:127.0.0.1:8013 -R 8080:127.0.0.1:8080 welabs@58.127.241.84
+ssh -N -L 8888:127.0.0.1:8888 -L 8889:127.0.0.1:8889 -L 8189:127.0.0.1:8189 -L 8010:127.0.0.1:8010 -L 8011:127.0.0.1:8011 -L 8012:127.0.0.1:8012 -L 8013:127.0.0.1:8013 -R 18080:127.0.0.1:18080 welabs@58.127.241.84
 ```
 
 > [!TIP]
@@ -107,7 +107,7 @@ ssh -N -L 8888:127.0.0.1:8888 -L 8889:127.0.0.1:8889 -L 8189:127.0.0.1:8189 -L 8
 터널 역할:
 
 - Windows 브라우저 -> GPU PC MediaMTX/HLS/WebRTC/AI overlay 접근
-- GPU PC AI runner -> Windows backend `localhost:8080` 접근
+- GPU PC AI runner -> Windows backend `localhost:18080` 접근
 
 포트 의미:
 
@@ -115,7 +115,7 @@ ssh -N -L 8888:127.0.0.1:8888 -L 8889:127.0.0.1:8889 -L 8189:127.0.0.1:8189 -L 8
 - `-L 8889`: Windows `localhost:8889` -> GPU PC WebRTC/WHEP
 - `-L 8189`: Windows `localhost:8189` -> GPU PC WebRTC ICE
 - `-L 8010~8013`: Windows `localhost:8010~8013` -> GPU PC AI overlay
-- `-R 8080`: GPU PC `127.0.0.1:8080` -> Windows backend `127.0.0.1:8080`
+- `-R 18080`: GPU PC `127.0.0.1:18080` -> Windows backend `127.0.0.1:18080`
 
 ---
 
@@ -194,7 +194,7 @@ source .venv/bin/activate
 
 python scripts/start_simulated_rtsp_from_folder.py \
   --video-dir /home/welabs/yolo_training/ai_fall_experiments/data/raw/indoor_chromakey/videos \
-  --backend-url http://localhost:8080 \
+  --backend-url http://localhost:18080 \
   --rtsp-host 127.0.0.1 \
   --rtsp-port 8554 \
   --poll-interval 30 \
@@ -232,7 +232,7 @@ cd /home/welabs/yolo_training/strange_ai_lstm
 source .venv/bin/activate
 
 python scripts/run_registered_cameras.py \
-  --backend-base-url http://127.0.0.1:8080 \
+  --backend-base-url http://127.0.0.1:18080 \
   --rtsp-base-url rtsp://127.0.0.1:8554 \
   --video-pool /home/welabs/yolo_training/ai_fall_experiments/data/raw/indoor_chromakey/videos \
   --overlay-base-port 8010 \
@@ -295,7 +295,7 @@ http://localhost:8010/stream
 기본 권장값:
 
 ```env
-VITE_BACKEND_BASE_URL=http://localhost:8080
+VITE_BACKEND_BASE_URL=http://localhost:18080
 VITE_STREAM_MODE=webrtc
 VITE_WEBRTC_BASE_URL=http://localhost:8889
 VITE_HLS_BASE_URL=http://localhost:8888
@@ -305,7 +305,7 @@ VITE_STREAM_FALLBACK_ENABLED=true
 Overlay 확인 모드:
 
 ```env
-VITE_BACKEND_BASE_URL=http://localhost:8080
+VITE_BACKEND_BASE_URL=http://localhost:18080
 VITE_STREAM_MODE=overlay
 VITE_HLS_BASE_URL=http://localhost:8888
 ```
@@ -353,7 +353,7 @@ Windows:
 
 ```powershell
 docker compose -f strange_infra/docker-compose.yml ps
-curl http://localhost:8080/api/cameras/active
+curl http://localhost:18080/api/cameras/active
 curl http://localhost:8888/cam_01/index.m3u8
 ```
 
@@ -394,10 +394,10 @@ GPU PC AI runner가 외부 MQTT를 쓰는 경우:
 해결:
 
 ```bash
-curl http://127.0.0.1:8080/api/cameras/active
+curl http://127.0.0.1:18080/api/cameras/active
 ```
 
-GPU PC에서 이 명령이 통해야 합니다. 안 되면 Windows SSH 터널 `-R 8080:127.0.0.1:8080`을 확인하세요.
+GPU PC에서 이 명령이 통해야 합니다. 안 되면 Windows SSH 터널 `-R 18080:127.0.0.1:18080`을 확인하세요.
 
 ### 2. MediaMTX는 떠 있는데 WHEP 404
 
@@ -476,7 +476,7 @@ docker compose -f strange_infra/docker-compose.yml up -d --build
 Windows PowerShell 2:
 
 ```powershell
-ssh -N -L 8888:127.0.0.1:8888 -L 8889:127.0.0.1:8889 -L 8189:127.0.0.1:8189 -L 8010:127.0.0.1:8010 -L 8011:127.0.0.1:8011 -L 8012:127.0.0.1:8012 -L 8013:127.0.0.1:8013 -R 8080:127.0.0.1:8080 welabs@58.127.241.84
+ssh -N -L 8888:127.0.0.1:8888 -L 8889:127.0.0.1:8889 -L 8189:127.0.0.1:8189 -L 8010:127.0.0.1:8010 -L 8011:127.0.0.1:8011 -L 8012:127.0.0.1:8012 -L 8013:127.0.0.1:8013 -R 18080:127.0.0.1:18080 welabs@58.127.241.84
 ```
 
 GPU PC terminal:
@@ -497,7 +497,7 @@ nohup bash scripts/run_rtsp_server.sh > rtsp_server.log 2>&1 </dev/null &
 source .venv/bin/activate
 nohup python scripts/start_simulated_rtsp_from_folder.py \
   --video-dir /home/welabs/yolo_training/ai_fall_experiments/data/raw/indoor_chromakey/videos \
-  --backend-url http://localhost:8080 \
+  --backend-url http://localhost:18080 \
   --rtsp-host 127.0.0.1 \
   --rtsp-port 8554 \
   --poll-interval 30 \
@@ -505,7 +505,7 @@ nohup python scripts/start_simulated_rtsp_from_folder.py \
   > publisher.log 2>&1 </dev/null &
 
 nohup python scripts/run_registered_cameras.py \
-  --backend-base-url http://127.0.0.1:8080 \
+  --backend-base-url http://127.0.0.1:18080 \
   --rtsp-base-url rtsp://127.0.0.1:8554 \
   --video-pool /home/welabs/yolo_training/ai_fall_experiments/data/raw/indoor_chromakey/videos \
   --overlay-base-port 8010 \
@@ -544,7 +544,7 @@ Runner 실행 시 topic은 아래처럼 명시하는 것을 권장합니다.
 
 ```bash
 python scripts/run_registered_cameras.py \
-  --backend-base-url http://127.0.0.1:8080 \
+  --backend-base-url http://127.0.0.1:18080 \
   --rtsp-base-url rtsp://127.0.0.1:8554 \
   --video-pool /home/welabs/yolo_training/ai_fall_experiments/data/raw/indoor_chromakey/videos \
   --overlay-base-port 8010 \

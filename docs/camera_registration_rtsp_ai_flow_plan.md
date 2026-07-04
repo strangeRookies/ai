@@ -246,7 +246,7 @@ GPU PC 기준 실행 예시:
 cd ~/yolo_training/strange_ai_lstm
 
 python scripts/run_registered_cameras.py \
-  --backend-base-url http://BACKEND_HOST:8080 \
+  --backend-base-url http://BACKEND_HOST:18080 \
   --mqtt-host EMQX_HOST \
   --mqtt-port 1883 \
   --rtsp-base-url rtsp://GPU_PC_IP:8554 \

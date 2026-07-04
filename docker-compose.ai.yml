@@ -10,7 +10,7 @@ services:
       - path: .env
         required: false
     environment:
-      BACKEND_BASE_URL: ${BACKEND_BASE_URL:-http://host.docker.internal:8080}
+      BACKEND_BASE_URL: ${BACKEND_BASE_URL:-http://host.docker.internal:18080}
       MQTT_HOST: ${MQTT_HOST:-host.docker.internal}
       MQTT_PORT: ${MQTT_PORT:-1883}
       MQTT_TOPIC: ${MQTT_TOPIC:-safety/events}

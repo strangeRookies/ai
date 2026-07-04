@@ -43,7 +43,7 @@ run_ssh "bash -c 'cd /home/welabs/yolo_training/strange_ai_lstm && \
   (pkill -f \"[s]cripts/serve_ai_overlay.py\" || true) && \
   (pkill -f \"[r]tsp://127.0.0.1:8554\" || true) && \
   (fuser -k 8010/tcp || true) && \
-  (fuser -k 8080/tcp || true) && \
+  (fuser -k 18080/tcp || true) && \
   (fuser -k 8888/tcp || true) && \
   (fuser -k 8889/tcp || true) && \
   (fuser -k 8189/tcp || true) && \
@@ -54,8 +54,8 @@ echo "[3/4] Spawning AI systems (MediaMTX, RTSP Publisher, AI Runner) on GPU PC.
 run_ssh "bash -c 'cd /home/welabs/yolo_training/strange_ai_lstm && \
   ( nohup bash scripts/run_rtsp_server.sh > rtsp_server.log 2>&1 </dev/null & ) && \
   source .venv/bin/activate && \
-  ( nohup python scripts/start_simulated_rtsp_from_folder.py --video-dir /home/welabs/yolo_training/ai_fall_experiments/data/raw/indoor_chromakey/videos --backend-url http://localhost:8080 --rtsp-host 127.0.0.1 --rtsp-port 8554 --poll-interval 30 > publisher.log 2>&1 </dev/null & ) && \
-  ( nohup python scripts/run_registered_cameras.py --backend-base-url http://127.0.0.1:8080 --rtsp-base-url rtsp://127.0.0.1:8554 --video-pool /home/welabs/yolo_training/ai_fall_experiments/data/raw/indoor_chromakey/videos --overlay-base-port 8010 --detector-mode real --yolo-model yolo26n-pose.pt --publisher mqtt --mqtt-host 15.165.248.37 --mqtt-port 1883 --mqtt-topic safety/events --skip-simulated-ffmpeg > ai_runner.log 2>&1 </dev/null & )'"
+  ( nohup python scripts/start_simulated_rtsp_from_folder.py --video-dir /home/welabs/yolo_training/ai_fall_experiments/data/raw/indoor_chromakey/videos --backend-url http://localhost:18080 --rtsp-host 127.0.0.1 --rtsp-port 8554 --poll-interval 30 > publisher.log 2>&1 </dev/null & ) && \
+  ( nohup python scripts/run_registered_cameras.py --backend-base-url http://127.0.0.1:18080 --rtsp-base-url rtsp://127.0.0.1:8554 --video-pool /home/welabs/yolo_training/ai_fall_experiments/data/raw/indoor_chromakey/videos --overlay-base-port 8010 --detector-mode real --yolo-model yolo26n-pose.pt --publisher mqtt --mqtt-host 15.165.248.37 --mqtt-port 1883 --mqtt-topic safety/events --skip-simulated-ffmpeg > ai_runner.log 2>&1 </dev/null & )'"
 
 # 컨테이너 종료(SIGTERM/SIGINT) 시 원격 프로세스 정리 및 마스터 세션 해제 핸들러
 cleanup() {
@@ -99,7 +99,7 @@ ssh $SSH_OPTS -S "$MUX_SOCKET" -N \
   -L 0.0.0.0:8011:127.0.0.1:8011 \
   -L 0.0.0.0:8012:127.0.0.1:8012 \
   -L 0.0.0.0:8013:127.0.0.1:8013 \
-  -R 8080:host.docker.internal:8080 \
+  -R 18080:host.docker.internal:18080 \
   $REMOTE_DEST &
 
 SSH_PID=$!
@@ -116,7 +116,7 @@ while true; do
       -L 0.0.0.0:8011:127.0.0.1:8011 \
       -L 0.0.0.0:8012:127.0.0.1:8012 \
       -L 0.0.0.0:8013:127.0.0.1:8013 \
-      -R 8080:host.docker.internal:8080 \
+      -R 18080:host.docker.internal:18080 \
       $REMOTE_DEST &
     SSH_PID=$!
   fi
