@@ -55,6 +55,53 @@ class RtspInferenceConfigTest(unittest.TestCase):
 
         self.assertEqual(args.tracking_mode, "supervision")
 
+    def test_parse_args_reads_pose_and_tracking_debug_env(self):
+        original_env = {
+            "POSE_DEBUG": os.environ.get("POSE_DEBUG"),
+            "POSE_DEBUG_SAVE_IMAGES": os.environ.get("POSE_DEBUG_SAVE_IMAGES"),
+            "POSE_DEBUG_SUMMARY_EVERY_N": os.environ.get("POSE_DEBUG_SUMMARY_EVERY_N"),
+            "POSE_MIN_KEYPOINT_CONFIDENCE": os.environ.get("POSE_MIN_KEYPOINT_CONFIDENCE"),
+            "TRACKING_GRACE_PERIOD_SECONDS": os.environ.get("TRACKING_GRACE_PERIOD_SECONDS"),
+            "TRACKING_RELINK_IOU_THRESHOLD": os.environ.get("TRACKING_RELINK_IOU_THRESHOLD"),
+            "TRACKING_RELINK_CENTER_RATIO": os.environ.get("TRACKING_RELINK_CENTER_RATIO"),
+            "TRACKING_RELINK_MAX_TIME_GAP_SECONDS": os.environ.get("TRACKING_RELINK_MAX_TIME_GAP_SECONDS"),
+            "TRACK_FRAME_RATE": os.environ.get("TRACK_FRAME_RATE"),
+            "POSE_TRACKING_DIAG_JSONL": os.environ.get("POSE_TRACKING_DIAG_JSONL"),
+            "POSE_TRACKING_DIAG_JSONL_PATH": os.environ.get("POSE_TRACKING_DIAG_JSONL_PATH"),
+        }
+        try:
+            os.environ["POSE_DEBUG"] = "true"
+            os.environ["POSE_DEBUG_SAVE_IMAGES"] = "true"
+            os.environ["POSE_DEBUG_SUMMARY_EVERY_N"] = "7"
+            os.environ["POSE_MIN_KEYPOINT_CONFIDENCE"] = "0.33"
+            os.environ["TRACKING_GRACE_PERIOD_SECONDS"] = "3.5"
+            os.environ["TRACKING_RELINK_IOU_THRESHOLD"] = "0.45"
+            os.environ["TRACKING_RELINK_CENTER_RATIO"] = "0.55"
+            os.environ["TRACKING_RELINK_MAX_TIME_GAP_SECONDS"] = "1.7"
+            os.environ["TRACK_FRAME_RATE"] = "24"
+            os.environ["POSE_TRACKING_DIAG_JSONL"] = "true"
+            os.environ["POSE_TRACKING_DIAG_JSONL_PATH"] = "runs/diagnostics/custom.jsonl"
+
+            args = parse_args([])
+        finally:
+            for key, value in original_env.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+        self.assertTrue(args.pose_debug)
+        self.assertTrue(args.pose_debug_save_images)
+        self.assertEqual(args.pose_debug_summary_every_n, 7)
+        self.assertEqual(args.pose_min_keypoint_confidence, 0.33)
+        self.assertEqual(args.tracking_grace_period_seconds, 3.5)
+        self.assertEqual(args.tracking_relink_iou_threshold, 0.45)
+        self.assertEqual(args.tracking_relink_center_ratio, 0.55)
+        self.assertEqual(args.tracking_relink_max_time_gap_seconds, 1.7)
+        self.assertEqual(args.frame_rate, 24)
+        self.assertTrue(args.pose_tracking_diag_jsonl)
+        self.assertEqual(args.pose_tracking_diag_jsonl_path, "runs/diagnostics/custom.jsonl")
+
     def test_parse_args_accepts_camera_login_id_alias(self):
         args = parse_args(["--camera-id", "legacy_cam", "--camera-login-id", "lobby_01"])
 

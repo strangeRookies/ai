@@ -1,14 +1,74 @@
 import unittest
+from types import SimpleNamespace
 
 import numpy as np
 
 from ai.postprocess.supervision_postprocessor import (
+    SupervisionByteTrackAdapter,
     SupervisionPostProcessor,
+    build_bytetrack_constructor_kwargs,
     match_keypoints_by_iou,
 )
 
 
 class SupervisionPostProcessorTest(unittest.TestCase):
+    def test_bytetrack_constructor_kwargs_use_supported_supervision_parameters(self):
+        kwargs, ignored = build_bytetrack_constructor_kwargs(
+            ByteTrackNewNames,
+            track_thresh=0.11,
+            track_buffer=44,
+            match_thresh=0.22,
+            frame_rate=25,
+        )
+
+        self.assertEqual(
+            kwargs,
+            {
+                "track_activation_threshold": 0.11,
+                "lost_track_buffer": 44,
+                "minimum_matching_threshold": 0.22,
+                "frame_rate": 25,
+            },
+        )
+        self.assertEqual(ignored, {})
+
+    def test_bytetrack_constructor_kwargs_fall_back_to_legacy_names(self):
+        kwargs, ignored = build_bytetrack_constructor_kwargs(
+            ByteTrackLegacyNames,
+            track_thresh=0.11,
+            track_buffer=44,
+            match_thresh=0.22,
+            frame_rate=25,
+        )
+
+        self.assertEqual(
+            kwargs,
+            {
+                "track_thresh": 0.11,
+                "track_buffer": 44,
+                "match_thresh": 0.22,
+                "frame_rate": 25,
+            },
+        )
+        self.assertEqual(ignored, {})
+
+    def test_bytetrack_adapter_records_ignored_unsupported_config(self):
+        adapter = SupervisionByteTrackAdapter(
+            track_thresh=0.11,
+            track_buffer=44,
+            match_thresh=0.22,
+            frame_rate=25,
+            sv_module=SimpleNamespace(ByteTrack=ByteTrackOnlyFrameRate, Detections=FakeDetections),
+        )
+
+        diagnostics = adapter.diagnostics()
+
+        self.assertEqual(diagnostics["bytetrack_constructor"]["used"], {"frame_rate": 25})
+        self.assertEqual(
+            diagnostics["bytetrack_constructor"]["ignored"],
+            {"track_thresh": 0.11, "track_buffer": 44, "match_thresh": 0.22},
+        )
+
     def test_match_keypoints_by_iou_preserves_yolo_keypoints(self):
         source = [
             {
@@ -236,6 +296,51 @@ class FakeNoTrackRoboflowByteTrack:
             class_id=detections.class_id,
             tracker_id=np.asarray([None for _ in range(len(detections.xyxy))], dtype=object),
         )
+
+
+class FakeDetections:
+    def __init__(self, xyxy, confidence, class_id, tracker_id=None):
+        self.xyxy = xyxy
+        self.confidence = confidence
+        self.class_id = class_id
+        self.tracker_id = tracker_id
+
+
+class ByteTrackNewNames:
+    def __init__(
+        self,
+        track_activation_threshold=0.25,
+        lost_track_buffer=30,
+        minimum_matching_threshold=0.8,
+        frame_rate=30,
+    ):
+        self.kwargs = {
+            "track_activation_threshold": track_activation_threshold,
+            "lost_track_buffer": lost_track_buffer,
+            "minimum_matching_threshold": minimum_matching_threshold,
+            "frame_rate": frame_rate,
+        }
+
+    def update_with_detections(self, detections):
+        return FakeDetections(detections.xyxy, detections.confidence, detections.class_id, tracker_id=[])
+
+
+class ByteTrackLegacyNames:
+    def __init__(self, track_thresh=0.25, track_buffer=30, match_thresh=0.8, frame_rate=30):
+        self.kwargs = {
+            "track_thresh": track_thresh,
+            "track_buffer": track_buffer,
+            "match_thresh": match_thresh,
+            "frame_rate": frame_rate,
+        }
+
+
+class ByteTrackOnlyFrameRate:
+    def __init__(self, frame_rate=30):
+        self.frame_rate = frame_rate
+
+    def update_with_detections(self, detections):
+        return FakeDetections(detections.xyxy, detections.confidence, detections.class_id, tracker_id=[])
 
 
 if __name__ == "__main__":

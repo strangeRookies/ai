@@ -116,6 +116,19 @@ class RunnerConfig:
     selected_track_mode: str = "strict"
     selected_track_missing_frames: int = 5
     mqtt_status_topic: str | None = None
+    frame_rate: int = 30
+    tracking_grace_period_seconds: float = 4.0
+    tracking_relink_iou_threshold: float = 0.30
+    tracking_relink_center_ratio: float = 0.70
+    tracking_relink_max_time_gap_seconds: float = 2.0
+    pose_debug: bool = False
+    pose_debug_summary_every_n: int = 60
+    pose_min_keypoint_confidence: float = 0.25
+    pose_debug_save_images: bool = False
+    pose_debug_image_dir: str = "runs/pose_debug"
+    pose_debug_image_every_n: int = 300
+    pose_tracking_diag_jsonl: bool = False
+    pose_tracking_diag_jsonl_path: str = "runs/diagnostics/pose_tracking_diag.jsonl"
 
 
 
@@ -319,9 +332,35 @@ def build_overlay_command(
         str(config.match_thresh),
         "--track-buffer",
         str(config.track_buffer),
+        "--frame-rate",
+        str(config.frame_rate),
         "--bbox-smoothing-alpha",
         str(config.bbox_smoothing_alpha),
+        "--tracking-grace-period-seconds",
+        str(config.tracking_grace_period_seconds),
+        "--tracking-relink-iou-threshold",
+        str(config.tracking_relink_iou_threshold),
+        "--tracking-relink-center-ratio",
+        str(config.tracking_relink_center_ratio),
+        "--tracking-relink-max-time-gap-seconds",
+        str(config.tracking_relink_max_time_gap_seconds),
+        "--pose-debug-summary-every-n",
+        str(config.pose_debug_summary_every_n),
+        "--pose-min-keypoint-confidence",
+        str(config.pose_min_keypoint_confidence),
+        "--pose-debug-image-dir",
+        config.pose_debug_image_dir,
+        "--pose-debug-image-every-n",
+        str(config.pose_debug_image_every_n),
+        "--pose-tracking-diag-jsonl-path",
+        config.pose_tracking_diag_jsonl_path,
     ]
+    if config.pose_debug:
+        command.append("--pose-debug")
+    if config.pose_debug_save_images:
+        command.append("--pose-debug-save-images")
+    if config.pose_tracking_diag_jsonl:
+        command.append("--pose-tracking-diag-jsonl")
     if tracking_stability_fallback_enabled(camera, config):
         command.append("--tracking-stability-fallback")
     if config.mjpeg_debug:

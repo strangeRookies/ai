@@ -24,8 +24,10 @@ from ai.inference.rtsp_runtime import (
     create_classifier,
     create_detection_postprocessor,
     create_detector,
+    create_pose_diagnostics_reporter,
     ensure_mock_keypoints,
     log_classifier_contract,
+    log_pose_tracking_config,
     maybe_log_debug,
     normalize_detections,
     save_inference_event_log,
@@ -49,12 +51,18 @@ def run(args):
     camera_login_id = getattr(args, "camera_login_id", None) or args.camera_id
     classifier_input = getattr(args, "classifier_input", "keypoints")
     detection_postprocessor, postprocessing_mode = create_detection_postprocessor(args)
+    pose_reporter = create_pose_diagnostics_reporter(args)
+    log_pose_tracking_config(args, detection_postprocessor)
     cheap_filter_config = cheap_filter_config_from_args(args)
     keypoint_buffers = PerTrackKeypointSequenceBuffers(
         args.sequence_length,
         args.sequence_stride,
         max_track_age_seconds=getattr(args, "track_max_missing_seconds", 4.0),
         cheap_filter_config=cheap_filter_config,
+        missing_track_grace_seconds=getattr(args, "tracking_grace_period_seconds", getattr(args, "track_max_missing_seconds", 4.0)),
+        relink_iou_threshold=getattr(args, "tracking_relink_iou_threshold", 0.30),
+        relink_center_distance_ratio=getattr(args, "tracking_relink_center_ratio", 0.70),
+        relink_max_time_gap_seconds=getattr(args, "tracking_relink_max_time_gap_seconds", 2.0),
     )
     crop_buffers = (
         PerTrackCropSequenceBuffers(
@@ -110,6 +118,7 @@ def run(args):
         "lost_tracks": 0,
         "id_switch_like_events": 0,
         "track_diagnostics": {},
+        "pose_diagnostics": {},
         "per_track_sequences_generated": {},
         "faint_predictions": 0,
         "normal_predictions": 0,
@@ -240,6 +249,7 @@ def run(args):
             metrics.add_yolo_ms((time.perf_counter() - yolo_started_at) * 1000.0)
             if args.detector_mode == "mock":
                 detections = ensure_mock_keypoints(detections)
+            raw_detections = [dict(item) for item in detections]
             detections = update_detections_with_postprocessor(
                 detection_postprocessor,
                 detections,
@@ -279,6 +289,22 @@ def run(args):
                 else []
             )
             classifier_sequences = crop_sequences if crop_sequences else keypoint_sequences
+            pose_record = pose_reporter.observe(
+                camera_login_id=camera_login_id,
+                source_url=str(args.rtsp_url),
+                assigned_video_path=str(getattr(args, "assigned_video_path", "") or getattr(args, "video_id", "") or ""),
+                frame_id=frame_metadata.frame_id if frame_metadata else getattr(frame_packet, "frame_id", None),
+                timestamp_ms=frame_metadata.captured_at_ms if frame_metadata else getattr(frame_packet, "captured_at_ms", None),
+                raw_detections=raw_detections,
+                tracker_diagnostics=detection_postprocessor.diagnostics(),
+                sequence_ready_count=len(classifier_sequences),
+                sequence_diagnostics={
+                    "relink_success_count": keypoint_buffers.relink_success_count,
+                    "relink_fail_count": keypoint_buffers.relink_failure_count,
+                },
+                frame=frame_packet.frame,
+            )
+            summary["pose_diagnostics"] = pose_record
             prediction = None
             predictions_by_track = {}
             sequences_by_track = {}
@@ -405,6 +431,7 @@ def run(args):
             close()
         if writer is not None:
             writer.release()
+        pose_reporter.log_final_summary()
     summary.update(
         metrics.summary(
             summary["frames_processed"],

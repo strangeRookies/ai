@@ -122,7 +122,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--track-thresh", type=float, default=float(os.getenv("TRACK_THRESH", "0.10")))
     parser.add_argument("--match-thresh", "--tracker-iou-threshold", dest="match_thresh", type=float, default=float(os.getenv("TRACK_IOU_THRESHOLD", "0.20")))
     parser.add_argument("--track-buffer", type=int, default=int(os.getenv("TRACK_BUFFER", "90")))
+    parser.add_argument("--frame-rate", type=int, default=int(os.getenv("TRACK_FRAME_RATE", os.getenv("FRAME_RATE", "30"))))
     parser.add_argument("--bbox-smoothing-alpha", type=float, default=float(os.getenv("BBOX_SMOOTHING_ALPHA", "0.60")))
+    parser.add_argument("--tracking-grace-period-seconds", type=float, default=float(os.getenv("TRACKING_GRACE_PERIOD_SECONDS", os.getenv("TRACK_MAX_MISSING_SECONDS", "4.0"))))
+    parser.add_argument("--tracking-relink-iou-threshold", type=float, default=float(os.getenv("TRACKING_RELINK_IOU_THRESHOLD", "0.30")))
+    parser.add_argument("--tracking-relink-center-ratio", type=float, default=float(os.getenv("TRACKING_RELINK_CENTER_RATIO", "0.70")))
+    parser.add_argument("--tracking-relink-max-time-gap-seconds", type=float, default=float(os.getenv("TRACKING_RELINK_MAX_TIME_GAP_SECONDS", "2.0")))
+    parser.add_argument("--pose-debug", action=argparse.BooleanOptionalAction, default=env_bool("POSE_DEBUG", False))
+    parser.add_argument("--pose-debug-summary-every-n", type=int, default=int(os.getenv("POSE_DEBUG_SUMMARY_EVERY_N", "60")))
+    parser.add_argument("--pose-min-keypoint-confidence", type=float, default=float(os.getenv("POSE_MIN_KEYPOINT_CONFIDENCE", "0.25")))
+    parser.add_argument("--pose-debug-save-images", action=argparse.BooleanOptionalAction, default=env_bool("POSE_DEBUG_SAVE_IMAGES", False))
+    parser.add_argument("--pose-debug-image-dir", default=os.getenv("POSE_DEBUG_IMAGE_DIR", "runs/pose_debug"))
+    parser.add_argument("--pose-debug-image-every-n", type=int, default=int(os.getenv("POSE_DEBUG_IMAGE_EVERY_N", "300")))
+    parser.add_argument("--pose-tracking-diag-jsonl", action=argparse.BooleanOptionalAction, default=env_bool("POSE_TRACKING_DIAG_JSONL", False))
+    parser.add_argument("--pose-tracking-diag-jsonl-path", default=os.getenv("POSE_TRACKING_DIAG_JSONL_PATH", "runs/diagnostics/pose_tracking_diag.jsonl"))
     parser.add_argument(
         "--tracking-stability-fallback",
         action=argparse.BooleanOptionalAction,
@@ -206,7 +219,20 @@ def config_from_args(args: argparse.Namespace) -> RunnerConfig:
         track_thresh=args.track_thresh,
         match_thresh=args.match_thresh,
         track_buffer=args.track_buffer,
+        frame_rate=args.frame_rate,
         bbox_smoothing_alpha=args.bbox_smoothing_alpha,
+        tracking_grace_period_seconds=args.tracking_grace_period_seconds,
+        tracking_relink_iou_threshold=args.tracking_relink_iou_threshold,
+        tracking_relink_center_ratio=args.tracking_relink_center_ratio,
+        tracking_relink_max_time_gap_seconds=args.tracking_relink_max_time_gap_seconds,
+        pose_debug=args.pose_debug,
+        pose_debug_summary_every_n=args.pose_debug_summary_every_n,
+        pose_min_keypoint_confidence=args.pose_min_keypoint_confidence,
+        pose_debug_save_images=args.pose_debug_save_images,
+        pose_debug_image_dir=args.pose_debug_image_dir,
+        pose_debug_image_every_n=args.pose_debug_image_every_n,
+        pose_tracking_diag_jsonl=args.pose_tracking_diag_jsonl,
+        pose_tracking_diag_jsonl_path=args.pose_tracking_diag_jsonl_path,
         tracking_stability_fallback=args.tracking_stability_fallback,
         tracking_stability_fallback_camera_ids=split_csv(args.tracking_stability_fallback_camera_ids),
         mjpeg_debug=args.mjpeg_debug,
