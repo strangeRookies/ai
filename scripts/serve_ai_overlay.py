@@ -111,8 +111,14 @@ def _track_id(value):
     return int(float(str(value)))
 
 
-def mjpeg_debug_enabled(args: argparse.Namespace) -> bool:
+def mjpeg_server_enabled(args: argparse.Namespace) -> bool:
+    """MJPEG 서버를 켜야 하는지 판단. mjpeg_enabled 또는 mjpeg_debug 중 하나라도 켜지면 서버를 시작한다."""
     return bool(getattr(args, "mjpeg_enabled", False) or getattr(args, "mjpeg_debug", False))
+
+
+def mjpeg_debug_enabled(args: argparse.Namespace) -> bool:
+    """하위 호환성 alias: 기존 코드가 mjpeg_debug_enabled를 참조하므로 mjpeg_server_enabled와 동일."""
+    return mjpeg_server_enabled(args)
 
 
 def mjpeg_overlay_enabled(args: argparse.Namespace) -> bool:
@@ -602,14 +608,24 @@ def _process_frame_impl(
     maybe_log_debug(frame_packet, boxes, summary, prediction, args, prefix="[ai-overlay-debug]")
 
     update_overlay_runtime(summary)
-    if not mjpeg_debug_enabled(args):
+    # MJPEG 서버가 켜져 있으면 항상 프레임을 반환해야 검은화면이 발생하지 않는다.
+    if not mjpeg_server_enabled(args):
         return None
+    # overlay drawing이 꺼져 있으면 raw frame을 그대로 반환한다.
     if not mjpeg_overlay_enabled(args):
-        return frame_packet.frame
-    overlay_frame_id = frame_metadata.frame_id if frame_metadata is not None else frame_packet.frame_idx
-    overlay = draw_overlay(frame_packet.frame, boxes, prediction, overlay_frame_id)
-    draw_metrics_panel(overlay, summary, args, prediction)
-    return overlay
+        return frame_packet.frame.copy()
+    # overlay가 켜져 있으면 bbox/keypoint/status text를 그린 annotated frame을 반환한다.
+    try:
+        overlay_frame_id = frame_metadata.frame_id if frame_metadata is not None else frame_packet.frame_idx
+        overlay = draw_overlay(frame_packet.frame, boxes, prediction, overlay_frame_id)
+        draw_metrics_panel(overlay, summary, args, prediction)
+        return overlay
+    except Exception as draw_exc:  # overlay 그리기 실패 시 원본 프레임 fallback (worker 중단 방지)
+        print(
+            f"[mjpeg-overlay][warn] overlay draw failed, falling back to raw frame: {draw_exc}",
+            flush=True,
+        )
+        return frame_packet.frame.copy()
 
 
 def log_frame_sync(args, stream_id, frame_metadata, frame_buffer, dropped_frame_count=0):
