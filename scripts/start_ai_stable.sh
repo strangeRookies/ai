@@ -27,6 +27,11 @@ else
     exit 1
 fi
 
+if [ -f .env ]; then
+    echo "[start_ai_stable] Loading environment variables from .env..."
+    export $(grep -v '^#' .env | xargs)
+fi
+
 if [ ! -f "$ACTION_MODEL" ]; then
     echo "[start_ai_stable][error] ACTION_MODEL checkpoint not found: $ACTION_MODEL"
     exit 1
@@ -42,7 +47,6 @@ if [ "${AI_WEBRTC_SYNC_ENABLED:-false}" = "true" ] || [ "${AI_WEBRTC_SYNC_ENABLE
         --webrtc-sync-base-port "${AI_WEBRTC_SYNC_BASE_PORT:-8090}"
     )
 fi
-
 echo "[start_ai_stable] Starting start_simulated_rtsp_from_folder.py..."
 nohup python scripts/start_simulated_rtsp_from_folder.py \
     --video-dir /home/$USER/yolo_training/ai_fall_experiments/data/raw \
