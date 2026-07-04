@@ -147,6 +147,34 @@ class RegisteredCameraDockerConfigTest(unittest.TestCase):
         self.assertNotIn("--rtsp-url", command)
         self.assertEqual(env["RTSP_URL"], "rtsp://user:secret@cctv/icu")
 
+    def test_overlay_worker_receives_webrtc_sync_token_from_environment(self):
+        camera = RegisteredCamera(
+            camera_id="9",
+            camera_login_id="icu_01",
+            rtsp_url="rtsp://cctv/icu",
+            source_type="REAL_RTSP",
+            assigned_video_path=None,
+        )
+        config = replace(
+            fake_config(Path("video_pool")),
+            dry_run=False,
+            webrtc_sync_enabled=True,
+            webrtc_sync_token="sync-secret",
+        )
+
+        with (
+            patch("ai.registered_camera_workers.rtsp_has_readable_frame", return_value=True),
+            patch("ai.registered_camera_workers.spawn_process", return_value=object()) as spawn_process,
+        ):
+            start_camera_worker(camera, config, 8012)
+
+        overlay_call = spawn_process.call_args_list[-1]
+        command = overlay_call.args[0]
+        env = overlay_call.kwargs["env"]
+        self.assertNotIn("--webrtc-sync-token", command)
+        self.assertNotIn("sync-secret", safe_command_text(command))
+        self.assertEqual(env["AI_WEBRTC_SYNC_TOKEN"], "sync-secret")
+
     def test_rtsp_inference_reads_docker_model_environment_aliases(self):
         env = {
             "YOLO_MODEL_PATH": "/models/yolo26n-pose.pt",

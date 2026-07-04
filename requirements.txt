@@ -8,3 +8,5 @@ tqdm
 tabulate
 paho-mqtt
 supervision
+aiohttp
+aiortc

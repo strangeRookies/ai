@@ -59,6 +59,9 @@ nohup python scripts/run_registered_cameras.py \
     --mqtt-host "$MQTT_HOST" \
     --mqtt-port "$MQTT_PORT" \
     --mqtt-topic safety/events \
+    --webrtc-sync-enabled \
+    --webrtc-sync-host 0.0.0.0 \
+    --webrtc-sync-base-port 8090 \
     --skip-simulated-ffmpeg \
     --domain outside > ai_runner.log 2>&1 </dev/null &
 

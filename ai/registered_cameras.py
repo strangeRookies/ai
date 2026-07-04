@@ -106,6 +106,10 @@ class RunnerConfig:
     tracking_stability_fallback: bool = False
     tracking_stability_fallback_camera_ids: tuple[str, ...] = ()
     mjpeg_debug: bool = False
+    webrtc_sync_enabled: bool = False
+    webrtc_sync_host: str = "0.0.0.0"
+    webrtc_sync_base_port: int = 8090
+    webrtc_sync_token: str | None = None
     skip_ffmpeg_spawn: bool = False
     overlay_public_base_url: str | None = None
     overlay_report_enabled: bool = False
@@ -326,6 +330,19 @@ def build_overlay_command(
         command.append("--tracking-stability-fallback")
     if config.mjpeg_debug:
         command.append("--mjpeg-debug")
+    if config.webrtc_sync_enabled:
+        sync_port = int(config.webrtc_sync_base_port) + max(0, int(port) - int(config.overlay_base_port))
+        command.extend(
+            [
+                "--webrtc-sync-enabled",
+                "--webrtc-sync-host",
+                config.webrtc_sync_host,
+                "--webrtc-sync-port",
+                str(sync_port),
+                "--webrtc-sync-stream-id",
+                f"{camera.camera_login_id}_ai",
+            ]
+        )
     optional_pairs = [
         ("--mqtt-host", config.mqtt_host),
         ("--mqtt-port", str(config.mqtt_port) if config.mqtt_port is not None else None),

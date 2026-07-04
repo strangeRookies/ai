@@ -140,6 +140,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=env_bool("AI_MJPEG_DEBUG", False),
         help="Open per-worker debug MJPEG/health HTTP ports such as 8010-8013.",
     )
+    parser.add_argument(
+        "--webrtc-sync-enabled",
+        action=argparse.BooleanOptionalAction,
+        default=env_bool("AI_WEBRTC_SYNC_ENABLED", False),
+        help="Open per-worker AI-origin WebRTC video plus overlay-sync DataChannel endpoints.",
+    )
+    parser.add_argument("--webrtc-sync-host", default=os.getenv("AI_WEBRTC_SYNC_HOST", "0.0.0.0"))
+    parser.add_argument("--webrtc-sync-base-port", type=int, default=int(os.getenv("AI_WEBRTC_SYNC_BASE_PORT", "8090")))
+    parser.add_argument("--webrtc-sync-token", default=os.getenv("AI_WEBRTC_SYNC_TOKEN"))
     parser.add_argument("--print-events", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--skip-rtsp-probe", action="store_true", help="Skip real RTSP preflight before starting AI workers.")
@@ -210,6 +219,10 @@ def config_from_args(args: argparse.Namespace) -> RunnerConfig:
         tracking_stability_fallback=args.tracking_stability_fallback,
         tracking_stability_fallback_camera_ids=split_csv(args.tracking_stability_fallback_camera_ids),
         mjpeg_debug=args.mjpeg_debug,
+        webrtc_sync_enabled=args.webrtc_sync_enabled,
+        webrtc_sync_host=args.webrtc_sync_host,
+        webrtc_sync_base_port=args.webrtc_sync_base_port,
+        webrtc_sync_token=args.webrtc_sync_token,
         print_events=args.print_events,
         dry_run=args.dry_run,
         rtsp_probe_enabled=not args.skip_rtsp_probe,

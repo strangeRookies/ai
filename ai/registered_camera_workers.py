@@ -99,6 +99,9 @@ def camera_source_signature(camera: RegisteredCamera, config: RunnerConfig) -> s
             "track_thresh": config.track_thresh,
             "tracking_mode": config.tracking_mode,
             "tracking_stability_fallback": tracking_stability_fallback_enabled(camera, config),
+            "webrtc_sync_base_port": config.webrtc_sync_base_port,
+            "webrtc_sync_enabled": config.webrtc_sync_enabled,
+            "webrtc_sync_host": config.webrtc_sync_host,
             "yolo_model": config.yolo_model,
         },
         sort_keys=True,
@@ -215,6 +218,8 @@ def start_camera_worker(camera: RegisteredCamera, config: RunnerConfig, port: in
     overlay_env["RTSP_URL"] = rtsp_url
     if config.mqtt_password:
         overlay_env["MQTT_PASSWORD"] = config.mqtt_password
+    if config.webrtc_sync_token:
+        overlay_env["AI_WEBRTC_SYNC_TOKEN"] = config.webrtc_sync_token
     processes.append(
         spawn_process(
             overlay_command,

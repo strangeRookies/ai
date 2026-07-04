@@ -154,6 +154,7 @@ def process_frame(
     exit_roi_mask=None,
     exit_post_processor=None,
     track_selector=None,
+    sync_sink=None,
 ):
     try:
         return _process_frame_impl(
@@ -175,6 +176,7 @@ def process_frame(
             exit_roi_mask=exit_roi_mask,
             exit_post_processor=exit_post_processor,
             track_selector=track_selector,
+            sync_sink=sync_sink,
         )
     except Exception as exc:
         stage = getattr(exc, "stage", "yolo_inference")
@@ -203,6 +205,7 @@ def _process_frame_impl(
     exit_roi_mask=None,
     exit_post_processor=None,
     track_selector=None,
+    sync_sink=None,
 ):
     stream_id = getattr(args, "camera_login_id", None) or args.camera_id
     frame_metadata = None
@@ -476,6 +479,15 @@ def _process_frame_impl(
     log_payload_stage(stream_id, _payload_frame_id, overlay_payload)
     update_quantitative_summary(summary, boxes, _tracker_diag if tracker is not None else None)
     summary["latest_overlay_event_count"] = len(overlay_payload["events"])
+    if sync_sink is not None:
+        try:
+            sync_sink.publish_frame(frame_packet.frame, overlay_payload)
+        except Exception as exc:
+            print(
+                f"[ai-worker][error] failed to publish WebRTC sync frame for camera={stream_id}: {exc}",
+                file=sys.stderr,
+                flush=True,
+            )
     if publisher is not None:
         try:
             publisher.publish(overlay_payload, topic=topic_settings["camera_topic"])
@@ -594,9 +606,10 @@ def log_lstm_event(args, stream_id, sequence, prediction):
 
 
 class OverlayWorker:
-    def __init__(self, args, state):
+    def __init__(self, args, state, sync_sink=None):
         self.args = args
         self.state = state
+        self.sync_sink = sync_sink
         self.stop_event = threading.Event()
         self.thread = threading.Thread(target=self._run, name="ai-overlay-worker", daemon=True)
         self.reader_thread = None
@@ -838,6 +851,7 @@ class OverlayWorker:
                 exit_roi_mask=cached_exit_mask,
                 exit_post_processor=exit_post_processor,
                 track_selector=track_selector,
+                sync_sink=self.sync_sink,
             )
 
             now_ms = time.time_ns() // 1_000_000
@@ -962,6 +976,16 @@ def main():
     parser.add_argument("--frame-sync-buffer-size", type=int, default=int(os.getenv("FRAME_SYNC_BUFFER_SIZE", "60")))
     parser.add_argument("--frame-sync-delay-warning-ms", type=int, default=int(os.getenv("FRAME_SYNC_DELAY_WARNING_MS", "300")))
     parser.add_argument("--frame-queue-maxsize", type=int, default=int(os.getenv("FRAME_QUEUE_MAXSIZE", "3")))
+    parser.add_argument(
+        "--webrtc-sync-enabled",
+        action=argparse.BooleanOptionalAction,
+        default=os.getenv("AI_WEBRTC_SYNC_ENABLED", "false").lower() in {"1", "true", "yes", "on"},
+        help="Expose an optional AI-origin WebRTC video track plus overlay-sync DataChannel.",
+    )
+    parser.add_argument("--webrtc-sync-host", default=os.getenv("AI_WEBRTC_SYNC_HOST", "0.0.0.0"))
+    parser.add_argument("--webrtc-sync-port", type=int, default=int(os.getenv("AI_WEBRTC_SYNC_PORT", "8090")))
+    parser.add_argument("--webrtc-sync-stream-id", default=os.getenv("AI_WEBRTC_SYNC_STREAM_ID"))
+    parser.add_argument("--webrtc-sync-token", default=os.getenv("AI_WEBRTC_SYNC_TOKEN"))
     parser.add_argument("--max-frames", type=int, default=0)
     parser.add_argument("--reconnect-delay", type=float, default=2.0)
     parser.add_argument("--debug-every-n", type=int, default=30)
@@ -1071,12 +1095,32 @@ def main():
     )
 
     state = OverlayState()
-    worker = OverlayWorker(args, state)
+    webrtc_sync_server = None
+    if args.webrtc_sync_enabled:
+        try:
+            from ai.webrtc_sync import WebRtcSyncConfig, WebRtcSyncServer
+
+            sync_stream_id = args.webrtc_sync_stream_id or f"{args.camera_login_id}_ai"
+            webrtc_sync_server = WebRtcSyncServer(
+                WebRtcSyncConfig(
+                    host=args.webrtc_sync_host,
+                    port=args.webrtc_sync_port,
+                    stream_id=sync_stream_id,
+                    token=args.webrtc_sync_token,
+                )
+            )
+            webrtc_sync_server.start()
+        except Exception as exc:
+            print(f"[ai-webrtc-sync][error] failed to start: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+            sys.exit(1)
+    worker = OverlayWorker(args, state, sync_sink=webrtc_sync_server)
     server = None
 
     def shutdown(_signum, _frame):
         print(f"[ai-overlay] Shutdown signal received for camera={args.camera_login_id}. Cleaning up.", flush=True)
         worker.stop()
+        if webrtc_sync_server is not None:
+            webrtc_sync_server.stop()
         if server is not None:
             server.shutdown()
         unregister_worker(args.camera_login_id)
@@ -1092,11 +1136,19 @@ def main():
             print(f"[ai-overlay] debug MJPEG serving http://{args.host}:{args.port}/stream", flush=True)
             server.serve_forever()
         else:
-            print("[ai-overlay] metadata-only mode; WebRTC stays on the MediaMTX stream", flush=True)
+            if webrtc_sync_server is None:
+                print("[ai-overlay] metadata-only mode; WebRTC stays on the MediaMTX stream", flush=True)
+            else:
+                print(
+                    f"[ai-overlay] WebRTC sync mode enabled; offerUrl={webrtc_sync_server.url}",
+                    flush=True,
+                )
             while worker.thread.is_alive():
                 worker.thread.join(timeout=1)
     finally:
         worker.stop()
+        if webrtc_sync_server is not None:
+            webrtc_sync_server.stop()
         if server is not None:
             server.server_close()
         unregister_worker(args.camera_login_id)

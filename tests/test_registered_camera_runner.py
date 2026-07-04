@@ -182,6 +182,40 @@ class RegisteredCameraRunnerTest(unittest.TestCase):
         self.assertNotIn("--mjpeg-debug", default_command)
         self.assertIn("--mjpeg-debug", debug_command)
 
+    def test_overlay_command_passes_webrtc_sync_options_only_when_enabled(self):
+        camera = RegisteredCamera(
+            camera_id="9",
+            camera_login_id="icu_01",
+            rtsp_url="rtsp://cctv/icu",
+            source_type="REAL_RTSP",
+            assigned_video_path=None,
+        )
+
+        default_command = build_overlay_command(camera, "rtsp://cctv/icu", 8012, fake_config(Path("video_pool")))
+        sync_command = build_overlay_command(
+            camera,
+            "rtsp://cctv/icu",
+            8012,
+            replace(
+                fake_config(Path("video_pool")),
+                webrtc_sync_enabled=True,
+                webrtc_sync_host="127.0.0.1",
+                webrtc_sync_base_port=8090,
+                webrtc_sync_token="secret-token",
+            ),
+        )
+
+        self.assertNotIn("--webrtc-sync-enabled", default_command)
+        self.assertIn("--webrtc-sync-enabled", sync_command)
+        self.assertIn("--webrtc-sync-host", sync_command)
+        self.assertIn("127.0.0.1", sync_command)
+        self.assertIn("--webrtc-sync-port", sync_command)
+        self.assertIn("8092", sync_command)
+        self.assertIn("--webrtc-sync-stream-id", sync_command)
+        self.assertIn("icu_01_ai", sync_command)
+        self.assertNotIn("--webrtc-sync-token", sync_command)
+        self.assertNotIn("secret-token", sync_command)
+
     def test_load_active_cameras_reads_backend_success_data_envelope(self):
         response = FakeHttpResponse(
             b'{"success":true,"data":[{"cameraId":4,"cameraLoginId":"cam_02","rtspUrl":"rtsp://cctv/cam_02","sourceType":"REAL_RTSP","aiEnabled":true,"status":"ACTIVE"}]}'
