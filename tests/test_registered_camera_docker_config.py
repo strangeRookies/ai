@@ -76,6 +76,14 @@ class RegisteredCameraDockerConfigTest(unittest.TestCase):
             "SEQUENCE_LENGTH": "12",
             "SEQUENCE_STRIDE": "6",
             "CAMERA_POLL_INTERVAL_SECONDS": "15",
+            "MJPEG_ENABLED": "true",
+            "MJPEG_PORT": "8020",
+            "MJPEG_FPS": "6",
+            "MJPEG_WIDTH": "640",
+            "MJPEG_HEIGHT": "360",
+            "MJPEG_JPEG_QUALITY": "65",
+            "MJPEG_BASE_PATH": "/mjpeg",
+            "MJPEG_ENABLE_OVERLAY": "false",
         }
 
         with patch.dict("os.environ", env, clear=False):
@@ -86,11 +94,16 @@ class RegisteredCameraDockerConfigTest(unittest.TestCase):
             config.mqtt_port, config.mqtt_topic, config.mqtt_camera_topic, config.mqtt_event_topic,
             config.yolo_model, config.action_model,
             config.device, config.sequence_length, config.sequence_stride, config.refresh_interval_seconds,
+            config.mjpeg_enabled, config.overlay_base_port, config.mjpeg_fps, config.mjpeg_width,
+            config.mjpeg_height, config.mjpeg_jpeg_quality, config.mjpeg_base_path,
+            config.mjpeg_enable_overlay,
         )
         expected = (
             "http://backend:8080", "rtsp://mediamtx:8554", Path("/app/video_pool"), "mqtt",
             1884, "safety/custom", "camera/custom", "event/custom", "/models/yolo26n-pose.pt", "/models/lstm.pt",
             "cpu", 12, 6, 15.0,
+            True, 8020, 6.0, 640, 360, 65, "/mjpeg",
+            False,
         )
         self.assertEqual(actual, expected)
 

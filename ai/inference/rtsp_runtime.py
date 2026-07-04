@@ -105,6 +105,14 @@ def env_flag(name, default=False):
 
 
 def create_detection_postprocessor(args):
+    """tracking backend를 선택하고 YOLO detection 후처리기를 만든다.
+
+    기본 파이프라인은 Supervision ByteTrack이다. `tracking_mode=auto`에서는
+    `ENABLE_SUPERVISION_POSTPROCESSING`이 켜진 경우만 supervision을 쓰고, 그렇지
+    않으면 lightweight simple tracker로 간다. 이 함수에서 만든 객체가 프레임마다
+    detection에 `track_id`를 붙이는 책임을 가진다.
+    """
+
     tracking_mode = str(getattr(args, "tracking_mode", "auto") or "auto").strip().lower()
     if tracking_mode == "supervision" or (
         tracking_mode == "auto" and env_flag("ENABLE_SUPERVISION_POSTPROCESSING", False)
@@ -133,6 +141,13 @@ def create_detection_postprocessor(args):
 
 
 def update_detections_with_postprocessor(postprocessor, detections, frame, timestamp):
+    """선택된 tracker 인터페이스 차이를 숨기고 tracked detections를 반환한다.
+
+    SupervisionPostProcessor는 frame을 받는 `process()` API이고, SimpleTrackAssigner는
+    timestamp 기반 `update()` API다. 상위 frame loop는 이 차이를 몰라도 되게 여기서
+    한 번만 분기한다.
+    """
+
     if isinstance(postprocessor, SupervisionPostProcessor):
         return postprocessor.process(detections, frame)
     return postprocessor.update(detections, now=timestamp)
@@ -307,6 +322,13 @@ def create_pose_diagnostics_reporter(args) -> PoseDiagnosticsReporter:
 
 
 def build_pose_tracking_config_dump(args, tracker_diagnostics: dict | None = None) -> dict:
+    """worker 시작 시 실제 적용된 pose/tracking 설정을 JSON-serializable dict로 만든다.
+
+    ByteTrack 생성자에서 사용된/무시된 parameter도 함께 남긴다. supervision 버전이
+    바뀌면 `track_thresh` 같은 기존 이름이 무시될 수 있으므로, 이 dump가 현장 로그에서
+    가장 먼저 확인해야 하는 설정 증거다.
+    """
+
     bytetrack_constructor = (tracker_diagnostics or {}).get("bytetrack_constructor", {})
     return {
         "stage": "pose_tracking_config",

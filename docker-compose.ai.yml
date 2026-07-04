@@ -30,6 +30,16 @@ services:
       ACTION_DEVICE: ${ACTION_DEVICE:-auto}
       DETECTOR_MODE: ${DETECTOR_MODE:-real}
       TRACKING_MODE: ${TRACKING_MODE:-supervision}
+      MJPEG_ENABLED: ${MJPEG_ENABLED:-true}
+      MJPEG_PORT: ${MJPEG_PORT:-8010}
+      MJPEG_FPS: ${MJPEG_FPS:-8}
+      MJPEG_WIDTH: ${MJPEG_WIDTH:-640}
+      MJPEG_HEIGHT: ${MJPEG_HEIGHT:-360}
+      MJPEG_JPEG_QUALITY: ${MJPEG_JPEG_QUALITY:-70}
+      MJPEG_BASE_PATH: ${MJPEG_BASE_PATH:-/mjpeg}
+      MJPEG_ENABLE_OVERLAY: ${MJPEG_ENABLE_OVERLAY:-false}
+    ports:
+      - "${MJPEG_PORT:-8010}-${MJPEG_PORT_END:-8020}:${MJPEG_PORT:-8010}-${MJPEG_PORT_END:-8020}"
     volumes:
       - type: bind
         source: ./models

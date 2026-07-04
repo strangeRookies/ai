@@ -1,0 +1,133 @@
+{
+  "rtsp_url": ".tmp/qa/pose_debug_smoke.avi",
+  "source_id": null,
+  "video_id": null,
+  "camera_id": "cam_04",
+  "dry_run": true,
+  "detector_mode": "mock",
+  "yolo_model": "yolo26n-pose.pt",
+  "yolo_model_exists": false,
+  "action_model": "",
+  "action_model_exists": false,
+  "classifier_mode": "mock_lstm",
+  "classifier_input": "keypoints",
+  "postprocessing_mode": "simple_tracker",
+  "action_threshold": 0.3,
+  "min_consecutive_faint": 3,
+  "camera_cooldown_seconds": 10.0,
+  "sequence_length": 2,
+  "sequence_stride": 1,
+  "lstm_input_size": 51,
+  "sequence_config_note": "runtime CLI/env values override buffer class defaults; stride is sequence start interval, not FPS sampling",
+  "cheap_filter_enabled": false,
+  "cheap_filter_sequences_kept": 2,
+  "cheap_filter_sequences_skipped": 0,
+  "cheap_filter_reasons": {
+    "disabled": 2
+  },
+  "latest_faint_probability": 0.8,
+  "latest_prediction_label": "Faint",
+  "latest_frame_keypoints": 1,
+  "active_tracks": 1,
+  "max_active_tracks": 1,
+  "new_tracks": 1,
+  "lost_tracks": 0,
+  "id_switch_like_events": 0,
+  "track_diagnostics": {
+    "1": {
+      "track_age": 3,
+      "missing_frames": 0,
+      "detection_conf": 0.87,
+      "bbox": [
+        120,
+        80,
+        220,
+        360
+      ],
+      "smoothed_bbox": [
+        120.0,
+        80.0,
+        220.0,
+        360.0
+      ],
+      "predicted_bbox": [
+        120.0,
+        80.0,
+        220.0,
+        360.0
+      ]
+    }
+  },
+  "pose_diagnostics": {
+    "stage": "pose_frame",
+    "cameraLoginId": "cam_04",
+    "sourceUrl": ".tmp/qa/pose_debug_smoke.avi",
+    "assignedVideoPath": "",
+    "frameId": 3,
+    "timestampMs": 1783124627061,
+    "raw_detection_count": 1,
+    "detections": [
+      {
+        "bbox": [
+          120.0,
+          80.0,
+          220.0,
+          360.0
+        ],
+        "bbox_confidence": 0.87,
+        "avg_keypoint_confidence": 0.9,
+        "valid_keypoint_count": 17,
+        "missing_keypoint_count": 0,
+        "bbox_width": 100.0,
+        "bbox_height": 280.0,
+        "track_id": 1
+      }
+    ],
+    "bbox": [
+      120.0,
+      80.0,
+      220.0,
+      360.0
+    ],
+    "bbox_confidence": 0.87,
+    "avg_bbox_confidence": 0.87,
+    "avg_keypoint_confidence": 0.9,
+    "valid_keypoint_count": 17,
+    "missing_keypoint_count": 0,
+    "track_id": null,
+    "active_tracks": 1,
+    "sequenceReadyCount": 1,
+    "diagnosis": "pose_tracking_ok"
+  },
+  "per_track_sequences_generated": {
+    "1": 2
+  },
+  "faint_predictions": 2,
+  "normal_predictions": 0,
+  "events_generated_by_track": {},
+  "frames_processed": 3,
+  "bbox_detections": 3,
+  "keypoints_extracted": 3,
+  "generated_sequences": 2,
+  "lstm_predictions": 2,
+  "events_generated": 0,
+  "sample_event": null,
+  "alert_delivery_result": "console",
+  "latest_frame_id": 3,
+  "latest_captured_at_ms": 1783124627061,
+  "frame_sync_buffer_size": 4,
+  "latest_processed_at_ms": 1783124627064,
+  "latest_ai_latency_ms": 3,
+  "runtime_seconds": 0.036217,
+  "effective_fps": 82.834486,
+  "avg_frame_read_ms": 0.9177,
+  "avg_yolo_inference_ms": 0.005367,
+  "avg_lstm_inference_ms": 0.0023,
+  "avg_total_frame_ms": 0.358067,
+  "bbox_per_frame": 1.0,
+  "keypoints_per_frame": 1.0,
+  "sequence_per_frame": 0.666667,
+  "prediction_per_frame": 0.666667,
+  "gpu_memory": null,
+  "gpu_memory_warning": "CUDA unavailable; GPU memory was not collected."
+}

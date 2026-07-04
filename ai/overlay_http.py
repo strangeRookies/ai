@@ -17,6 +17,10 @@ class OverlayState:
         self.last_error = ""
         self.lock = threading.Lock()
         self.event_queues = []
+        self.mjpeg_client_count = 0
+        self.mjpeg_frame_count = 0
+        self.mjpeg_encode_latency_ms = 0.0
+        self.mjpeg_encode_fail_count = 0
 
     def register_event_queue(self, q):
         with self.lock:
@@ -51,12 +55,35 @@ class OverlayState:
         with self.lock:
             return None if self.frame is None else self.frame.copy()
 
+    def client_connected(self):
+        with self.lock:
+            self.mjpeg_client_count += 1
+
+    def client_disconnected(self):
+        with self.lock:
+            self.mjpeg_client_count = max(0, self.mjpeg_client_count - 1)
+
+    def record_mjpeg_frame(self, encode_latency_ms):
+        with self.lock:
+            self.mjpeg_frame_count += 1
+            self.mjpeg_encode_latency_ms = float(encode_latency_ms)
+
+    def record_mjpeg_encode_failure(self):
+        with self.lock:
+            self.mjpeg_encode_fail_count += 1
+
     def status(self):
         with self.lock:
             return {
                 "connected": self.connected,
                 "last_error": self.last_error,
-                "summary": dict(self.summary),
+                "summary": {
+                    **dict(self.summary),
+                    "mjpeg_client_count": self.mjpeg_client_count,
+                    "mjpeg_frame_count": self.mjpeg_frame_count,
+                    "mjpeg_encode_latency_ms": self.mjpeg_encode_latency_ms,
+                    "mjpeg_encode_fail_count": self.mjpeg_encode_fail_count,
+                },
             }
 
 
@@ -78,7 +105,9 @@ class OverlayHandler(BaseHTTPRequestHandler):
         if path == "/events":
             self.stream_events()
             return
-        if path == "/" or path.startswith("/stream"):
+        camera_id = getattr(self.server, "camera_id", "camera-1")
+        base_path = getattr(self.server, "base_path", "/mjpeg")
+        if path == "/" or path.startswith("/stream") or path == f"{base_path}/{camera_id}":
             self.stream()
             return
         self.send_error(HTTPStatus.NOT_FOUND, "Not found")
@@ -115,7 +144,7 @@ class OverlayHandler(BaseHTTPRequestHandler):
                 except queue.Empty:
                     self.wfile.write(b": keepalive\n\n")
                     self.wfile.flush()
-        except (BrokenPipeError, ConnectionResetError):
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
             pass
         finally:
             self.state.unregister_event_queue(q)
@@ -123,6 +152,7 @@ class OverlayHandler(BaseHTTPRequestHandler):
     def stream(self):
         import cv2
 
+        self.state.client_connected()
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
         self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
@@ -131,30 +161,58 @@ class OverlayHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
         delay = 1.0 / max(1.0, float(self.server.target_fps))
-        while True:
-            frame = self.state.snapshot()
-            if frame is None:
-                status = self.state.status()
-                frame = make_placeholder(status["last_error"] or "waiting for RTSP frames")
-            ok, jpeg = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 82])
-            if not ok:
+        try:
+            while True:
+                frame = self.state.snapshot()
+                if frame is None:
+                    status = self.state.status()
+                    frame = make_placeholder(status["last_error"] or "waiting for RTSP frames")
+                width = int(getattr(self.server, "mjpeg_width", 0) or 0)
+                height = int(getattr(self.server, "mjpeg_height", 0) or 0)
+                if width > 0 and height > 0:
+                    frame = cv2.resize(frame, (width, height), interpolation=cv2.INTER_AREA)
+                started_at = time.perf_counter()
+                ok, jpeg = cv2.imencode(
+                    ".jpg",
+                    frame,
+                    [int(cv2.IMWRITE_JPEG_QUALITY), int(self.server.jpeg_quality)],
+                )
+                if not ok:
+                    self.state.record_mjpeg_encode_failure()
+                    time.sleep(delay)
+                    continue
+                self.state.record_mjpeg_frame((time.perf_counter() - started_at) * 1000.0)
+                try:
+                    self.wfile.write(b"--frame\r\n")
+                    self.wfile.write(b"Content-Type: image/jpeg\r\n")
+                    self.wfile.write(f"Content-Length: {len(jpeg)}\r\n\r\n".encode("ascii"))
+                    self.wfile.write(jpeg.tobytes())
+                    self.wfile.write(b"\r\n")
+                    self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, GeneratorExit):
+                    return
                 time.sleep(delay)
-                continue
-            try:
-                self.wfile.write(b"--frame\r\n")
-                self.wfile.write(b"Content-Type: image/jpeg\r\n")
-                self.wfile.write(f"Content-Length: {len(jpeg)}\r\n\r\n".encode("ascii"))
-                self.wfile.write(jpeg.tobytes())
-                self.wfile.write(b"\r\n")
-                self.wfile.flush()
-            except (BrokenPipeError, ConnectionResetError):
-                return
-            time.sleep(delay)
+        finally:
+            self.state.client_disconnected()
 
 
-def create_overlay_server(host, port, state, camera_id, target_fps):
+def create_overlay_server(
+    host,
+    port,
+    state,
+    camera_id,
+    target_fps,
+    base_path="/mjpeg",
+    jpeg_quality=70,
+    width=640,
+    height=360,
+):
     OverlayHandler.state = state
     server = ThreadingHTTPServer((host, port), OverlayHandler)
     server.target_fps = target_fps
     server.camera_id = camera_id
+    server.base_path = base_path.rstrip("/") or "/mjpeg"
+    server.jpeg_quality = max(1, min(100, int(jpeg_quality)))
+    server.mjpeg_width = max(0, int(width))
+    server.mjpeg_height = max(0, int(height))
     return server

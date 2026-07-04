@@ -57,6 +57,13 @@ class ApiEnvelope(TypedDict, total=False):
 
 @dataclass(frozen=True, slots=True)
 class RegisteredCamera:
+    """Backend camera DTO를 AI worker가 쓰는 안정적인 내부 모델로 정규화한 값.
+
+    Backend의 `cameraId`는 DB PK이고, AI 파이프라인과 MQTT/frontend overlay의
+    외부 식별자는 `cameraLoginId`다. 그래서 이 객체 안에서는
+    `camera_login_id`를 worker key, stream path, log key로 일관되게 사용한다.
+    """
+
     camera_id: str
     camera_login_id: str
     rtsp_url: str | None
@@ -68,6 +75,14 @@ class RegisteredCamera:
 
 @dataclass(frozen=True, slots=True)
 class RunnerConfig:
+    """등록 카메라 runner가 하위 overlay worker에 전달하는 실행 계약.
+
+    이 설정은 `scripts/run_registered_cameras.py`의 CLI/env에서 만들어지고,
+    `build_overlay_command()`가 per-camera `serve_ai_overlay.py` 프로세스 인자로
+    변환한다. 기존 MQTT payload/backend schema를 바꾸지 않기 위해, 새 진단
+    옵션도 전부 이 config를 거쳐 worker 인자로만 전달한다.
+    """
+
     backend_base_url: str
     backend_token: str | None
     backend_timeout_seconds: float
@@ -107,6 +122,13 @@ class RunnerConfig:
     tracking_stability_fallback: bool = False
     tracking_stability_fallback_camera_ids: tuple[str, ...] = ()
     mjpeg_debug: bool = False
+    mjpeg_enabled: bool = False
+    mjpeg_fps: float = 8.0
+    mjpeg_width: int = 640
+    mjpeg_height: int = 360
+    mjpeg_jpeg_quality: int = 70
+    mjpeg_base_path: str = "/mjpeg"
+    mjpeg_enable_overlay: bool = False
     skip_ffmpeg_spawn: bool = False
     overlay_public_base_url: str | None = None
     overlay_report_enabled: bool = False
@@ -152,6 +174,14 @@ def active_cameras_url(backend_base_url: str) -> str:
 
 
 def parse_camera(raw: RawCamera) -> RegisteredCamera | None:
+    """Backend `/api/cameras/active` 항목 하나를 실행 가능한 카메라로 변환한다.
+
+    여기서 필터링되는 항목은 worker를 만들지 않는다. 즉 `aiEnabled=false`,
+    비활성 status, 빈/위험한 `cameraLoginId`, 지원하지 않는 `sourceType`은
+    조용한 오동작 대신 명시적으로 제외된다. ROI는 LSTM 이벤트 판단에 필요한
+    faint 계열과 exit 계열만 분리해 downstream으로 넘긴다.
+    """
+
     if not raw.get("aiEnabled", True):
         return None
     if raw.get("status") not in (None, "ACTIVE"):
@@ -161,7 +191,8 @@ def parse_camera(raw: RawCamera) -> RegisteredCamera | None:
     if not login_id:
         return None
     
-    # Normalize path to prevent conflicts and ensure cam_01 format
+    # cam1, cam_1, cam01처럼 등록된 값을 cam_01 형태로 맞춰 stream path와
+    # 로그 key가 카메라 수에 따라 동적으로 정렬되게 한다.
     login_id = normalize_camera_login_id(login_id)
     
     if not is_safe_camera_login_id(login_id):
@@ -216,6 +247,14 @@ def load_active_cameras(
     backend_token: str | None,
     timeout_seconds: float = 10.0,
 ) -> list[RegisteredCamera]:
+    """Backend active camera API를 호출해 현재 AI 대상 카메라 목록을 가져온다.
+
+    실패 메시지에는 실제 URL, timeout, HTTP status/body 일부를 포함한다. 이 값은
+    GPU PC에서 `localhost`, `host.docker.internal`, compose service name을 잘못
+    고른 경우를 구분하는 1차 증거가 되므로, 호출 실패를 단순 "offline"으로
+    뭉개지 않는다.
+    """
+
     url = active_cameras_url(backend_base_url)
     request = urllib.request.Request(url, headers={"Accept": "application/json"})
     if backend_token:
@@ -273,6 +312,14 @@ def first_video_from_pool(video_pool: Path) -> Path | None:
 
 
 def resolve_simulated_video(camera: RegisteredCamera, video_pool: Path, config: RunnerConfig | None = None) -> Path:
+    """SIMULATED_RTSP 카메라가 송출할 mp4 파일을 결정한다.
+
+    우선순위는 backend가 내려준 `assignedVideoPath`다. 단, 경로 탈출을 막기 위해
+    항상 `video_pool` 아래 실제 파일인지 확인한다. assigned video가 없으면
+    cameraLoginId 기반 stable index로 pool에서 하나를 고르므로 cam_01~cam_N이
+    하드코딩 없이 재시작 후에도 같은 영상을 바라본다.
+    """
+
     if camera.assigned_video_path:
         pool_root = resolved_video_pool(video_pool, REPO_ROOT)
         for candidate in assigned_video_candidates(camera.assigned_video_path, video_pool, REPO_ROOT):
@@ -318,6 +365,14 @@ def build_overlay_command(
     port: int,
     config: RunnerConfig,
 ) -> list[str]:
+    """카메라 하나를 처리할 `serve_ai_overlay.py` worker 명령을 구성한다.
+
+    이 함수는 backend schema나 MQTT payload를 직접 만들지 않는다. 대신 tracking,
+    pose diagnostics, LSTM sequence, MQTT topic 같은 런타임 옵션을 CLI 인자로
+    worker에 전달한다. RTSP URL과 MQTT password는 민감 정보가 될 수 있어 argv에
+    싣지 않고 `start_camera_worker()`에서 환경변수로 주입한다.
+    """
+
     command = [
         config.python_executable,
         "scripts/serve_ai_overlay.py",
@@ -388,6 +443,24 @@ def build_overlay_command(
         command.append("--tracking-stability-fallback")
     if config.mjpeg_debug:
         command.append("--mjpeg-debug")
+    if config.mjpeg_enabled:
+        command.append("--mjpeg-enabled")
+    command.extend(
+        [
+            "--mjpeg-fps",
+            str(config.mjpeg_fps),
+            "--mjpeg-width",
+            str(config.mjpeg_width),
+            "--mjpeg-height",
+            str(config.mjpeg_height),
+            "--mjpeg-jpeg-quality",
+            str(config.mjpeg_jpeg_quality),
+            "--mjpeg-base-path",
+            config.mjpeg_base_path,
+        ]
+    )
+    if not config.mjpeg_enable_overlay:
+        command.append("--no-mjpeg-enable-overlay")
     optional_pairs = [
         ("--mqtt-host", config.mqtt_host),
         ("--mqtt-port", str(config.mqtt_port) if config.mqtt_port is not None else None),
@@ -424,6 +497,13 @@ def tracking_stability_fallback_enabled(camera: RegisteredCamera, config: Runner
 
 
 def input_rtsp_for_camera(camera: RegisteredCamera, config: RunnerConfig) -> tuple[str, list[str] | None]:
+    """카메라 sourceType에 따라 worker 입력 RTSP URL과 ffmpeg 송출 명령을 정한다.
+
+    REAL_RTSP는 backend의 `rtspUrl`을 그대로 분석한다. SIMULATED_RTSP는
+    MediaMTX의 `rtsp://.../{cameraLoginId}` 경로를 만들고, 필요하면 mp4를 그
+    경로로 publish하는 ffmpeg 명령을 함께 반환한다.
+    """
+
     match camera.source_type:
         case "REAL_RTSP":
             if not camera.rtsp_url:

@@ -33,6 +33,14 @@ CameraFailureStatus = Literal["DISCONNECTED", "ERROR"]
 
 @dataclass(slots=True)
 class CameraWorker:
+    """등록 카메라 하나에 대응하는 실제 OS 프로세스 묶음.
+
+    SIMULATED_RTSP 카메라는 ffmpeg publisher와 overlay worker가 같이 뜰 수 있고,
+    REAL_RTSP 카메라는 overlay worker만 뜬다. `source_signature`에는 RTSP URL,
+    ROI, tracking/LSTM/diagnostics 설정이 모두 들어가므로 backend 응답이나
+    런타임 설정이 바뀌면 같은 cameraLoginId라도 worker를 재시작할 수 있다.
+    """
+
     processes: list[subprocess.Popen[str]]
     overlay_port: int
     source_signature: str
@@ -74,6 +82,13 @@ def worker_has_exited(worker: CameraWorker) -> bool:
 
 
 def camera_source_signature(camera: RegisteredCamera, config: RunnerConfig) -> str:
+    """worker 재시작 여부를 판단하는 카메라+런타임 fingerprint를 만든다.
+
+    active camera refresh는 주기적으로 반복된다. 이 signature가 이전 worker와
+    같으면 그대로 유지하고, 다르면 기존 프로세스를 내린 뒤 새 설정으로 띄운다.
+    따라서 tracking threshold, pose debug, ROI 변경도 프로세스 재시작 트리거가 된다.
+    """
+
     import json as _json
     roi_suffix = _json.dumps(list(camera.roi_configs), sort_keys=True)
     exit_roi_suffix = _json.dumps(list(camera.exit_roi_configs), sort_keys=True)
@@ -86,6 +101,13 @@ def camera_source_signature(camera: RegisteredCamera, config: RunnerConfig) -> s
             "device": config.device,
             "match_thresh": config.match_thresh,
             "mjpeg_debug": config.mjpeg_debug,
+            "mjpeg_enabled": config.mjpeg_enabled,
+            "mjpeg_base_path": config.mjpeg_base_path,
+            "mjpeg_fps": config.mjpeg_fps,
+            "mjpeg_height": config.mjpeg_height,
+            "mjpeg_jpeg_quality": config.mjpeg_jpeg_quality,
+            "mjpeg_width": config.mjpeg_width,
+            "mjpeg_enable_overlay": config.mjpeg_enable_overlay,
             "mqtt_camera_topic": config.mqtt_camera_topic,
             "mqtt_event_topic": config.mqtt_event_topic,
             "mqtt_host": config.mqtt_host,
@@ -177,6 +199,14 @@ def publish_unavailable_camera_status(
  #FFmpeg 프로세스 제어
  #카메라 원본 스트림이나 시뮬레이션용 MP4 비디오 파일을 RTSP 스트림으로 변환해 MediaMTX(rtsp://localhost:8554/{cameraLoginId})에 공급
 def start_camera_worker(camera: RegisteredCamera, config: RunnerConfig, port: int) -> CameraWorker | None:
+    """카메라 입력을 준비하고 per-camera AI overlay worker를 시작한다.
+
+    실행 순서는 중요하다. 먼저 REAL_RTSP/SIMULATED_RTSP 입력을 결정하고, REAL_RTSP는
+    선택적으로 한 프레임 probe를 통과해야 한다. 그 다음 기존 중복 worker를 죽이고,
+    SIMULATED_RTSP라면 ffmpeg로 MediaMTX에 영상을 공급한 뒤 `serve_ai_overlay.py`를
+    띄운다. RTSP URL과 MQTT password는 로그/argv 노출을 줄이기 위해 환경변수로 넘긴다.
+    """
+
     processes: list[subprocess.Popen[str]] = []
     try:
         rtsp_url, ffmpeg_command = input_rtsp_for_camera(camera, config)
@@ -261,6 +291,13 @@ def sync_camera_workers(
     cameras: list[RegisteredCamera],
     config: RunnerConfig,
 ) -> None:
+    """backend active camera 목록과 현재 worker set을 맞춘다.
+
+    삭제된 카메라는 즉시 stop하고, 설정 fingerprint가 바뀐 카메라는 같은 overlay port를
+    우선 재사용해 restart한다. 새 카메라는 `next_overlay_port()`로 빈 포트를 찾아
+    cam_01~cam_N처럼 동적인 cameraLoginId를 하드코딩 없이 처리한다.
+    """
+
     active_cameras = {camera.camera_login_id: camera for camera in cameras}
     for camera_login_id in list(workers):
         if camera_login_id not in active_cameras:
@@ -294,6 +331,13 @@ def stop_all_workers(workers: dict[str, CameraWorker], config: RunnerConfig) -> 
 
 
 def run_camera_sync_loop(cameras: list[RegisteredCamera], config: RunnerConfig) -> None:
+    """등록 카메라 runner의 장시간 동작 루프.
+
+    최초 active camera 목록으로 worker를 만들고, 이후 `refresh_interval_seconds`마다
+    backend를 다시 조회해 추가/삭제/설정 변경을 반영한다. worker가 예기치 않게 죽으면
+    overlay log path와 redacted command를 남겨 장시간 장애 분석이 가능하게 한다.
+    """
+
     workers: dict[str, CameraWorker] = {}
     sync_camera_workers(workers, cameras, config)
     if config.dry_run:

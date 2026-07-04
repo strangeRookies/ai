@@ -28,6 +28,13 @@ class ByteTrackAdapter(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class SupervisionPostProcessorConfig:
+    """YOLO Pose raw detections를 ByteTrack에 넣을 때 쓰는 tracking 설정.
+
+    `track_thresh`, `match_thresh`, `track_buffer`, `frame_rate`는 supervision
+    버전에 따라 생성자 이름이 달라질 수 있어 adapter에서 지원 여부를 확인한다.
+    `stability_fallback`은 ByteTrack 결과가 흔들리는 실험 상황에서만 켜는 보조 경로다.
+    """
+
     min_iou: float = 0.30
     track_thresh: float = 0.10
     track_buffer: int = 90
@@ -58,8 +65,14 @@ class SupervisionPostProcessor:
         )
 
     def process(self, detections: list[dict], frame: np.ndarray) -> list[dict]:
+        """YOLO Pose detection list에 `track_id`를 붙여 downstream으로 넘긴다.
+
+        현재 frame 자체는 ByteTrack 입력에 쓰지 않지만, postprocessor 인터페이스를
+        다른 tracker와 맞추기 위해 받는다. 출력 detection은 keypoints/confidence 등
+        YOLO raw field를 보존해야 LSTM sequence와 pose diagnostics가 깨지지 않는다.
+        """
+
         del frame
-        # Returns the tracked list directly which already has keypoints and track_id assigned properly
         return self._tracker.update(detections)
 
     def diagnostics(self) -> dict:
@@ -122,6 +135,13 @@ class SupervisionByteTrackAdapter:
         )
 
     def update(self, detections: list[dict]) -> list[dict]:
+        """supervision ByteTrack을 호출하고 결과를 원본 YOLO detection에 다시 매핑한다.
+
+        supervision은 low-confidence detection을 필터링하거나 순서를 바꿀 수 있다. 그래서
+        tracker 출력 순서를 그대로 믿지 않고 bbox IoU로 원본 detection을 찾아 `track_id`만
+        덧붙인다. 이 처리가 없으면 keypoint가 다른 사람 bbox에 붙어 LSTM 입력이 오염된다.
+        """
+
         if not detections:
             self._active_track_ids = set()
             self._previous_bboxes.clear()
@@ -236,6 +256,13 @@ def build_bytetrack_constructor_kwargs(
     match_thresh: float,
     frame_rate: int,
 ) -> tuple[dict, dict]:
+    """설치된 supervision.ByteTrack 생성자가 실제로 받는 인자만 골라낸다.
+
+    supervision 0.28처럼 wrapper signature가 `*args, **kwargs`로 보일 때는 알려진
+    modern parameter name으로 대체한다. 지원하지 않는 값은 `ignored`에 남겨 startup
+    config dump에서 확인할 수 있게 한다.
+    """
+
     supported = _constructor_parameters(byte_track_cls)
     candidates = [
         (("track_activation_threshold", "track_thresh"), "track_thresh", float(track_thresh)),
@@ -296,6 +323,13 @@ def match_keypoints_by_iou(
     source_detections: list[dict],
     min_iou: float = 0.30,
 ) -> list[dict]:
+    """tracker가 bbox만 반환한 경우 원본 YOLO keypoint를 IoU 기준으로 복원한다.
+
+    ByteTrack은 pose keypoint를 알지 못한다. 따라서 bbox association 이후에도
+    LSTM이 같은 사람의 keypoint sequence를 받게 하려면, tracker bbox와 가장 잘 겹치는
+    raw detection에서 keypoints/keypoint_confidence를 다시 붙여야 한다.
+    """
+
     matched: list[dict] = []
     used_source_indexes: set[int] = set()
     for tracked in tracked_detections:

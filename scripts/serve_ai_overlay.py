@@ -59,6 +59,14 @@ def initial_summary():
 #RTSP 스트림을 캡처하여 AI 분석(YOLO Pose 및 LSTM)을 수행
 #감지된 객체의 바운딩 박스(bbox), 트래킹 ID 및 상태 메타데이터를 MQTT camera 토픽으로 실시간 발행
 class OverlayPublishState:
+    """MQTT overlay payload에 넣을 track별 최신 행동 신호를 보존한다.
+
+    LSTM sequence는 매 프레임 만들어지지 않는다. 그래서 어떤 프레임에서는 bbox는
+    살아 있지만 faint_probability/event flag가 새로 계산되지 않을 수 있다. 이 상태
+    객체는 같은 track_id가 유지되는 동안 마지막 행동 신호를 bbox에 다시 붙여 frontend
+    overlay가 한두 프레임마다 깜빡이지 않도록 한다.
+    """
+
     def __init__(self):
         self.signals_by_track = {}
         self.last_timestamp_ms = 0
@@ -102,7 +110,11 @@ def _track_id(value):
 
 
 def mjpeg_debug_enabled(args: argparse.Namespace) -> bool:
-    return bool(getattr(args, "mjpeg_debug", False))
+    return bool(getattr(args, "mjpeg_enabled", False) or getattr(args, "mjpeg_debug", False))
+
+
+def mjpeg_overlay_enabled(args: argparse.Namespace) -> bool:
+    return bool(getattr(args, "mjpeg_enable_overlay", True))
 
 
 def log_worker_startup_contract(args: argparse.Namespace) -> None:
@@ -163,6 +175,13 @@ def process_frame(
     track_selector=None,
     pose_reporter=None,
 ):
+    """프레임 처리 중 예외가 나면 stage 정보를 붙여 worker log에 남긴다.
+
+    실제 AI 처리 단계는 `_process_frame_impl()`에 있고, 이 wrapper는 장시간 worker가
+    실패했을 때 YOLO/Tracking/LSTM/Payload 중 어느 구간에서 터졌는지 찾기 위한
+    진입점이다.
+    """
+
     try:
         return _process_frame_impl(
             frame_packet,
@@ -214,6 +233,16 @@ def _process_frame_impl(
     track_selector=None,
     pose_reporter=None,
 ):
+    """RTSP frame 하나를 YOLO Pose -> tracking -> LSTM -> MQTT payload로 처리한다.
+
+    핵심 순서:
+    1. frame metadata를 기록해 frameId/timestampMs를 payload와 diagnostics에 맞춘다.
+    2. ROI mask 적용 후 YOLO Pose raw detections를 얻고, mock 모드면 keypoint를 보강한다.
+    3. ByteTrack/Simple tracker가 detection에 track_id를 붙인다.
+    4. per-track sequence buffer가 충분히 찬 track만 LSTM classifier로 보낸다.
+    5. bbox/keypoint/tracking/LSTM 결과를 overlay payload와 진단 로그로 발행한다.
+    """
+
     stream_id = getattr(args, "camera_login_id", None) or args.camera_id
     frame_metadata = None
     if frame_buffer is not None:
@@ -232,7 +261,8 @@ def _process_frame_impl(
         detections = ensure_mock_keypoints(detections)
     raw_detections = [dict(item) for item in detections]
 
-    # Stage 1: Detection log
+    # Stage 1: detector 품질 확인용 raw detection 로그. ByteTrack 문제로 보기 전에
+    # YOLO가 사람 bbox/keypoint를 안정적으로 잡는지 먼저 확인한다.
     _log_frame_id = frame_metadata.frame_id if frame_metadata is not None else getattr(frame_packet, "frame_idx", 0)
     _log_ts = frame_metadata.captured_at_ms if frame_metadata is not None else None
     log_detection_stage(stream_id, _log_frame_id, _log_ts, detections)
@@ -241,7 +271,8 @@ def _process_frame_impl(
     if tracker is not None:
         detections = update_detections_with_postprocessor(tracker, detections, frame_packet.frame, frame_packet.timestamp)
 
-    # Stage 2: Tracking log
+    # Stage 2: tracking association 로그. raw detection은 있는데 active track이 0이면
+    # detector가 아니라 tracker threshold/association 문제로 분류할 수 있다.
     _tracker_diag = tracker.diagnostics() if tracker is not None else {}
     log_tracking_stage(stream_id, _log_frame_id, _pre_track_detections, detections, _tracker_diag)
     if os.getenv("TRACKING_DEBUG", "false").lower() in {"1", "true", "yes", "on"}:
@@ -560,6 +591,8 @@ def _process_frame_impl(
     update_overlay_runtime(summary)
     if not mjpeg_debug_enabled(args):
         return None
+    if not mjpeg_overlay_enabled(args):
+        return frame_packet.frame
     overlay_frame_id = frame_metadata.frame_id if frame_metadata is not None else frame_packet.frame_idx
     overlay = draw_overlay(frame_packet.frame, boxes, prediction, overlay_frame_id)
     draw_metrics_panel(overlay, summary, args, prediction)
@@ -917,11 +950,15 @@ class OverlayWorker:
             inference_ms = (time.perf_counter() - inference_start) * 1000.0
             every_n = max(0, int(getattr(self.args, "debug_every_n", 30)))
             if every_n > 0 and frame_packet.frame_id % every_n == 0:
+                mjpeg_summary = self.state.status()["summary"]
                 print(
                     f"[ai-worker] {current_cam_id} "
                     f"frame_id={frame_packet.frame_id} "
                     f"inference_ms={inference_ms:.1f} "
-                    f"queue_lag_ms={queue_lag_ms}",
+                    f"queue_lag_ms={queue_lag_ms} "
+                    f"mjpeg_client_count={mjpeg_summary.get('mjpeg_client_count', 0)} "
+                    f"mjpeg_queue_drop_count={self.queue.dropped_frame_count} "
+                    f"mjpeg_encode_latency_ms={float(mjpeg_summary.get('mjpeg_encode_latency_ms', 0.0)):.1f}",
                     flush=True
                 )
 
@@ -950,12 +987,27 @@ def main():
                         help="DB cameras.camera_login_id 와 일치하는 식별자. 미지정 시 --camera-id 값 사용")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8010)
-    parser.add_argument("--mjpeg-fps", type=float, default=8.0)
+    parser.add_argument("--mjpeg-fps", type=float, default=float(os.getenv("MJPEG_FPS", "8.0")))
+    parser.add_argument("--mjpeg-width", type=int, default=int(os.getenv("MJPEG_WIDTH", "640")))
+    parser.add_argument("--mjpeg-height", type=int, default=int(os.getenv("MJPEG_HEIGHT", "360")))
+    parser.add_argument("--mjpeg-jpeg-quality", type=int, default=int(os.getenv("MJPEG_JPEG_QUALITY", "70")))
+    parser.add_argument("--mjpeg-base-path", default=os.getenv("MJPEG_BASE_PATH", "/mjpeg"))
+    parser.add_argument(
+        "--mjpeg-enable-overlay",
+        action=argparse.BooleanOptionalAction,
+        default=os.getenv("MJPEG_ENABLE_OVERLAY", "false").lower() in {"1", "true", "yes", "on"},
+    )
     parser.add_argument(
         "--mjpeg-debug",
         action=argparse.BooleanOptionalAction,
         default=os.getenv("AI_MJPEG_DEBUG", "false").lower() in {"1", "true", "yes", "on"},
         help="Expose annotated MJPEG only for local debugging.",
+    )
+    parser.add_argument(
+        "--mjpeg-enabled",
+        action=argparse.BooleanOptionalAction,
+        default=os.getenv("MJPEG_ENABLED", "false").lower() in {"1", "true", "yes", "on"},
+        help="Expose bounded MJPEG stream for demo/browser viewing.",
     )
     parser.add_argument("--detector-mode", choices=["real", "mock"], default="mock")
     parser.add_argument("--yolo-model", default="yolo26n-pose.pt")
@@ -1117,6 +1169,20 @@ def main():
         f"status_topic={status_topic} publisher={publisher_mode}",
         flush=True,
     )
+    print(
+        "[mjpeg-config] "
+        f"enabled={mjpeg_debug_enabled(args)} "
+        f"host={args.host} "
+        f"port={args.port} "
+        f"base_path={args.mjpeg_base_path} "
+        f"stream_path={args.mjpeg_base_path.rstrip('/')}/{args.camera_login_id} "
+        f"fps={args.mjpeg_fps:g} "
+        f"width={args.mjpeg_width} "
+        f"height={args.mjpeg_height} "
+        f"jpeg_quality={args.mjpeg_jpeg_quality} "
+        f"enable_overlay={args.mjpeg_enable_overlay}",
+        flush=True,
+    )
 
     state = OverlayState()
     worker = OverlayWorker(args, state)
@@ -1136,8 +1202,21 @@ def main():
         worker.start()
         print(f"[ai-overlay] input={redact_url(args.rtsp_url)} detector={args.detector_mode}", flush=True)
         if mjpeg_debug_enabled(args):
-            server = create_overlay_server(args.host, args.port, state, args.camera_id, args.mjpeg_fps)
-            print(f"[ai-overlay] debug MJPEG serving http://{args.host}:{args.port}/stream", flush=True)
+            server = create_overlay_server(
+                args.host,
+                args.port,
+                state,
+                args.camera_login_id,
+                args.mjpeg_fps,
+                base_path=args.mjpeg_base_path,
+                jpeg_quality=args.mjpeg_jpeg_quality,
+                width=args.mjpeg_width,
+                height=args.mjpeg_height,
+            )
+            print(
+                f"[ai-overlay] MJPEG serving http://{args.host}:{args.port}{args.mjpeg_base_path.rstrip('/')}/{args.camera_login_id}",
+                flush=True,
+            )
             server.serve_forever()
         else:
             print("[ai-overlay] metadata-only mode; WebRTC stays on the MediaMTX stream", flush=True)
