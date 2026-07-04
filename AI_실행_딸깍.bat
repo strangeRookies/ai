@@ -53,8 +53,8 @@ echo.
 echo ========================================================
 echo [1/5] 사전 상태 점검
 echo ========================================================
-call :LOG "Checking for busy local ports (8888, 8889, 8189, 18080)..."
-netstat -ano | findstr /R "LISTENING.*:8888 LISTENING.*:8889 LISTENING.*:8189 LISTENING.*:18080" >nul
+call :LOG "Checking for busy local ports (8888, 8889, 8189, 8090-8093, 18080)..."
+netstat -ano | findstr /R "LISTENING.*:8888 LISTENING.*:8889 LISTENING.*:8189 LISTENING.*:8090 LISTENING.*:8091 LISTENING.*:8092 LISTENING.*:8093 LISTENING.*:18080" >nul
 if errorlevel 1 goto PORTS_FREE
 
 call :LOG "[WARNING] Stale tunnel ports are already listening on your local machine."
@@ -124,11 +124,12 @@ echo ========================================================
 echo [3/5] SSH 터널 창 실행
 echo ========================================================
 call :LOG "Cleaning up stale remote ports and starting SSH tunnel in a new window..."
-ssh %GPU_USER%@%GPU_HOST% "pkill -f '^sshd: %GPU_USER%$' 2>/dev/null || true; lsof -t -i:18080 | xargs kill -9 2>/dev/null || true"
+ssh %GPU_USER%@%GPU_HOST% "fuser -k 18080/tcp 2>/dev/null || true; lsof -ti tcp:18080 2>/dev/null | xargs -r kill -9 2>/dev/null || true; ss -lntp 'sport = :18080' 2>/dev/null || true"
 
 call :LOG "TRACE: BEFORE START SSH WINDOW"
-if "%RUN_MODE%"=="tunnel_only" start "AI STABLE SSH Tunnel - keep open" ssh -o ExitOnForwardFailure=yes -t -L 8888:127.0.0.1:8888 -L 8889:127.0.0.1:8889 -L 8189:127.0.0.1:8189 -L 8090:127.0.0.1:8090 -L 8091:127.0.0.1:8091 -L 8092:127.0.0.1:8092 -L 8093:127.0.0.1:8093 %GPU_USER%@%GPU_HOST% "echo ==============================================; echo [SSH TUNNEL ACTIVE] Tunnel established successfully.; echo Keep this window open to maintain streams.; echo ==============================================; tail -f /dev/null"
-if not "%RUN_MODE%"=="tunnel_only" start "AI STABLE SSH Tunnel - keep open" ssh -o ExitOnForwardFailure=yes -t -L 8888:127.0.0.1:8888 -L 8889:127.0.0.1:8889 -L 8189:127.0.0.1:8189 -L 8090:127.0.0.1:8090 -L 8091:127.0.0.1:8091 -L 8092:127.0.0.1:8092 -L 8093:127.0.0.1:8093 -R 18080:127.0.0.1:8080 %GPU_USER%@%GPU_HOST% "echo ==============================================; echo [SSH TUNNEL ACTIVE] Tunnel established successfully.; echo Keep this window open to maintain/share streams.; echo ==============================================; tail -f /dev/null"
+set "TUNNEL_FORWARDS=-L 8888:127.0.0.1:8888 -L 8889:127.0.0.1:8889 -L 8189:127.0.0.1:8189 -L 8090:127.0.0.1:8090 -L 8091:127.0.0.1:8091 -L 8092:127.0.0.1:8092 -L 8093:127.0.0.1:8093"
+if "%RUN_MODE%"=="tunnel_only" start "AI STABLE SSH Tunnel - keep open" cmd /k ssh -o ExitOnForwardFailure=yes -t %TUNNEL_FORWARDS% %GPU_USER%@%GPU_HOST% "echo ==============================================; echo [SSH TUNNEL ACTIVE] Tunnel established successfully.; echo Keep this window open to maintain streams.; echo ==============================================; tail -f /dev/null"
+if not "%RUN_MODE%"=="tunnel_only" start "AI STABLE SSH Tunnel - keep open" cmd /k ssh -o ExitOnForwardFailure=yes -t %TUNNEL_FORWARDS% -R 18080:127.0.0.1:8080 %GPU_USER%@%GPU_HOST% "echo ==============================================; echo [SSH TUNNEL ACTIVE] Tunnel established successfully.; echo Keep this window open to maintain/share streams.; echo ==============================================; tail -f /dev/null"
 
 if errorlevel 1 (
   call :LOG "[ERROR] Failed to launch SSH tunnel window."
