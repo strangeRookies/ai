@@ -31,7 +31,7 @@ Example with explicit runtime settings:
 
 ```bash
 python scripts/run_registered_cameras.py \
-  --backend-base-url http://localhost:8080 \
+  --backend-base-url http://localhost:18080 \
   --rtsp-base-url rtsp://localhost:8554 \
   --mqtt-host localhost \
   --mqtt-topic safety/events \
@@ -62,7 +62,7 @@ PowerShell dry-run example:
 
 ```powershell
 docker run --rm `
-  -e BACKEND_BASE_URL=http://host.docker.internal:8080 `
+  -e BACKEND_BASE_URL=http://host.docker.internal:18080 `
   -e MEDIAMTX_RTSP_BASE_URL=rtsp://host.docker.internal:8554 `
   -e MQTT_HOST=host.docker.internal `
   -e YOLO_MODEL_PATH=/models/yolo26n-pose.pt `
@@ -82,13 +82,27 @@ cp .env.example .env
 docker compose -f docker-compose.ai.yml up --build
 ```
 
-The default compose values use `host.docker.internal` so the container can reach backend, MQTT, and MediaMTX services running on the host. If all services run in one compose network, use service names instead, for example:
+The default compose values use `host.docker.internal` so the container can reach backend, MQTT, and MediaMTX services running on the host. The host backend API port is `18080`, so an AI container that calls a host backend should use `http://host.docker.internal:18080`.
+
+If all services run in one compose network, use the backend service name and the backend container's internal port instead of the host-mapped port. For example, when the backend service is named `strange-back` and listens on container port `8080`:
 
 ```dotenv
 BACKEND_BASE_URL=http://strange-back:8080
 MQTT_HOST=mqtt
 MEDIAMTX_RTSP_BASE_URL=rtsp://mediamtx:8554
 ```
+
+Do not use `http://localhost:18080` from inside the AI container unless the backend also runs inside that same container. In Docker, `localhost` is the AI container itself.
+
+## Port Roles
+
+| Port | Role |
+| --- | --- |
+| `18080` | Backend API host port, including `GET /api/cameras/active` |
+| `8554` | MediaMTX RTSP |
+| `8888` | MediaMTX HLS |
+| `8889` | MediaMTX WebRTC/WHEP |
+| `1883` | MQTT broker |
 
 ## GPU
 
@@ -111,7 +125,7 @@ docker run --rm --gpus all \
 
 | Name | Default | Purpose |
 | --- | --- | --- |
-| `BACKEND_BASE_URL` | `http://host.docker.internal:8080` | Backend API base URL for `/api/cameras/active` |
+| `BACKEND_BASE_URL` | host Python: `http://localhost:18080`; Docker compose: `http://host.docker.internal:18080` | Backend API base URL for `/api/cameras/active` |
 | `BACKEND_TOKEN` | empty | Optional backend bearer token |
 | `BACKEND_TIMEOUT_SECONDS` | `10` | Backend request timeout |
 | `MQTT_HOST` | `host.docker.internal` | MQTT broker host |
@@ -145,8 +159,21 @@ Model files, sample videos, logs, generated runs, datasets, and raw data are exc
 Backend:
 
 ```bash
-curl http://localhost:8080/api/cameras/active
+curl -v http://localhost:18080/api/cameras/active
 ```
+
+From inside the AI container when the backend runs on the host:
+
+```bash
+python - <<'PY'
+import urllib.request
+url = "http://host.docker.internal:18080/api/cameras/active"
+print("checking", url)
+print(urllib.request.urlopen(url, timeout=5).read().decode()[:1000])
+PY
+```
+
+From inside the AI container when backend and AI share a compose network, replace the URL with the backend service name and container-internal port, for example `http://strange-back:8080/api/cameras/active`.
 
 MQTT:
 
@@ -179,4 +206,4 @@ CUDA unavailable: Confirm `--gpus all` or compose `gpus: all` is enabled and NVI
 
 OpenCV `libGL` error: The Dockerfile installs `libgl1`, `libglib2.0-0`, `libsm6`, `libxext6`, and `libxrender1`. For local Python, install equivalent OS packages or use a headless OpenCV environment.
 
-Backend API connection failed: Inside a container, `localhost` points to the container itself. Use `http://host.docker.internal:8080` for a host backend, or `http://<service-name>:8080` for another compose service.
+Backend API connection failed: Inside a container, `localhost` points to the container itself. Use `http://host.docker.internal:18080` for a host backend, or `http://<service-name>:8080` for another compose service when that service listens on internal port `8080`.

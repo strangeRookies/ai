@@ -17,7 +17,7 @@ from ai.simulated_rtsp_sources import (
     stable_video_index,
     video_for_camera as _video_for_camera,
 )
-from ai.registered_cameras import RegisteredCamera
+from ai.registered_cameras import DEFAULT_BACKEND_BASE_URL, RegisteredCamera
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -28,7 +28,7 @@ def parse_arguments() -> argparse.Namespace:
         description="Auto-scan a folder of videos and publish them as simulated RTSP streams based on active cameras."
     )
     parser.add_argument("--video-dir", required=True, help="Directory containing video files (mp4, avi, mov, mkv).")
-    parser.add_argument("--backend-url", default="http://localhost:8080", help="Backend base URL.")
+    parser.add_argument("--backend-url", default=DEFAULT_BACKEND_BASE_URL, help="Backend base URL.")
     parser.add_argument("--rtsp-host", default="127.0.0.1", help="RTSP server publish host.")
     parser.add_argument("--rtsp-port", type=int, default=8554, help="RTSP server publish port.")
     parser.add_argument("--poll-interval", type=int, default=30, help="Interval in seconds to poll the backend.")

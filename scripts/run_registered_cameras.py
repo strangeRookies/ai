@@ -11,11 +11,13 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from ai.registered_cameras import (
+    ACTIVE_CAMERAS_ENDPOINT,
     DEFAULT_BACKEND_BASE_URL,
     DEFAULT_RTSP_BASE_URL,
     DEFAULT_VIDEO_POOL,
     RegisteredCamera,
     RunnerConfig,
+    active_cameras_url,
     load_active_cameras,
 )
 from ai.simulated_rtsp_sources import DEFAULT_STREAM_DOMAIN
@@ -55,6 +57,17 @@ def split_csv(value: str | None) -> tuple[str, ...]:
 
 def run_cameras(cameras: list[RegisteredCamera], config: RunnerConfig) -> None:
     run_camera_sync_loop(cameras, config)
+
+
+def log_camera_api_config(config: RunnerConfig) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "base_url": config.backend_base_url,
+        "endpoint": ACTIVE_CAMERAS_ENDPOINT,
+        "url": active_cameras_url(config.backend_base_url),
+        "timeout_seconds": config.backend_timeout_seconds,
+    }
+    print(f"[camera-api-config] {json.dumps(payload, ensure_ascii=False)}", flush=True)
+    return payload
 
 
 def warn_if_multiple_registered_camera_runners(current_pid: int | None = None) -> dict | None:
@@ -266,6 +279,7 @@ def main(argv: list[str] | None = None) -> None:
         flush=True,
     )
     log_lstm_config("[lstm-config]", config.sequence_length, config.sequence_stride, DEFAULT_KEYPOINT_INPUT_SIZE, "config/cli")
+    log_camera_api_config(config)
     cameras = []
     while True:
         try:
