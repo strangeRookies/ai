@@ -272,7 +272,7 @@ def start_camera_worker(camera: RegisteredCamera, config: RunnerConfig, port: in
             env=overlay_env,
         )
     )
-    if config.mjpeg_debug:
+    if config.mjpeg_debug or config.mjpeg_enabled:
         report_overlay_status(camera, rtsp_url, port, config, "RUNNING", getattr(processes[-1], "pid", None))
     elif config.overlay_report_enabled:
         print(
