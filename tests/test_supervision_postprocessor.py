@@ -52,6 +52,26 @@ class SupervisionPostProcessorTest(unittest.TestCase):
         )
         self.assertEqual(ignored, {})
 
+    def test_bytetrack_constructor_kwargs_handles_deprecation_proxy_signature(self):
+        kwargs, ignored = build_bytetrack_constructor_kwargs(
+            ByteTrackProxySignature,
+            track_thresh=0.11,
+            track_buffer=44,
+            match_thresh=0.22,
+            frame_rate=25,
+        )
+
+        self.assertEqual(
+            kwargs,
+            {
+                "track_activation_threshold": 0.11,
+                "lost_track_buffer": 44,
+                "minimum_matching_threshold": 0.22,
+                "frame_rate": 25,
+            },
+        )
+        self.assertEqual(ignored, {})
+
     def test_bytetrack_adapter_records_ignored_unsupported_config(self):
         adapter = SupervisionByteTrackAdapter(
             track_thresh=0.11,
@@ -338,6 +358,15 @@ class ByteTrackLegacyNames:
 class ByteTrackOnlyFrameRate:
     def __init__(self, frame_rate=30):
         self.frame_rate = frame_rate
+
+    def update_with_detections(self, detections):
+        return FakeDetections(detections.xyxy, detections.confidence, detections.class_id, tracker_id=[])
+
+
+class ByteTrackProxySignature:
+    def __init__(self, *args, **kwargs):
+        del args
+        self.kwargs = kwargs
 
     def update_with_detections(self, detections):
         return FakeDetections(detections.xyxy, detections.confidence, detections.class_id, tracker_id=[])

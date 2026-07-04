@@ -2,11 +2,20 @@ from __future__ import annotations
 
 import inspect
 from dataclasses import dataclass
+from typing import Final
 from typing import Protocol
 
 import numpy as np
 
 from tracking.simple_tracker import SimpleTrackAssigner
+
+
+BYTETRACK_MODERN_PARAMETERS: Final = {
+    "track_activation_threshold",
+    "lost_track_buffer",
+    "minimum_matching_threshold",
+    "frame_rate",
+}
 
 
 class ByteTrackAdapter(Protocol):
@@ -254,11 +263,18 @@ def _constructor_parameters(byte_track_cls) -> set[str]:
             signature = inspect.signature(inspected_cls.__init__)
         except (AttributeError, TypeError, ValueError):
             return set()
+    if _signature_is_kwargs_proxy(signature):
+        return set(BYTETRACK_MODERN_PARAMETERS)
     return {
         name
         for name, parameter in signature.parameters.items()
         if name != "self" and parameter.kind in {parameter.POSITIONAL_OR_KEYWORD, parameter.KEYWORD_ONLY}
     }
+
+
+def _signature_is_kwargs_proxy(signature: inspect.Signature) -> bool:
+    kinds = {parameter.kind for parameter in signature.parameters.values()}
+    return inspect.Parameter.VAR_POSITIONAL in kinds and inspect.Parameter.VAR_KEYWORD in kinds
 
 
 def _bbox_iou(first: list[float], second: list[float]) -> float:
