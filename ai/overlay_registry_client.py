@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+from http.client import HTTPException
 from urllib.error import URLError
 from urllib.parse import urlparse, urlunparse
 from urllib.request import Request, urlopen
@@ -52,7 +53,7 @@ def report_overlay_status(
             file=sys.stderr,
             flush=True,
         )
-    except URLError as exc:
+    except (HTTPException, OSError, URLError) as exc:
         print(
             f"[registered-cameras][warning] overlay registry report failed camera={camera.camera_login_id}: {exc}",
             file=sys.stderr,
