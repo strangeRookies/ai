@@ -34,6 +34,15 @@ fi
 
 echo "[start_ai_stable] Using ACTION_MODEL=$ACTION_MODEL"
 
+WEBRTC_SYNC_ARGS=()
+if [ "${AI_WEBRTC_SYNC_ENABLED:-false}" = "true" ] || [ "${AI_WEBRTC_SYNC_ENABLED:-false}" = "1" ]; then
+    WEBRTC_SYNC_ARGS=(
+        --webrtc-sync-enabled
+        --webrtc-sync-host "${AI_WEBRTC_SYNC_HOST:-0.0.0.0}"
+        --webrtc-sync-base-port "${AI_WEBRTC_SYNC_BASE_PORT:-8090}"
+    )
+fi
+
 echo "[start_ai_stable] Starting start_simulated_rtsp_from_folder.py..."
 nohup python scripts/start_simulated_rtsp_from_folder.py \
     --video-dir /home/$USER/yolo_training/ai_fall_experiments/data/raw \
@@ -59,9 +68,7 @@ nohup python scripts/run_registered_cameras.py \
     --mqtt-host "$MQTT_HOST" \
     --mqtt-port "$MQTT_PORT" \
     --mqtt-topic safety/events \
-    --webrtc-sync-enabled \
-    --webrtc-sync-host 0.0.0.0 \
-    --webrtc-sync-base-port 8090 \
+    "${WEBRTC_SYNC_ARGS[@]}" \
     --skip-simulated-ffmpeg \
     --domain outside > ai_runner.log 2>&1 </dev/null &
 

@@ -1159,8 +1159,13 @@ def main():
             )
             webrtc_sync_server.start()
         except Exception as exc:
-            print(f"[ai-webrtc-sync][error] failed to start: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
-            sys.exit(1)
+            print(
+                f"[ai-webrtc-sync][error] failed to start; continuing with MQTT/STOMP overlay only: "
+                f"{type(exc).__name__}: {exc}",
+                file=sys.stderr,
+                flush=True,
+            )
+            webrtc_sync_server = None
     worker = OverlayWorker(args, state, sync_sink=webrtc_sync_server)
     server = None
 
