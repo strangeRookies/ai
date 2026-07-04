@@ -14,6 +14,7 @@ from ai.action.faint_post_processing import (
     faint_probability,
 )
 from ai.postprocess.supervision_postprocessor import SupervisionPostProcessor
+from ai.inference.pose_diagnostics import PoseDiagnosticsReporter, config_from_args as pose_diagnostics_config_from_args
 from ai.publishers.mqtt_payloads import build_confirmed_event_payload, frame_size_from_shape
 from detector.mock_detector import MockDetector
 from detector.yolo_pose_detector import YoloPoseDetector
@@ -299,6 +300,46 @@ def update_tracking_summary(summary, tracker_diagnostics):
     summary["lost_tracks"] += int(tracker_diagnostics.get("lost_tracks", 0))
     summary["id_switch_like_events"] += int(tracker_diagnostics.get("id_switch_like_events", 0))
     summary["track_diagnostics"] = tracker_diagnostics.get("tracks", {})
+
+
+def create_pose_diagnostics_reporter(args) -> PoseDiagnosticsReporter:
+    return PoseDiagnosticsReporter(pose_diagnostics_config_from_args(args))
+
+
+def build_pose_tracking_config_dump(args, tracker_diagnostics: dict | None = None) -> dict:
+    bytetrack_constructor = (tracker_diagnostics or {}).get("bytetrack_constructor", {})
+    return {
+        "stage": "pose_tracking_config",
+        "TRACK_THRESH": float(getattr(args, "track_thresh", 0.10)),
+        "TRACK_IOU_THRESHOLD": float(getattr(args, "match_thresh", 0.20)),
+        "TRACK_BUFFER": int(getattr(args, "track_buffer", 90)),
+        "TRACK_FRAME_RATE": int(getattr(args, "frame_rate", 30)),
+        "TRACKING_GRACE_PERIOD_SECONDS": float(getattr(args, "tracking_grace_period_seconds", 4.0)),
+        "TRACKING_RELINK_IOU_THRESHOLD": float(getattr(args, "tracking_relink_iou_threshold", 0.30)),
+        "TRACKING_RELINK_CENTER_RATIO": float(getattr(args, "tracking_relink_center_ratio", 0.70)),
+        "TRACKING_RELINK_MAX_TIME_GAP_SECONDS": float(
+            getattr(args, "tracking_relink_max_time_gap_seconds", 2.0)
+        ),
+        "POSE_MIN_KEYPOINT_CONFIDENCE": float(getattr(args, "pose_min_keypoint_confidence", 0.25)),
+        "POSE_DEBUG_SUMMARY_EVERY_N": int(getattr(args, "pose_debug_summary_every_n", 60)),
+        "POSE_DEBUG_SAVE_IMAGES": bool(getattr(args, "pose_debug_save_images", False)),
+        "POSE_TRACKING_DIAG_JSONL": bool(getattr(args, "pose_tracking_diag_jsonl", False)),
+        "POSE_TRACKING_DIAG_JSONL_PATH": str(
+            getattr(args, "pose_tracking_diag_jsonl_path", "runs/diagnostics/pose_tracking_diag.jsonl")
+        ),
+        "bytetrack_constructor_used": dict(bytetrack_constructor.get("used") or {}),
+        "bytetrack_constructor_ignored": dict(bytetrack_constructor.get("ignored") or {}),
+        "bytetrack_constructor_supported_parameters": list(
+            bytetrack_constructor.get("supported_parameters") or []
+        ),
+    }
+
+
+def log_pose_tracking_config(args, detection_postprocessor) -> dict:
+    diagnostics = detection_postprocessor.diagnostics() if hasattr(detection_postprocessor, "diagnostics") else {}
+    record = build_pose_tracking_config_dump(args, diagnostics)
+    print(f"[pose-tracking-config] {json.dumps(record, ensure_ascii=False)}", flush=True)
+    return record
 
 
 # ---------------------------------------------------------------------------

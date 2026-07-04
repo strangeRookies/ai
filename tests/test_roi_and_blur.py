@@ -1,5 +1,4 @@
 import numpy as np
-import pytest
 import cv2
 import tempfile
 from pathlib import Path

@@ -19,7 +19,13 @@ from ai.action.per_track_sequence_buffer import PerTrackCropSequenceBuffers, Per
 from ai.action.lstm_contract import DEFAULT_KEYPOINT_INPUT_SIZE, DEFAULT_LSTM_SEQUENCE_LENGTH, DEFAULT_LSTM_SEQUENCE_STRIDE, log_lstm_config
 from ai.evidence import evidence_id
 from ai.frame_sync import FrameMetadataBuffer, FramePacket, CameraFrameQueue
-from ai.inference.rtsp_runtime import build_inference_event_payload, cheap_filter_config_from_args, create_detection_postprocessor, ensure_mock_keypoints
+from ai.inference.rtsp_runtime import (
+    build_inference_event_payload,
+    cheap_filter_config_from_args,
+    create_detection_postprocessor,
+    ensure_mock_keypoints,
+    log_pose_tracking_config,
+)
 from ai.inference.rtsp_runtime import log_classifier_contract, maybe_log_debug, normalize_detections, update_detections_with_postprocessor, update_prediction_counts, update_tracking_summary
 from ai.inference.rtsp_runtime import (
     log_detection_stage,
@@ -29,6 +35,7 @@ from ai.inference.rtsp_runtime import (
     update_quantitative_summary,
 )
 from ai.inference.tracking_debug import log_sequence_stage
+from ai.inference.pose_diagnostics import PoseDiagnosticsReporter, config_from_args as pose_diagnostics_config_from_args
 from ai.overlay_http import OverlayState, create_overlay_server
 from ai.roi import apply_roi_mask, combine_roi_masks, find_boxes_in_exit_zone
 from ai.streams.video_reader import VideoReader
@@ -154,6 +161,7 @@ def process_frame(
     exit_roi_mask=None,
     exit_post_processor=None,
     track_selector=None,
+    pose_reporter=None,
 ):
     try:
         return _process_frame_impl(
@@ -175,6 +183,7 @@ def process_frame(
             exit_roi_mask=exit_roi_mask,
             exit_post_processor=exit_post_processor,
             track_selector=track_selector,
+            pose_reporter=pose_reporter,
         )
     except Exception as exc:
         stage = getattr(exc, "stage", "yolo_inference")
@@ -203,6 +212,7 @@ def _process_frame_impl(
     exit_roi_mask=None,
     exit_post_processor=None,
     track_selector=None,
+    pose_reporter=None,
 ):
     stream_id = getattr(args, "camera_login_id", None) or args.camera_id
     frame_metadata = None
@@ -220,6 +230,7 @@ def _process_frame_impl(
     detections = detector.detect(inference_frame)
     if args.detector_mode == "mock":
         detections = ensure_mock_keypoints(detections)
+    raw_detections = [dict(item) for item in detections]
 
     # Stage 1: Detection log
     _log_frame_id = frame_metadata.frame_id if frame_metadata is not None else getattr(frame_packet, "frame_idx", 0)
@@ -392,6 +403,22 @@ def _process_frame_impl(
     summary["per_track_sequences_generated"] = {
         str(track_id): count for track_id, count in sequence_buffer.sequences_generated_by_track.items()
     }
+    if pose_reporter is not None:
+        summary["pose_diagnostics"] = pose_reporter.observe(
+            camera_login_id=stream_id,
+            source_url=str(getattr(args, "rtsp_url", "")),
+            assigned_video_path=str(getattr(args, "assigned_video_path", "") or ""),
+            frame_id=_log_frame_id,
+            timestamp_ms=_log_ts,
+            raw_detections=raw_detections,
+            tracker_diagnostics=_tracker_diag,
+            sequence_ready_count=len(sequences),
+            sequence_diagnostics={
+                "relink_success_count": sequence_buffer.relink_success_count,
+                "relink_fail_count": sequence_buffer.relink_failure_count,
+            },
+            frame=frame_packet.frame,
+        )
     log_sequence_stage(
         stream_id,
         _log_frame_id,
@@ -741,7 +768,9 @@ class OverlayWorker:
             cooldown_seconds=self.args.camera_cooldown_seconds,
         )
         tracker, postprocessing_mode = create_detection_postprocessor(self.args)
+        log_pose_tracking_config(self.args, tracker)
         cheap_filter_config = cheap_filter_config_from_args(self.args)
+        pose_reporter = PoseDiagnosticsReporter(pose_diagnostics_config_from_args(self.args))
         print(f"[ai-overlay-inference] tracking postprocessor: {postprocessing_mode}", flush=True)
         display_id_mapper = DisplayIdMapper()
         overlay_publish_state = OverlayPublishState()
@@ -780,6 +809,10 @@ class OverlayWorker:
                     self.args.sequence_stride,
                     max_track_age_seconds=self.args.track_max_missing_seconds,
                     cheap_filter_config=cheap_filter_config,
+                    missing_track_grace_seconds=getattr(self.args, "tracking_grace_period_seconds", self.args.track_max_missing_seconds),
+                    relink_iou_threshold=getattr(self.args, "tracking_relink_iou_threshold", 0.30),
+                    relink_center_distance_ratio=getattr(self.args, "tracking_relink_center_ratio", 0.70),
+                    relink_max_time_gap_seconds=getattr(self.args, "tracking_relink_max_time_gap_seconds", 2.0),
                 )
 
         last_heartbeat_time = time.monotonic()
@@ -838,6 +871,7 @@ class OverlayWorker:
                 exit_roi_mask=cached_exit_mask,
                 exit_post_processor=exit_post_processor,
                 track_selector=track_selector,
+                pose_reporter=pose_reporter,
             )
 
             now_ms = time.time_ns() // 1_000_000
@@ -902,6 +936,7 @@ class OverlayWorker:
             if self.args.max_frames > 0 and summary["frames_processed"] >= self.args.max_frames:
                 break
 
+        pose_reporter.log_final_summary()
         close = getattr(publisher, "close", None) if publisher is not None else None
         if close:
             close()
@@ -947,10 +982,23 @@ def main():
     parser.add_argument("--track-thresh", type=float, default=0.10)
     parser.add_argument("--match-thresh", "--tracker-iou-threshold", dest="match_thresh", type=float, default=0.20)
     parser.add_argument("--track-buffer", type=int, default=90)
+    parser.add_argument("--frame-rate", type=int, default=int(os.getenv("TRACK_FRAME_RATE", os.getenv("FRAME_RATE", "30"))))
     parser.add_argument("--min-box-area", type=float, default=100.0)
     parser.add_argument("--bbox-smoothing-alpha", type=float, default=0.60)
     parser.add_argument("--track-max-missing-seconds", type=float, default=4.0)
     parser.add_argument("--center-match-ratio", type=float, default=0.70)
+    parser.add_argument("--tracking-grace-period-seconds", type=float, default=float(os.getenv("TRACKING_GRACE_PERIOD_SECONDS", os.getenv("TRACK_MAX_MISSING_SECONDS", "4.0"))))
+    parser.add_argument("--tracking-relink-iou-threshold", type=float, default=float(os.getenv("TRACKING_RELINK_IOU_THRESHOLD", "0.30")))
+    parser.add_argument("--tracking-relink-center-ratio", type=float, default=float(os.getenv("TRACKING_RELINK_CENTER_RATIO", "0.70")))
+    parser.add_argument("--tracking-relink-max-time-gap-seconds", type=float, default=float(os.getenv("TRACKING_RELINK_MAX_TIME_GAP_SECONDS", "2.0")))
+    parser.add_argument("--pose-debug", action=argparse.BooleanOptionalAction, default=os.getenv("POSE_DEBUG", "false").lower() in {"1", "true", "yes", "on"})
+    parser.add_argument("--pose-debug-summary-every-n", type=int, default=int(os.getenv("POSE_DEBUG_SUMMARY_EVERY_N", "60")))
+    parser.add_argument("--pose-min-keypoint-confidence", type=float, default=float(os.getenv("POSE_MIN_KEYPOINT_CONFIDENCE", "0.25")))
+    parser.add_argument("--pose-debug-save-images", action=argparse.BooleanOptionalAction, default=os.getenv("POSE_DEBUG_SAVE_IMAGES", "false").lower() in {"1", "true", "yes", "on"})
+    parser.add_argument("--pose-debug-image-dir", default=os.getenv("POSE_DEBUG_IMAGE_DIR", "runs/pose_debug"))
+    parser.add_argument("--pose-debug-image-every-n", type=int, default=int(os.getenv("POSE_DEBUG_IMAGE_EVERY_N", "300")))
+    parser.add_argument("--pose-tracking-diag-jsonl", action=argparse.BooleanOptionalAction, default=os.getenv("POSE_TRACKING_DIAG_JSONL", "false").lower() in {"1", "true", "yes", "on"})
+    parser.add_argument("--pose-tracking-diag-jsonl-path", default=os.getenv("POSE_TRACKING_DIAG_JSONL_PATH", "runs/diagnostics/pose_tracking_diag.jsonl"))
     parser.add_argument(
         "--tracking-stability-fallback",
         action=argparse.BooleanOptionalAction,
