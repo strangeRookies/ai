@@ -39,6 +39,7 @@ class CameraWorker:
     camera_login_id: str | None = None
     rtsp_url: str | None = None
     command: list[str] | None = None
+    overlay_log_path: Path | None = None
 
 
 
@@ -214,6 +215,7 @@ def start_camera_worker(camera: RegisteredCamera, config: RunnerConfig, port: in
             camera_login_id=camera.camera_login_id,
             rtsp_url=rtsp_url,
             command=overlay_command,
+            overlay_log_path=REPO_ROOT / "runs" / "registered_cameras" / f"{camera.camera_login_id}-overlay.log",
         )
     if ffmpeg_command is not None:
         processes.append(
@@ -227,10 +229,11 @@ def start_camera_worker(camera: RegisteredCamera, config: RunnerConfig, port: in
     overlay_env["RTSP_URL"] = rtsp_url
     if config.mqtt_password:
         overlay_env["MQTT_PASSWORD"] = config.mqtt_password
+    overlay_log_path = REPO_ROOT / "runs" / "registered_cameras" / f"{camera.camera_login_id}-overlay.log"
     processes.append(
         spawn_process(
             overlay_command,
-            REPO_ROOT / "runs" / "registered_cameras" / f"{camera.camera_login_id}-overlay.log",
+            overlay_log_path,
             env=overlay_env,
         )
     )
@@ -249,6 +252,7 @@ def start_camera_worker(camera: RegisteredCamera, config: RunnerConfig, port: in
         camera_login_id=camera.camera_login_id,
         rtsp_url=rtsp_url,
         command=overlay_command,
+        overlay_log_path=overlay_log_path,
     )
 
 
@@ -317,7 +321,7 @@ def run_camera_sync_loop(cameras: list[RegisteredCamera], config: RunnerConfig) 
                 print(
                     f"[registered-cameras][warning] worker exited; stopping camera={camera_login_id} "
                     f"| cameraLoginId={camera_login_id} | streamId={camera_login_id} "
-                    f"| rtsp_url={masked_url} | command={cmd_text}",
+                    f"| rtsp_url={masked_url} | overlay_log={worker.overlay_log_path} | command={cmd_text}",
                     file=sys.stderr,
                     flush=True,
                 )
