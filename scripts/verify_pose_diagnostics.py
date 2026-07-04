@@ -6,29 +6,37 @@ import math
 from pathlib import Path
 
 
-def check_console_log(log_path: Path):
+def check_console_log(log_path: Path, extra_log_globs: list[str] | None = None):
     print("=== [1] Console Log Analysis (ai_runner.log) ===")
-    if not log_path.exists():
+    log_paths = _diagnostic_log_paths(log_path, extra_log_globs or [])
+    if not log_paths:
         print(f"[-] Log file not found at: {log_path}")
-        print("    Please run the pipeline first or specify the correct log path.\n")
+        print("    Please run the pipeline first or specify the correct log path.")
+        print("    Registered camera workers write child logs to runs/registered_cameras/*-overlay.log.\n")
         return False
 
     has_config = False
     config_record = None
     has_diagnostics_lines = 0
+    sources_with_matches: set[Path] = set()
 
-    with log_path.open("r", encoding="utf-8", errors="ignore") as f:
-        for line in f:
-            if "[pose-tracking-config]" in line:
-                has_config = True
-                try:
-                    # Extract JSON block
-                    json_str = line.split("[pose-tracking-config]", 1)[1].strip()
-                    config_record = json.loads(json_str)
-                except Exception:
-                    pass
-            if "[pose-diagnostics]" in line:
-                has_diagnostics_lines += 1
+    print("[+] Scanning console/worker logs:")
+    for path in log_paths:
+        print(f"    - {path}")
+        with path.open("r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                if "[pose-tracking-config]" in line:
+                    has_config = True
+                    sources_with_matches.add(path)
+                    try:
+                        # Extract JSON block
+                        json_str = line.split("[pose-tracking-config]", 1)[1].strip()
+                        config_record = json.loads(json_str)
+                    except Exception:
+                        pass
+                if "[pose-diagnostics]" in line:
+                    has_diagnostics_lines += 1
+                    sources_with_matches.add(path)
 
     # Check 1: [pose-tracking-config] printed at startup
     if has_config:
@@ -52,9 +60,31 @@ def check_console_log(log_path: Path):
         print(f"[+] SUCCESS: Found {has_diagnostics_lines} '[pose-diagnostics]' log lines in console output.")
     else:
         print("[-] FAILED: No '[pose-diagnostics]' log lines found. (Did you set POSE_DEBUG=true or TRACKING_DEBUG=true?)")
+    if sources_with_matches:
+        print("[+] Matched diagnostics in:")
+        for path in sorted(sources_with_matches):
+            print(f"    - {path}")
 
     print()
     return True
+
+
+def _diagnostic_log_paths(log_path: Path, extra_log_globs: list[str]) -> list[Path]:
+    candidates: list[Path] = []
+    if log_path.exists():
+        candidates.append(log_path)
+    default_glob = str(log_path.parent / "runs" / "registered_cameras" / "*-overlay.log")
+    for pattern in [default_glob, *extra_log_globs]:
+        candidates.extend(sorted(Path().glob(pattern) if not Path(pattern).is_absolute() else Path(pattern).parent.glob(Path(pattern).name)))
+    unique: list[Path] = []
+    seen: set[Path] = set()
+    for path in candidates:
+        resolved = path.resolve()
+        if resolved in seen or not path.exists():
+            continue
+        seen.add(resolved)
+        unique.append(path)
+    return unique
 
 
 def check_jsonl_log(jsonl_path: Path):
@@ -238,13 +268,19 @@ def main():
     parser = argparse.ArgumentParser(description="Verify YOLO Pose/Tracking diagnostics checklist and compare cam_04 vs cam_05.")
     parser.add_argument("--log-path", type=Path, default=Path("ai_runner.log"), help="Path to console stdout log (ai_runner.log)")
     parser.add_argument("--jsonl-path", type=Path, default=Path("runs/diagnostics/pose_tracking_diag.jsonl"), help="Path to JSONL file")
+    parser.add_argument(
+        "--extra-log-glob",
+        action="append",
+        default=[],
+        help="Additional worker log glob to scan. Default also scans runs/registered_cameras/*-overlay.log.",
+    )
     args = parser.parse_args()
 
     print("====================================================")
     print("Pose and Tracking Diagnostics Checker for GPU PC")
     print("====================================================\n")
 
-    check_console_log(args.log_path)
+    check_console_log(args.log_path, extra_log_globs=args.extra_log_glob)
     records = check_jsonl_log(args.jsonl_path)
     if records:
         compare_cameras(records)
