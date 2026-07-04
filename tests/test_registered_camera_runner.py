@@ -1,11 +1,14 @@
 import tempfile
 import unittest
+import urllib.error
 from dataclasses import replace
+from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 from argparse import Namespace
 
 from ai.registered_cameras import (
+    DEFAULT_BACKEND_BASE_URL,
     RegisteredCamera,
     RunnerConfig,
     build_overlay_command,
@@ -15,10 +18,24 @@ from ai.registered_cameras import (
     parse_camera,
 )
 from ai.registered_camera_workers import CameraWorker, next_overlay_port, publish_unavailable_camera_status, sync_camera_workers
-from scripts.run_registered_cameras import warn_if_multiple_registered_camera_runners
+from scripts.run_registered_cameras import log_camera_api_config, warn_if_multiple_registered_camera_runners
 
 
 class RegisteredCameraRunnerTest(unittest.TestCase):
+    def test_default_backend_base_url_uses_host_18080(self):
+        self.assertEqual(DEFAULT_BACKEND_BASE_URL, "http://localhost:18080")
+
+    def test_camera_api_config_log_includes_effective_endpoint(self):
+        config = replace(fake_config(Path("video_pool")), backend_base_url="http://localhost:18080")
+
+        with patch("sys.stdout", new_callable=StringIO) as stdout:
+            logged = log_camera_api_config(config)
+
+        self.assertEqual(logged["base_url"], "http://localhost:18080")
+        self.assertEqual(logged["endpoint"], "/api/cameras/active")
+        self.assertEqual(logged["url"], "http://localhost:18080/api/cameras/active")
+        self.assertIn("[camera-api-config]", stdout.getvalue())
+
     def test_parse_camera_uses_camera_login_id_as_external_key(self):
         camera = parse_camera(
             {
@@ -228,6 +245,30 @@ class RegisteredCameraRunnerTest(unittest.TestCase):
         self.assertEqual(cameras[0].camera_login_id, "cam_02")
         self.assertEqual(cameras[0].rtsp_url, "rtsp://cctv/cam_02")
 
+    def test_load_active_cameras_reports_http_status_url_timeout_and_body(self):
+        error = urllib.error.HTTPError(
+            "http://localhost:18080/api/cameras/active",
+            503,
+            "Service Unavailable",
+            {},
+            FakeHttpResponse(b'{"error":"backend booting","detail":"db unavailable"}'),
+        )
+
+        with patch("urllib.request.urlopen", side_effect=error):
+            with self.assertRaisesRegex(RuntimeError, "HTTP 503"):
+                load_active_cameras("http://localhost:18080", None, timeout_seconds=3.0)
+
+        with patch("urllib.request.urlopen", side_effect=error):
+            try:
+                load_active_cameras("http://localhost:18080", None, timeout_seconds=3.0)
+            except RuntimeError as exc:
+                message = str(exc)
+            else:
+                self.fail("expected RuntimeError")
+        self.assertIn("http://localhost:18080/api/cameras/active", message)
+        self.assertIn("timeout=3", message)
+        self.assertIn("backend booting", message)
+
     def test_publish_unavailable_camera_status_uses_camera_login_id(self):
         camera = RegisteredCamera(
             camera_id="10",
@@ -377,6 +418,9 @@ class FakeHttpResponse:
 
     def read(self):
         return self._body
+
+    def close(self):
+        return None
 
 
 class FakePublisher:

@@ -1,11 +1,21 @@
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass
+from typing import Final
 from typing import Protocol
 
 import numpy as np
 
 from tracking.simple_tracker import SimpleTrackAssigner
+
+
+BYTETRACK_MODERN_PARAMETERS: Final = {
+    "track_activation_threshold",
+    "lost_track_buffer",
+    "minimum_matching_threshold",
+    "frame_rate",
+}
 
 
 class ByteTrackAdapter(Protocol):
@@ -67,22 +77,32 @@ class SupervisionByteTrackAdapter:
         stability_fallback: bool = False,
         fallback_max_missing_seconds: float = 4.0,
         fallback_center_match_ratio: float = 0.70,
+        sv_module=None,
     ) -> None:
-        try:
-            import supervision as sv
-        except ImportError as exc:
-            raise RuntimeError(
-                "supervision is required when ENABLE_SUPERVISION_POSTPROCESSING=true",
-            ) from exc
+        if sv_module is None:
+            try:
+                import supervision as sv
+            except ImportError as exc:
+                raise RuntimeError(
+                    "supervision is required when ENABLE_SUPERVISION_POSTPROCESSING=true",
+                ) from exc
+        else:
+            sv = sv_module
 
         self._sv = sv
-        # Initialize ByteTrack using correct argument names for supervision package
-        self._tracker = sv.ByteTrack(
-            track_activation_threshold=track_thresh,
-            lost_track_buffer=track_buffer,
-            minimum_matching_threshold=match_thresh,
-            frame_rate=frame_rate
+        constructor_kwargs, ignored_kwargs = build_bytetrack_constructor_kwargs(
+            sv.ByteTrack,
+            track_thresh=track_thresh,
+            track_buffer=track_buffer,
+            match_thresh=match_thresh,
+            frame_rate=frame_rate,
         )
+        self._bytetrack_constructor = {
+            "used": constructor_kwargs,
+            "ignored": ignored_kwargs,
+            "supported_parameters": sorted(_constructor_parameters(sv.ByteTrack)),
+        }
+        self._tracker = sv.ByteTrack(**constructor_kwargs)
         self._active_track_ids: set[int] = set()
         self._bbox_smoothing_alpha = bbox_smoothing_alpha
         self._previous_bboxes: dict[int, list[float]] = {}
@@ -194,6 +214,7 @@ class SupervisionByteTrackAdapter:
             "id_switch_like_events": 0,
             "tracks": {str(track_id): {"track_id": track_id} for track_id in sorted(self._active_track_ids)},
             "stability_fallback": False,
+            "bytetrack_constructor": self._bytetrack_constructor,
         }
 
     def _to_supervision_detections(self, detections: list[dict]):
@@ -206,6 +227,54 @@ class SupervisionByteTrackAdapter:
 def _bbox_xyxy(detection: dict) -> list[float]:
     bbox = detection.get("bbox") or [0.0, 0.0, 0.0, 0.0]
     return [float(value) for value in bbox[:4]]
+
+
+def build_bytetrack_constructor_kwargs(
+    byte_track_cls,
+    track_thresh: float,
+    track_buffer: int,
+    match_thresh: float,
+    frame_rate: int,
+) -> tuple[dict, dict]:
+    supported = _constructor_parameters(byte_track_cls)
+    candidates = [
+        (("track_activation_threshold", "track_thresh"), "track_thresh", float(track_thresh)),
+        (("lost_track_buffer", "track_buffer"), "track_buffer", int(track_buffer)),
+        (("minimum_matching_threshold", "match_thresh"), "match_thresh", float(match_thresh)),
+        (("frame_rate",), "frame_rate", int(frame_rate)),
+    ]
+    kwargs = {}
+    ignored = {}
+    for names, public_name, value in candidates:
+        matched_name = next((name for name in names if name in supported), None)
+        if matched_name is None:
+            ignored[public_name] = value
+            continue
+        kwargs[matched_name] = value
+    return kwargs, ignored
+
+
+def _constructor_parameters(byte_track_cls) -> set[str]:
+    inspected_cls = getattr(byte_track_cls, "wrapped", byte_track_cls)
+    try:
+        signature = inspect.signature(inspected_cls)
+    except (TypeError, ValueError):
+        try:
+            signature = inspect.signature(inspected_cls.__init__)
+        except (AttributeError, TypeError, ValueError):
+            return set()
+    if _signature_is_kwargs_proxy(signature):
+        return set(BYTETRACK_MODERN_PARAMETERS)
+    return {
+        name
+        for name, parameter in signature.parameters.items()
+        if name != "self" and parameter.kind in {parameter.POSITIONAL_OR_KEYWORD, parameter.KEYWORD_ONLY}
+    }
+
+
+def _signature_is_kwargs_proxy(signature: inspect.Signature) -> bool:
+    kinds = {parameter.kind for parameter in signature.parameters.values()}
+    return inspect.Parameter.VAR_POSITIONAL in kinds and inspect.Parameter.VAR_KEYWORD in kinds
 
 
 def _bbox_iou(first: list[float], second: list[float]) -> float:

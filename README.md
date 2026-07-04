@@ -39,7 +39,7 @@ docker compose -f strange_infra/docker-compose.yml up -d
 cd strange_back
 ./gradlew bootRun
 ```
-- API 서버 포트: `8080` (기본값)
+- API 서버 호스트 포트: `18080` (컨테이너 내부 포트가 `8080`이어도 AI worker는 호스트 실행 시 `http://localhost:18080`을 사용)
 
 ### 3.3. 프론트엔드 구동
 ```bash

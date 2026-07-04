@@ -39,6 +39,7 @@ class CameraWorker:
     camera_login_id: str | None = None
     rtsp_url: str | None = None
     command: list[str] | None = None
+    overlay_log_path: Path | None = None
 
 
 
@@ -90,6 +91,13 @@ def camera_source_signature(camera: RegisteredCamera, config: RunnerConfig) -> s
             "mqtt_host": config.mqtt_host,
             "mqtt_port": config.mqtt_port,
             "mqtt_status_topic": config.mqtt_status_topic,
+            "pose_debug": config.pose_debug,
+            "pose_debug_image_every_n": config.pose_debug_image_every_n,
+            "pose_debug_save_images": config.pose_debug_save_images,
+            "pose_debug_summary_every_n": config.pose_debug_summary_every_n,
+            "pose_min_keypoint_confidence": config.pose_min_keypoint_confidence,
+            "pose_tracking_diag_jsonl": config.pose_tracking_diag_jsonl,
+            "pose_tracking_diag_jsonl_path": config.pose_tracking_diag_jsonl_path,
             "selected_track_id": config.selected_track_id,
             "selected_track_missing_frames": config.selected_track_missing_frames,
             "selected_track_mode": config.selected_track_mode,
@@ -97,7 +105,12 @@ def camera_source_signature(camera: RegisteredCamera, config: RunnerConfig) -> s
             "sequence_stride": config.sequence_stride,
             "track_buffer": config.track_buffer,
             "track_thresh": config.track_thresh,
+            "frame_rate": config.frame_rate,
+            "tracking_grace_period_seconds": config.tracking_grace_period_seconds,
             "tracking_mode": config.tracking_mode,
+            "tracking_relink_center_ratio": config.tracking_relink_center_ratio,
+            "tracking_relink_iou_threshold": config.tracking_relink_iou_threshold,
+            "tracking_relink_max_time_gap_seconds": config.tracking_relink_max_time_gap_seconds,
             "tracking_stability_fallback": tracking_stability_fallback_enabled(camera, config),
             "webrtc_sync_base_port": config.webrtc_sync_base_port,
             "webrtc_sync_enabled": config.webrtc_sync_enabled,
@@ -205,6 +218,7 @@ def start_camera_worker(camera: RegisteredCamera, config: RunnerConfig, port: in
             camera_login_id=camera.camera_login_id,
             rtsp_url=rtsp_url,
             command=overlay_command,
+            overlay_log_path=REPO_ROOT / "runs" / "registered_cameras" / f"{camera.camera_login_id}-overlay.log",
         )
     if ffmpeg_command is not None:
         processes.append(
@@ -220,10 +234,11 @@ def start_camera_worker(camera: RegisteredCamera, config: RunnerConfig, port: in
         overlay_env["MQTT_PASSWORD"] = config.mqtt_password
     if config.webrtc_sync_token:
         overlay_env["AI_WEBRTC_SYNC_TOKEN"] = config.webrtc_sync_token
+    overlay_log_path = REPO_ROOT / "runs" / "registered_cameras" / f"{camera.camera_login_id}-overlay.log"
     processes.append(
         spawn_process(
             overlay_command,
-            REPO_ROOT / "runs" / "registered_cameras" / f"{camera.camera_login_id}-overlay.log",
+            overlay_log_path,
             env=overlay_env,
         )
     )
@@ -242,6 +257,7 @@ def start_camera_worker(camera: RegisteredCamera, config: RunnerConfig, port: in
         camera_login_id=camera.camera_login_id,
         rtsp_url=rtsp_url,
         command=overlay_command,
+        overlay_log_path=overlay_log_path,
     )
 
 
@@ -310,7 +326,7 @@ def run_camera_sync_loop(cameras: list[RegisteredCamera], config: RunnerConfig) 
                 print(
                     f"[registered-cameras][warning] worker exited; stopping camera={camera_login_id} "
                     f"| cameraLoginId={camera_login_id} | streamId={camera_login_id} "
-                    f"| rtsp_url={masked_url} | command={cmd_text}",
+                    f"| rtsp_url={masked_url} | overlay_log={worker.overlay_log_path} | command={cmd_text}",
                     file=sys.stderr,
                     flush=True,
                 )

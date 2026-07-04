@@ -20,7 +20,8 @@ from ai.ffmpeg_command import build_ffmpeg_command
 
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[1]
-DEFAULT_BACKEND_BASE_URL: Final = "http://localhost:8080"
+DEFAULT_BACKEND_BASE_URL: Final = "http://localhost:18080"
+ACTIVE_CAMERAS_ENDPOINT: Final = "/api/cameras/active"
 DEFAULT_RTSP_BASE_URL: Final = "rtsp://localhost:8554"
 DEFAULT_VIDEO_POOL: Final = "video_pool"
 
@@ -120,6 +121,19 @@ class RunnerConfig:
     selected_track_mode: str = "strict"
     selected_track_missing_frames: int = 5
     mqtt_status_topic: str | None = None
+    frame_rate: int = 30
+    tracking_grace_period_seconds: float = 4.0
+    tracking_relink_iou_threshold: float = 0.30
+    tracking_relink_center_ratio: float = 0.70
+    tracking_relink_max_time_gap_seconds: float = 2.0
+    pose_debug: bool = False
+    pose_debug_summary_every_n: int = 60
+    pose_min_keypoint_confidence: float = 0.25
+    pose_debug_save_images: bool = False
+    pose_debug_image_dir: str = "runs/pose_debug"
+    pose_debug_image_every_n: int = 300
+    pose_tracking_diag_jsonl: bool = False
+    pose_tracking_diag_jsonl_path: str = "runs/diagnostics/pose_tracking_diag.jsonl"
 
 
 
@@ -135,6 +149,10 @@ def normalize_camera_login_id(login_id: str) -> str:
 def camera_rtsp_url(rtsp_base_url: str, camera_login_id: str) -> str:
     normalized_id = normalize_camera_login_id(camera_login_id)
     return f"{rtsp_base_url.rstrip('/')}/{normalized_id}"
+
+
+def active_cameras_url(backend_base_url: str) -> str:
+    return f"{backend_base_url.rstrip('/')}{ACTIVE_CAMERAS_ENDPOINT}"
 
 
 def parse_camera(raw: RawCamera) -> RegisteredCamera | None:
@@ -202,7 +220,7 @@ def load_active_cameras(
     backend_token: str | None,
     timeout_seconds: float = 10.0,
 ) -> list[RegisteredCamera]:
-    url = f"{backend_base_url.rstrip('/')}/api/cameras/active"
+    url = active_cameras_url(backend_base_url)
     request = urllib.request.Request(url, headers={"Accept": "application/json"})
     if backend_token:
         request.add_header("Authorization", f"Bearer {backend_token}")
@@ -210,15 +228,33 @@ def load_active_cameras(
     try:
         with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
             body = response.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        body_snippet = ""
+        try:
+            body_snippet = exc.read().decode("utf-8", errors="replace")[:500]
+        except OSError:
+            body_snippet = "<unreadable>"
+        raise RuntimeError(
+            f"failed to fetch active cameras from {url}: HTTP {exc.code} {exc.reason}; "
+            f"timeout={timeout_seconds:g}s; response_body={body_snippet!r}"
+        ) from exc
     except TimeoutError as exc:
         raise RuntimeError(
             f"timed out after {timeout_seconds:g}s while waiting for active cameras from {url}; "
             "check backend logs and database connectivity"
         ) from exc
     except urllib.error.URLError as exc:
-        raise RuntimeError(f"failed to fetch active cameras from {url}: {exc}") from exc
+        raise RuntimeError(
+            f"failed to fetch active cameras from {url}: {exc}; timeout={timeout_seconds:g}s"
+        ) from exc
 
-    payload = json.loads(body)
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"failed to parse active cameras JSON from {url}: {exc}; "
+            f"timeout={timeout_seconds:g}s; response_body={body[:500]!r}"
+        ) from exc
     if isinstance(payload, dict) and isinstance(payload.get("data"), list):
         payload = payload["data"]
     if not isinstance(payload, list):
@@ -323,9 +359,35 @@ def build_overlay_command(
         str(config.match_thresh),
         "--track-buffer",
         str(config.track_buffer),
+        "--frame-rate",
+        str(config.frame_rate),
         "--bbox-smoothing-alpha",
         str(config.bbox_smoothing_alpha),
+        "--tracking-grace-period-seconds",
+        str(config.tracking_grace_period_seconds),
+        "--tracking-relink-iou-threshold",
+        str(config.tracking_relink_iou_threshold),
+        "--tracking-relink-center-ratio",
+        str(config.tracking_relink_center_ratio),
+        "--tracking-relink-max-time-gap-seconds",
+        str(config.tracking_relink_max_time_gap_seconds),
+        "--pose-debug-summary-every-n",
+        str(config.pose_debug_summary_every_n),
+        "--pose-min-keypoint-confidence",
+        str(config.pose_min_keypoint_confidence),
+        "--pose-debug-image-dir",
+        config.pose_debug_image_dir,
+        "--pose-debug-image-every-n",
+        str(config.pose_debug_image_every_n),
+        "--pose-tracking-diag-jsonl-path",
+        config.pose_tracking_diag_jsonl_path,
     ]
+    if config.pose_debug:
+        command.append("--pose-debug")
+    if config.pose_debug_save_images:
+        command.append("--pose-debug-save-images")
+    if config.pose_tracking_diag_jsonl:
+        command.append("--pose-tracking-diag-jsonl")
     if tracking_stability_fallback_enabled(camera, config):
         command.append("--tracking-stability-fallback")
     if config.mjpeg_debug:
