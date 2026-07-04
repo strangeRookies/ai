@@ -10,12 +10,13 @@ from urllib.request import Request, urlopen
 from ai.registered_cameras import RegisteredCamera, RunnerConfig
 
 
-def overlay_stream_url(config: RunnerConfig, port: int) -> str:
+def overlay_stream_url(config: RunnerConfig, port: int, camera_login_id: str) -> str:
     base_url = config.overlay_public_base_url or f"http://localhost:{port}"
     parsed = urlparse(base_url)
     hostname = parsed.hostname or "localhost"
     netloc = f"{hostname}:{port}"
-    return urlunparse((parsed.scheme or "http", netloc, "/stream", "", "", ""))
+    base_path = config.mjpeg_base_path.rstrip("/") or "/mjpeg"
+    return urlunparse((parsed.scheme or "http", netloc, f"{base_path}/{camera_login_id}", "", "", ""))
 
 
 def report_overlay_status(
@@ -32,7 +33,7 @@ def report_overlay_status(
         "cameraLoginId": camera.camera_login_id,
         "rtspUrl": rtsp_url,
         "overlayPort": port,
-        "overlayUrl": overlay_stream_url(config, port),
+        "overlayUrl": overlay_stream_url(config, port, camera.camera_login_id),
         "pid": pid,
         "status": status,
     }

@@ -16,6 +16,13 @@ from ai.inference.pose_diagnostic_summary import PoseStats
 
 @dataclass(frozen=True, slots=True)
 class PoseDiagnosticsConfig:
+    """POSE_DEBUG/TRACKING_DEBUG에서만 상세 진단을 켜기 위한 설정 묶음.
+
+    기본값은 production 로그와 영상 저장량을 늘리지 않도록 모두 보수적으로 둔다.
+    JSONL과 sample image 저장은 분석 시 명시적으로 켜야 하며, 이미지 저장은 개인정보
+    이슈가 있어 `image_output_enabled`가 false면 절대 파일을 만들지 않는다.
+    """
+
     enabled: bool = False
     summary_every_n: int = 60
     min_keypoint_confidence: float = DEFAULT_MIN_KEYPOINT_CONFIDENCE
@@ -54,6 +61,14 @@ def config_from_args(args) -> PoseDiagnosticsConfig:
 
 
 class PoseDiagnosticsReporter:
+    """YOLO raw detection, tracker, LSTM sequence 상태를 카메라별로 누적 기록한다.
+
+    한 프레임에서 raw detection은 있는데 active_tracks가 0인지, keypoint confidence가
+    낮은지, sequence가 준비됐는지를 같은 record에 묶는다. 이 record가 console/JSONL
+    양쪽에 같은 기준으로 남기 때문에 cam_04/cam_05처럼 결과가 갈리는 카메라를
+    frameId 또는 timestampMs 기준으로 비교할 수 있다.
+    """
+
     def __init__(self, config: PoseDiagnosticsConfig | None = None) -> None:
         self.config = config or PoseDiagnosticsConfig()
         self._stats_by_camera: dict[str, PoseStats] = {}
@@ -72,6 +87,14 @@ class PoseDiagnosticsReporter:
         sequence_diagnostics: dict | None = None,
         frame=None,
     ) -> dict:
+        """프레임 하나의 pose/tracking/sequence 진단 record를 만들고 누적한다.
+
+        `build_pose_diagnostic_record()`가 detector_missing, low_pose_quality,
+        tracker_association_issue, sequence_buffer_issue 같은 diagnosis를 정한다.
+        reporter는 그 결과를 카메라별 summary에 반영하고, 설정에 따라 console,
+        JSONL, sample image 저장을 수행한다.
+        """
+
         record = build_pose_diagnostic_record(
             camera_login_id=camera_login_id,
             source_url=source_url,
@@ -137,6 +160,12 @@ class PoseDiagnosticsReporter:
         frame,
         detections: list[dict],
     ) -> Path | None:
+        """디버그 옵션이 켜진 경우에만 bbox/keypoint가 그려진 샘플 이미지를 저장한다.
+
+        production 기본값에서는 호출되어도 저장하지 않는다. cv2가 없거나 이미지 처리가
+        실패하면 worker를 죽이지 않고 placeholder 파일만 남겨 진단 흐름을 유지한다.
+        """
+
         if not self.config.enabled or not self.config.image_output_enabled:
             return None
         self.config.image_output_dir.mkdir(parents=True, exist_ok=True)
