@@ -15,6 +15,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from ai.events.event_clip import EventClipBuffer
 from ai.events.clip_worker import ClipWriterWorker, enqueue_event_clip
 
+from ai.events.event_clip import EventClipBuffer
+from ai.events.clip_worker import ClipWriterWorker, enqueue_event_clip
 from ai.action.per_track_sequence_buffer import PerTrackCropSequenceBuffers, PerTrackKeypointSequenceBuffers
 from ai.action.lstm_contract import DEFAULT_KEYPOINT_INPUT_SIZE, DEFAULT_LSTM_SEQUENCE_LENGTH, DEFAULT_LSTM_SEQUENCE_STRIDE, log_lstm_config
 from ai.evidence import evidence_id
@@ -544,13 +546,12 @@ def _process_frame_impl(
                 publisher.publish(payload, topic=topic_settings["event_topic"])
             except Exception as exc:
                 print(f"[ai-worker][error] failed to publish event payload for camera={stream_id}: {exc}", file=sys.stderr, flush=True)
-
         # 낙상 감지 시 10초 스냅샷 버퍼 트리거 작동
         if state is not None and getattr(state, "clip_buffer", None) is not None:
             target_bbox = []
             for b in boxes:
                 if b.get("track_id") is not None and int(b["track_id"]) == track_id:
-                    target_bbox = b.get("box", [])
+                    target_bbox = b.get("bbox", b.get("box", []))
                     break
             
             task_metadata = {
@@ -849,8 +850,9 @@ class OverlayWorker:
 
             # 매 프레임마다 스냅샷 클립 버퍼에 기록
             if self.state.clip_buffer is not None:
-                self.state.clip_buffer.add_frame(frame_packet.frame)
-
+                clip_task = self.state.clip_buffer.add_frame(frame_packet.frame)
+                if clip_task is not None:
+                    enqueue_event_clip(self.state.clip_queue, clip_task)
             if roi_configs:
                 h, w = frame_packet.frame.shape[:2]
                 if cached_roi_mask is None or cached_roi_frame_shape != (h, w):
