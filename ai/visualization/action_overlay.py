@@ -186,6 +186,22 @@ def draw_metrics_panel(frame, summary, args, prediction):
     cv2.putText(frame, line2, (x, y + 20), font, scale, (241, 245, 249), thickness, cv2.LINE_AA)
     if frame_sync_line:
         cv2.putText(frame, frame_sync_line, (x, y + 40), font, scale, (191, 219, 254), thickness, cv2.LINE_AA)
+        
+    if getattr(args, "mjpeg_debug_watermark", False):
+        import time
+        now_str = time.strftime("%H:%M:%S")
+        frame_id = summary.get("latest_frame_id", "?")
+        watermark = f"FRAME: {frame_id} | TIME: {now_str} | TRACKS: {active_tracks}"
+        
+        h, w = frame.shape[:2]
+        wt_scale = 0.45
+        wt_thickness = 1
+        wt_size = cv2.getTextSize(watermark, font, wt_scale, wt_thickness)[0]
+        wt_x = w - wt_size[0] - 15
+        wt_y = h - 15
+        
+        cv2.rectangle(frame, (wt_x - 5, wt_y - wt_size[1] - 5), (wt_x + wt_size[0] + 5, wt_y + 5), (15, 23, 42), -1)
+        cv2.putText(frame, watermark, (wt_x, wt_y), font, wt_scale, (74, 222, 128), wt_thickness, cv2.LINE_AA)
 
 
 def make_placeholder(message):

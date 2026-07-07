@@ -97,7 +97,34 @@ class OverlayHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = urlparse(self.path).path
         if path == "/health":
-            self.send_json({"status": "ok", **self.state.status()})
+            status_data = self.state.status()
+            summary_data = status_data["summary"]
+            
+            frame = self.state.snapshot()
+            src_res = "unknown"
+            if frame is not None:
+                src_res = f"{frame.shape[1]}x{frame.shape[0]}"
+            
+            width = int(getattr(self.server, "mjpeg_width", 0) or 0)
+            height = int(getattr(self.server, "mjpeg_height", 0) or 0)
+            out_res = f"{width}x{height}" if (width > 0 and height > 0) else src_res
+            
+            latest_cap = summary_data.get("latest_captured_at_ms", 0)
+            frame_age_ms = int(time.time() * 1000 - latest_cap) if latest_cap else -1
+            
+            health_payload = {
+                "status": "ok",
+                "source_resolution": src_res,
+                "output_resolution": out_res,
+                "jpeg_quality": int(getattr(self.server, "jpeg_quality", 80)),
+                "fps": float(getattr(self.server, "target_fps", 8.0)),
+                "frame_age_ms": frame_age_ms,
+                "active_tracks": summary_data.get("active_tracks", 0),
+                "mjpeg_frame_count": summary_data.get("mjpeg_frame_count", 0),
+                "processed_frame_count": summary_data.get("frames_processed", 0),
+                **status_data
+            }
+            self.send_json(health_payload)
             return
         if path == "/cameras":
             camera_id = getattr(self.server, "camera_id", "camera-1")

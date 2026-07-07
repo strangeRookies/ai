@@ -128,11 +128,12 @@ class RunnerConfig:
     webrtc_sync_token: str | None = None
     mjpeg_enabled: bool = False
     mjpeg_fps: float = 8.0
-    mjpeg_width: int = 640
-    mjpeg_height: int = 360
-    mjpeg_jpeg_quality: int = 70
+    mjpeg_width: int = 1280
+    mjpeg_height: int = 720
+    mjpeg_jpeg_quality: int = 80
     mjpeg_base_path: str = "/mjpeg"
     mjpeg_enable_overlay: bool = True
+    mjpeg_debug_watermark: bool = False
     skip_ffmpeg_spawn: bool = False
     overlay_public_base_url: str | None = None
     overlay_report_enabled: bool = False
@@ -478,6 +479,8 @@ def build_overlay_command(
     )
     if not config.mjpeg_enable_overlay:
         command.append("--no-mjpeg-enable-overlay")
+    if config.mjpeg_debug_watermark:
+        command.append("--mjpeg-debug-watermark")
     optional_pairs = [
         ("--mqtt-host", config.mqtt_host),
         ("--mqtt-port", str(config.mqtt_port) if config.mqtt_port is not None else None),
