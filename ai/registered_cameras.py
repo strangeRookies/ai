@@ -119,7 +119,7 @@ class RunnerConfig:
     dry_run: bool
     rtsp_probe_enabled: bool
     refresh_interval_seconds: float
-    tracking_stability_fallback: bool = False
+    tracking_stability_fallback: bool = True
     tracking_stability_fallback_camera_ids: tuple[str, ...] = ()
     mjpeg_debug: bool = False
     webrtc_sync_enabled: bool = False

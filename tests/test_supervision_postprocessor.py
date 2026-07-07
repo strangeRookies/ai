@@ -262,6 +262,34 @@ class SupervisionPostProcessorTest(unittest.TestCase):
         self.assertEqual(proc.diagnostics()["active_tracks"], 1)
         self.assertTrue(proc.diagnostics()["stability_fallback"])
 
+    def test_stability_fallback_keeps_person_id_when_bytetrack_id_increments(self):
+        from ai.postprocess.supervision_postprocessor import SupervisionByteTrackAdapter
+        adapter = SupervisionByteTrackAdapter(
+            track_thresh=0.10,
+            track_buffer=30,
+            match_thresh=0.20,
+            bbox_smoothing_alpha=0.60,
+            stability_fallback=True,
+        )
+        adapter._tracker = FakeIncrementingRoboflowByteTrack()
+        proc = SupervisionPostProcessor(byte_tracker=adapter)
+
+        first = proc.process(
+            [{"bbox": [20, 20, 60, 60], "confidence": 0.85}],
+            np.zeros((200, 200, 3), dtype=np.uint8),
+        )
+        second = proc.process(
+            [{"bbox": [22, 22, 62, 62], "confidence": 0.84}],
+            np.zeros((200, 200, 3), dtype=np.uint8),
+        )
+        third = proc.process(
+            [{"bbox": [24, 24, 64, 64], "confidence": 0.83}],
+            np.zeros((200, 200, 3), dtype=np.uint8),
+        )
+
+        self.assertEqual([first[0]["track_id"], second[0]["track_id"], third[0]["track_id"]], [1, 1, 1])
+        self.assertEqual(proc.diagnostics()["new_tracks"], 0)
+
 
 class FakeByteTrackAdapter:
     def __init__(self, track_ids):
@@ -315,6 +343,24 @@ class FakeNoTrackRoboflowByteTrack:
             confidence=detections.confidence,
             class_id=detections.class_id,
             tracker_id=np.asarray([None for _ in range(len(detections.xyxy))], dtype=object),
+        )
+
+
+class FakeIncrementingRoboflowByteTrack:
+    def __init__(self):
+        self.next_track_id = 1
+
+    def update_with_detections(self, detections):
+        import supervision as sv
+        track_ids = []
+        for _ in range(len(detections.xyxy)):
+            track_ids.append(self.next_track_id)
+            self.next_track_id += 1
+        return sv.Detections(
+            xyxy=detections.xyxy,
+            confidence=detections.confidence,
+            class_id=detections.class_id,
+            tracker_id=np.asarray(track_ids, dtype=int),
         )
 
 
