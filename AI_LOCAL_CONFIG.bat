@@ -1,5 +1,5 @@
 ﻿@echo off
-set "GPU_HOST=58.127.241.84"
+set "GPU_HOST=58.151.205.222"
 set "GPU_USER=welabs"
 set "MQTT_HOST=15.165.248.37"
 set "MQTT_PORT=1883"
