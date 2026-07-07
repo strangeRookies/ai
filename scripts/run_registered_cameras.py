@@ -182,14 +182,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Open bounded per-worker MJPEG streams for demo/browser viewing.",
     )
     parser.add_argument("--mjpeg-fps", type=float, default=float(os.getenv("MJPEG_FPS", "8.0")))
-    parser.add_argument("--mjpeg-width", type=int, default=int(os.getenv("MJPEG_WIDTH", "640")))
-    parser.add_argument("--mjpeg-height", type=int, default=int(os.getenv("MJPEG_HEIGHT", "360")))
-    parser.add_argument("--mjpeg-jpeg-quality", type=int, default=int(os.getenv("MJPEG_JPEG_QUALITY", "70")))
+    parser.add_argument("--mjpeg-width", type=int, default=int(os.getenv("MJPEG_WIDTH", "1280")))
+    parser.add_argument("--mjpeg-height", type=int, default=int(os.getenv("MJPEG_HEIGHT", "720")))
+    parser.add_argument("--mjpeg-jpeg-quality", type=int, default=int(os.getenv("MJPEG_JPEG_QUALITY", "80")))
     parser.add_argument("--mjpeg-base-path", default=os.getenv("MJPEG_BASE_PATH", "/mjpeg"))
     parser.add_argument(
         "--mjpeg-enable-overlay",
         action=argparse.BooleanOptionalAction,
         default=env_bool("MJPEG_ENABLE_OVERLAY", True),
+    )
+    parser.add_argument(
+        "--mjpeg-debug-watermark",
+        action=argparse.BooleanOptionalAction,
+        default=env_bool("MJPEG_DEBUG_WATERMARK", False),
     )
     parser.add_argument("--print-events", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
@@ -285,6 +290,7 @@ def config_from_args(args: argparse.Namespace) -> RunnerConfig:
         mjpeg_jpeg_quality=args.mjpeg_jpeg_quality,
         mjpeg_base_path=args.mjpeg_base_path,
         mjpeg_enable_overlay=args.mjpeg_enable_overlay,
+        mjpeg_debug_watermark=args.mjpeg_debug_watermark,
         print_events=args.print_events,
         dry_run=args.dry_run,
         rtsp_probe_enabled=not args.skip_rtsp_probe,
