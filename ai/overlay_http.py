@@ -94,6 +94,17 @@ class OverlayHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     state = None
 
+    def do_OPTIONS(self):
+        path = urlparse(self.path).path
+        if path == "/health":
+            self.send_response(HTTPStatus.NO_CONTENT)
+            self.send_cors_headers()
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        self.send_error(HTTPStatus.NOT_FOUND, "Not found")
+
     def do_GET(self):
         path = urlparse(self.path).path
         if path == "/health":
@@ -121,6 +132,7 @@ class OverlayHandler(BaseHTTPRequestHandler):
                 "frame_age_ms": frame_age_ms,
                 "active_tracks": summary_data.get("active_tracks", 0),
                 "mjpeg_frame_count": summary_data.get("mjpeg_frame_count", 0),
+                "stream_clients": summary_data.get("mjpeg_client_count", 0),
                 "processed_frame_count": summary_data.get("frames_processed", 0),
                 **status_data
             }
@@ -150,10 +162,16 @@ class OverlayHandler(BaseHTTPRequestHandler):
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_cors_headers()
+        self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def send_cors_headers(self):
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
 
     def stream_events(self):
         self.send_response(HTTPStatus.OK)

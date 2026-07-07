@@ -327,13 +327,16 @@ def resolve_simulated_video(camera: RegisteredCamera, video_pool: Path, config: 
 
     if camera.assigned_video_path:
         pool_root = resolved_video_pool(video_pool, REPO_ROOT)
+        from ai.simulated_rtsp_sources import is_chromakey_video_path
         for candidate in assigned_video_candidates(camera.assigned_video_path, video_pool, REPO_ROOT):
             if candidate.exists() and candidate.is_file():
-                if is_path_under(candidate, pool_root):
-                    return candidate
-                raise RuntimeError(
-                    f"assignedVideoPath must stay under video_pool for camera_login_id={camera.camera_login_id}"
-                )
+                if not is_path_under(candidate, pool_root):
+                    raise RuntimeError(
+                        f"assignedVideoPath must stay under video_pool for camera_login_id={camera.camera_login_id}"
+                    )
+                if is_chromakey_video_path(candidate):
+                    continue
+                return candidate
 
     # Load and filter pool videos
     if not video_pool.exists():
@@ -351,7 +354,11 @@ def resolve_simulated_video(camera: RegisteredCamera, video_pool: Path, config: 
     if not video_files:
         raise RuntimeError(f"no matching videos found in pool {video_pool}")
 
-    from ai.simulated_rtsp_sources import stable_video_index, estimate_video_metadata
+    from ai.simulated_rtsp_sources import estimate_video_metadata, is_chromakey_video_path, stable_video_index
+    video_files = [video for video in video_files if not is_chromakey_video_path(video)]
+    if not video_files:
+        raise RuntimeError(f"no non-chromakey videos found in pool {video_pool}")
+
     idx = stable_video_index(camera.camera_login_id, len(video_files))
     assigned = video_files[idx]
 
