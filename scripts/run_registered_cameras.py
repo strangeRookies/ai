@@ -178,7 +178,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--mjpeg-enabled",
         action=argparse.BooleanOptionalAction,
-        default=env_bool("MJPEG_ENABLED", False),
+        default=env_bool("MJPEG_ENABLED", True),
         help="Open bounded per-worker MJPEG streams for demo/browser viewing.",
     )
     parser.add_argument("--mjpeg-fps", type=float, default=float(os.getenv("MJPEG_FPS", "8.0")))

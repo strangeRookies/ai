@@ -18,6 +18,7 @@ from ai.registered_cameras import (
     load_active_cameras,
     parse_camera,
 )
+from ai.overlay_ports import overlay_port_for_camera_login_id
 from ai.registered_camera_workers import CameraWorker, next_overlay_port, publish_unavailable_camera_status, start_camera_worker, sync_camera_workers
 from ai.overlay_registry_client import overlay_stream_url
 from scripts.run_registered_cameras import log_camera_api_config, warn_if_multiple_registered_camera_runners
@@ -270,6 +271,14 @@ class RegisteredCameraRunnerTest(unittest.TestCase):
         url = overlay_stream_url(config, 8012, "cam_09")
 
         self.assertEqual(url, "http://localhost:8012/mjpeg/cam_09")
+
+    def test_overlay_port_is_derived_from_camera_login_id_suffix(self):
+        config = replace(fake_config(Path("video_pool")), overlay_base_port=8010)
+
+        self.assertEqual(overlay_port_for_camera_login_id("cam_01", config), 8010)
+        self.assertEqual(overlay_port_for_camera_login_id("cam_02", config), 8011)
+        self.assertEqual(overlay_port_for_camera_login_id("cam_05", config), 8014)
+        self.assertEqual(overlay_port_for_camera_login_id("cam_12", config), 8021)
 
     def test_start_camera_worker_reports_overlay_when_mjpeg_enabled(self):
         camera = RegisteredCamera(
