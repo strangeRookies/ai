@@ -1104,7 +1104,7 @@ def main():
     parser.add_argument(
         "--tracking-stability-fallback",
         action=argparse.BooleanOptionalAction,
-        default=os.getenv("TRACKING_STABILITY_FALLBACK", "false").lower() in {"1", "true", "yes", "on"},
+        default=os.getenv("TRACKING_STABILITY_FALLBACK", "true").lower() in {"1", "true", "yes", "on"},
         help="Use a lightweight bbox continuity tracker after supervision to stabilize final track_id values.",
     )
     parser.add_argument("--overlay-debug-tracks", action="store_true")

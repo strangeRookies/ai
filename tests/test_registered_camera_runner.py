@@ -34,6 +34,12 @@ class RegisteredCameraRunnerTest(unittest.TestCase):
 
         self.assertTrue(config.mjpeg_enable_overlay)
 
+    def test_registered_camera_runner_defaults_to_tracking_stability_fallback_enabled(self):
+        with patch.dict("os.environ", {}, clear=True):
+            config = config_from_args(parse_args([]))
+
+        self.assertTrue(config.tracking_stability_fallback)
+
     def test_camera_api_config_log_includes_effective_endpoint(self):
         config = replace(fake_config(Path("video_pool")), backend_base_url="http://localhost:18080")
 
@@ -141,7 +147,7 @@ class RegisteredCameraRunnerTest(unittest.TestCase):
         self.assertEqual(command[command.index("--track-buffer") + 1], "150")
         self.assertEqual(command[command.index("--bbox-smoothing-alpha") + 1], "0.45")
 
-    def test_overlay_command_passes_tracking_stability_fallback_only_when_enabled(self):
+    def test_overlay_command_enables_tracking_stability_fallback_by_default(self):
         camera = RegisteredCamera(
             camera_id="9",
             camera_login_id="icu_01",
@@ -151,15 +157,15 @@ class RegisteredCameraRunnerTest(unittest.TestCase):
         )
 
         default_command = build_overlay_command(camera, "rtsp://cctv/icu", 8012, fake_config(Path("video_pool")))
-        fallback_command = build_overlay_command(
+        disabled_command = build_overlay_command(
             camera,
             "rtsp://cctv/icu",
             8012,
-            replace(fake_config(Path("video_pool")), tracking_stability_fallback=True),
+            replace(fake_config(Path("video_pool")), tracking_stability_fallback=False),
         )
 
-        self.assertNotIn("--tracking-stability-fallback", default_command)
-        self.assertIn("--tracking-stability-fallback", fallback_command)
+        self.assertIn("--tracking-stability-fallback", default_command)
+        self.assertNotIn("--tracking-stability-fallback", disabled_command)
 
     def test_overlay_command_can_enable_tracking_stability_fallback_for_one_camera(self):
         cam4 = RegisteredCamera(

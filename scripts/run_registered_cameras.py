@@ -152,7 +152,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--tracking-stability-fallback",
         action=argparse.BooleanOptionalAction,
-        default=env_bool("TRACKING_STABILITY_FALLBACK", False),
+        default=env_bool("TRACKING_STABILITY_FALLBACK", True),
         help="Use a lightweight bbox continuity tracker after supervision to stabilize final track_id values.",
     )
     parser.add_argument(
