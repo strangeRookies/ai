@@ -603,7 +603,6 @@ def _process_frame_impl(
                 event_type=payload.get("type", "fall_detected"),
                 camera_id=stream_id,
                 metadata=task_metadata,
-                queue=state.clip_queue
             )
             print(f"[ai-overlay-event] triggered snapshot recording for camera={stream_id} eventId={payload.get('eventId')}", flush=True)
     maybe_log_debug(frame_packet, boxes, summary, prediction, args, prefix="[ai-overlay-debug]")
