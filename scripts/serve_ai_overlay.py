@@ -967,12 +967,20 @@ class OverlayWorker:
             inference_count += 1
             now = time.monotonic()
             if now - last_heartbeat_time >= 1.0:
+                mjpeg_summary = self.state.status()["summary"]
+                latest_cap = mjpeg_summary.get("latest_captured_at_ms")
+                last_frame_age_ms = int(time.time() * 1000 - latest_cap) if latest_cap else -1
                 print(
                     f"[heartbeat-inference] camera={self.camera_login_id} "
                     f"inference_count={inference_count} "
                     f"mqtt_publish_count={mqtt_publish_count} "
                     f"fps={inference_count / (now - last_heartbeat_time):.1f} "
-                    f"dropped={self.queue.dropped_frame_count}",
+                    f"dropped={self.queue.dropped_frame_count} "
+                    f"mjpeg_frame_count={mjpeg_summary.get('mjpeg_frame_count', 0)} "
+                    f"last_mjpeg_sent_at={mjpeg_summary.get('last_mjpeg_sent_at', 0.0):.3f} "
+                    f"last_frame_age_ms={last_frame_age_ms} "
+                    f"stream_clients={mjpeg_summary.get('mjpeg_client_count', 0)} "
+                    f"overlay_enabled={str(self.args.mjpeg_enable_overlay).lower()}",
                     flush=True
                 )
                 inference_count = 0
