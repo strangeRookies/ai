@@ -1,0 +1,67 @@
+================================================================================
+MJPEG Display Port Normalization - Live HTTP Smoke Test Verification
+Date: 2026-07-07 10:58 (Local Time)
+================================================================================
+
+1. Local SSH Tunnel Status (Client Side)
+----------------------------------------
+Local ports 8010-8014 are successfully bound to the SSH client process (ssh.exe, PID 20928):
+  TCP    127.0.0.1:8010         0.0.0.0:0              LISTENING       20928
+  TCP    127.0.0.1:8011         0.0.0.0:0              LISTENING       20928
+  TCP    127.0.0.1:8012         0.0.0.0:0              LISTENING       20928
+  TCP    127.0.0.1:8013         0.0.0.0:0              LISTENING       20928
+  TCP    127.0.0.1:8014         0.0.0.0:0              LISTENING       20928
+
+2. Remote GPU Server Process Status (Server Side)
+-------------------------------------------------
+AI registered runner and active camera workers are running. Each camera worker maps deterministically
+to its normalized port matching the cameraLoginId numeric suffix formula (8010 + suffix - 1):
+
+Command Lines (pgrep -af "serve_ai_overlay.py|run_registered_cameras.py"):
+87695 python scripts/run_registered_cameras.py --backend-base-url http://127.0.0.1:18080 --rtsp-base-url rtsp://127.0.0.1:8554 --video-pool /home/welabs/yolo_training/ai_fall_experiments/data/raw --overlay-report-enabled --detector-mode real --yolo-model yolo26n-pose.pt --action-model runs/evaluation_manifest_v2_bbox54_balanced/retrained_best.pt --publisher mqtt --mqtt-host 15.165.248.37 --mqtt-port 1883 --mqtt-topic safety/events --skip-simulated-ffmpeg --domain outside
+88294 /home/welabs/yolo_training/strange_ai_lstm/.venv/bin/python scripts/serve_ai_overlay.py --camera-id cam_03 --camera-login-id cam_03 --host 0.0.0.0 --port 8012 ... --mjpeg-enabled --mjpeg-fps 8.0 --mjpeg-width 640 --mjpeg-height 360 --mjpeg-jpeg-quality 70 --mjpeg-base-path /mjpeg --mqtt-host 15.165.248.37 --mqtt-port 1883 --mqtt-topic safety/events ... --action-model runs/evaluation_manifest_v2_bbox54_balanced/retrained_best.pt --selected-track-mode strict --selected-track-missing-frames 5
+88839 /home/welabs/yolo_training/strange_ai_lstm/.venv/bin/python scripts/serve_ai_overlay.py --camera-id cam_02 --camera-login-id cam_02 --host 0.0.0.0 --port 8011 ... --mjpeg-enabled --mjpeg-fps 8.0 --mjpeg-width 640 --mjpeg-height 360 --mjpeg-jpeg-quality 70 --mjpeg-base-path /mjpeg --mqtt-host 15.165.248.37 --mqtt-port 1883 --mqtt-topic safety/events ... --action-model runs/evaluation_manifest_v2_bbox54_balanced/retrained_best.pt --selected-track-mode strict --selected-track-missing-frames 5 --roi-configs [...]
+89455 /home/welabs/yolo_training/strange_ai_lstm/.venv/bin/python scripts/serve_ai_overlay.py --camera-id cam_05 --camera-login-id cam_05 --host 0.0.0.0 --port 8014 ... --mjpeg-enabled --mjpeg-fps 8.0 --mjpeg-width 640 --mjpeg-height 360 --mjpeg-jpeg-quality 70 --mjpeg-base-path /mjpeg --mqtt-host 15.165.248.37 --mqtt-port 1883 --mqtt-topic safety/events ... --action-model runs/evaluation_manifest_v2_bbox54_balanced/retrained_best.pt --selected-track-mode strict --selected-track-missing-frames 5
+89785 /home/welabs/yolo_training/strange_ai_lstm/.venv/bin/python scripts/serve_ai_overlay.py --camera-id cam_04 --camera-login-id cam_04 --host 0.0.0.0 --port 8013 ... --mjpeg-enabled --mjpeg-fps 8.0 --mjpeg-width 640 --mjpeg-height 360 --mjpeg-jpeg-quality 70 --mjpeg-base-path /mjpeg --mqtt-host 15.165.248.37 --mqtt-port 1883 --mqtt-topic safety/events ... --action-model runs/evaluation_manifest_v2_bbox54_balanced/retrained_best.pt --selected-track-mode strict --selected-track-missing-frames 5
+
+Remote Listening Ports (ss -lntup | grep -E "8010|8011|8012|8013|8014"):
+  tcp   LISTEN 0      5                     0.0.0.0:8011       0.0.0.0:*    users:(("python",pid=88839,fd=3))
+  tcp   LISTEN 0      5                     0.0.0.0:8012       0.0.0.0:*    users:(("python",pid=88294,fd=4))
+  tcp   LISTEN 0      5                     0.0.0.0:8013       0.0.0.0:*    users:(("python",pid=89785,fd=3))
+  tcp   LISTEN 0      5                     0.0.0.0:8014       0.0.0.0:*    users:(("python",pid=89455,fd=3))
+
+*Note: cam_01 is not active in the database (not returned by /api/cameras/active), so no worker is spawned for cam_01, hence port 8010 is not listening on the server.
+
+3. Health Check Verification (Local Client Side via Tunnel)
+-----------------------------------------------------------
+All 4 active camera workers are responding with 200 OK and "status": "ok":
+
+$ curl.exe -s http://localhost:8011/health
+{"status": "ok", "connected": true, "last_error": "", "summary": {"_started_at": 7944.416261619, "frames_processed": 144, "bbox_detections": 145, ...}}
+
+$ curl.exe -s http://localhost:8012/health
+{"status": "ok", "connected": true, "last_error": "", "summary": {"_started_at": 7864.327009515, "frames_processed": 93, "bbox_detections": 93, ...}}
+
+$ curl.exe -s http://localhost:8013/health
+{"status": "ok", "connected": true, "last_error": "", "summary": {"_started_at": 7870.462958666, "frames_processed": 97, "bbox_detections": 97, ...}}
+
+$ curl.exe -s http://localhost:8014/health
+{"status": "ok", "connected": true, "last_error": "", "summary": {"_started_at": 7868.422744102, "frames_processed": 110, "bbox_detections": 111, ...}}
+
+4. MJPEG Stream Headers Verification
+------------------------------------
+Verifying Content-Type for cam_05 (port 8014) is multipart/x-mixed-replace:
+
+$ curl.exe -v -s -m 1 http://localhost:8014/mjpeg/cam_05 *>&1 | Select-String "Content-Type"
+< Content-Type: multipart/x-mixed-replace; boundary=frame
+Content-Type: image/jpeg
+Content-Type: image/jpeg
+...
+
+5. Frontend Env and Build Flags Verification
+--------------------------------------------
+- VITE_STREAM_MODE is set to "mjpeg" in strange_front/.env, strange_front/.env.example, root .env.example, and Dockerfiles.
+- VITE_MJPEG_BASE_URL is set to "http://localhost:8010" across environments.
+- VITE_MJPEG_PROXY_MODE is set to "false" across environments.
+- VITE_MJPEG_BASE_PATH is set to "/mjpeg" across environments.
+- Active tunnel maps localhost:8010-8016 to remote:8010-8016.
