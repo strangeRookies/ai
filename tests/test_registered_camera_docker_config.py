@@ -59,6 +59,7 @@ class RegisteredCameraDockerConfigTest(unittest.TestCase):
         self.assertEqual(config.sequence_stride, 15)
         self.assertEqual(config.domain, "outside")
         self.assertIsNone(config.label)
+        self.assertTrue(config.mjpeg_enabled)
 
     def test_parse_args_reads_docker_environment_defaults(self):
         env = {

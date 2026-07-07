@@ -4,6 +4,7 @@ import urllib.error
 from dataclasses import replace
 from io import StringIO
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 from argparse import Namespace
 
@@ -17,7 +18,8 @@ from ai.registered_cameras import (
     load_active_cameras,
     parse_camera,
 )
-from ai.registered_camera_workers import CameraWorker, next_overlay_port, publish_unavailable_camera_status, sync_camera_workers
+from ai.overlay_ports import overlay_port_for_camera_login_id
+from ai.registered_camera_workers import CameraWorker, next_overlay_port, publish_unavailable_camera_status, start_camera_worker, sync_camera_workers
 from ai.overlay_registry_client import overlay_stream_url
 from scripts.run_registered_cameras import log_camera_api_config, warn_if_multiple_registered_camera_runners
 
@@ -269,6 +271,41 @@ class RegisteredCameraRunnerTest(unittest.TestCase):
         url = overlay_stream_url(config, 8012, "cam_09")
 
         self.assertEqual(url, "http://localhost:8012/mjpeg/cam_09")
+
+    def test_overlay_port_is_derived_from_camera_login_id_suffix(self):
+        config = replace(fake_config(Path("video_pool")), overlay_base_port=8010)
+
+        self.assertEqual(overlay_port_for_camera_login_id("cam_01", config), 8010)
+        self.assertEqual(overlay_port_for_camera_login_id("cam_02", config), 8011)
+        self.assertEqual(overlay_port_for_camera_login_id("cam_05", config), 8014)
+        self.assertEqual(overlay_port_for_camera_login_id("cam_12", config), 8021)
+
+    def test_start_camera_worker_reports_overlay_when_mjpeg_enabled(self):
+        camera = RegisteredCamera(
+            camera_id="9",
+            camera_login_id="cam_09",
+            rtsp_url="rtsp://cctv/cam_09",
+            source_type="REAL_RTSP",
+            assigned_video_path=None,
+        )
+        config = replace(
+            fake_config(Path("video_pool")),
+            dry_run=False,
+            mjpeg_enabled=True,
+            mjpeg_debug=False,
+            overlay_report_enabled=True,
+            rtsp_probe_enabled=False,
+        )
+
+        with (
+            patch("ai.registered_camera_workers.spawn_process", return_value=SimpleNamespace(pid=1234)),
+            patch("ai.worker_registry.force_kill_existing_worker"),
+            patch("ai.registered_camera_workers.report_overlay_status") as report_overlay,
+        ):
+            worker = start_camera_worker(camera, config, 8014)
+
+        self.assertIsNotNone(worker)
+        report_overlay.assert_called_once_with(camera, "rtsp://cctv/cam_09", 8014, config, "RUNNING", 1234)
 
     def test_load_active_cameras_reads_backend_success_data_envelope(self):
         response = FakeHttpResponse(
