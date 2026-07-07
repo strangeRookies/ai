@@ -47,17 +47,21 @@ set "REMOTE_ROOT=%STABLE_ROOT%"
 set "BRANCH=develop"
 set "MQTT_HOST=15.165.248.37"
 set "MQTT_PORT=1883"
+if not defined MJPEG_TUNNEL_START_PORT set "MJPEG_TUNNEL_START_PORT=8010"
+if not defined MJPEG_TUNNEL_END_PORT set "MJPEG_TUNNEL_END_PORT=8020"
 
 call :LOG "TRACE: ENTER STEP1"
 echo.
 echo ========================================================
 echo [1/5] 사전 상태 점검
 echo ========================================================
-call :LOG "Checking for busy local ports (8888, 8889, 8189, 8090-8093, 18080)..."
-netstat -ano | findstr /R "LISTENING.*:8888 LISTENING.*:8889 LISTENING.*:8189 LISTENING.*:8090 LISTENING.*:8091 LISTENING.*:8092 LISTENING.*:8093 LISTENING.*:18080" >nul
-if errorlevel 1 goto PORTS_FREE
+call :LOG "Checking for busy local ports (8888, 8889, 8189, 8090-8093, 18080, MJPEG %MJPEG_TUNNEL_START_PORT%-%MJPEG_TUNNEL_END_PORT%)..."
+set "BUSY_PORTS="
+for %%P in (8888 8889 8189 8090 8091 8092 8093 18080) do call :CHECK_LOCAL_PORT %%P
+for /L %%P in (%MJPEG_TUNNEL_START_PORT%,1,%MJPEG_TUNNEL_END_PORT%) do call :CHECK_LOCAL_PORT %%P
+if not defined BUSY_PORTS goto PORTS_FREE
 
-call :LOG "[WARNING] Stale tunnel ports are already listening on your local machine."
+call :LOG "[WARNING] Stale tunnel ports are already listening on your local machine:%BUSY_PORTS%"
 echo This indicates another SSH tunnel or AI session might be active.
 set /p "CLEAN_CHOICE=Do you want to clean up existing AI processes first? [y/n]: "
 call :LOG "TRACE: User chose clean_choice = %CLEAN_CHOICE%"
@@ -128,6 +132,8 @@ ssh %GPU_USER%@%GPU_HOST% "fuser -k 18080/tcp 2>/dev/null || true; lsof -ti tcp:
 
 call :LOG "TRACE: BEFORE START SSH WINDOW"
 set "TUNNEL_FORWARDS=-L 8888:127.0.0.1:8888 -L 8889:127.0.0.1:8889 -L 8189:127.0.0.1:8189 -L 8090:127.0.0.1:8090 -L 8091:127.0.0.1:8091 -L 8092:127.0.0.1:8092 -L 8093:127.0.0.1:8093"
+for /L %%P in (%MJPEG_TUNNEL_START_PORT%,1,%MJPEG_TUNNEL_END_PORT%) do set "TUNNEL_FORWARDS=!TUNNEL_FORWARDS! -L %%P:127.0.0.1:%%P"
+call :LOG "MJPEG tunnel ports: %MJPEG_TUNNEL_START_PORT%-%MJPEG_TUNNEL_END_PORT% (cam_01 uses 8010, cam_02 uses 8011, ...)"
 if "%RUN_MODE%"=="tunnel_only" start "AI STABLE SSH Tunnel - keep open" cmd /k ssh -o ExitOnForwardFailure=yes -t %TUNNEL_FORWARDS% %GPU_USER%@%GPU_HOST% "echo ==============================================; echo [SSH TUNNEL ACTIVE] Tunnel established successfully.; echo Keep this window open to maintain streams.; echo ==============================================; tail -f /dev/null"
 if not "%RUN_MODE%"=="tunnel_only" start "AI STABLE SSH Tunnel - keep open" cmd /k ssh -o ExitOnForwardFailure=yes -t %TUNNEL_FORWARDS% -R 18080:127.0.0.1:8080 %GPU_USER%@%GPU_HOST% "echo ==============================================; echo [SSH TUNNEL ACTIVE] Tunnel established successfully.; echo Keep this window open to maintain/share streams.; echo ==============================================; tail -f /dev/null"
 
@@ -204,9 +210,11 @@ if "%RUN_MODE%"=="tunnel_only" call :LOG "SSH Tunnel established. Keep the tunne
 if not "%RUN_MODE%"=="tunnel_only" call :LOG "STABLE runtime started. Keep the tunnel window open."
 echo.
 echo Quick checks after startup:
-echo   GPU: ss -lntup ^| grep -E "8554^|8888^|8889^|8189"
+echo   GPU: ss -lntup ^| grep -E "8554^|8888^|8889^|8189^|8010^|8011^|8012^|8013^|8014"
 echo   GPU: docker ps ^| grep mediamtx
-echo   Local: http://localhost:8888/cam_04/index.m3u8
+echo   Local MJPEG cam_01: http://localhost:8010/mjpeg/cam_01
+echo   Local MJPEG cam_05: http://localhost:8014/mjpeg/cam_05
+echo   Forwarded MJPEG range: %MJPEG_TUNNEL_START_PORT%-%MJPEG_TUNNEL_END_PORT%
 echo.
 goto SUCCESS
 
@@ -249,4 +257,9 @@ exit /b 0
 :LOG
 echo %~1
 echo [!DATE! !TIME!] %~1 >> "%LAUNCHER_LOG%"
+exit /b 0
+
+:CHECK_LOCAL_PORT
+netstat -ano | findstr /R "LISTENING.*:%~1" >nul
+if not errorlevel 1 set "BUSY_PORTS=!BUSY_PORTS! %~1"
 exit /b 0
