@@ -21,6 +21,7 @@ class OverlayState:
         self.mjpeg_frame_count = 0
         self.mjpeg_encode_latency_ms = 0.0
         self.mjpeg_encode_fail_count = 0
+        self.last_mjpeg_sent_at = 0.0
 
     def register_event_queue(self, q):
         with self.lock:
@@ -67,6 +68,7 @@ class OverlayState:
         with self.lock:
             self.mjpeg_frame_count += 1
             self.mjpeg_encode_latency_ms = float(encode_latency_ms)
+            self.last_mjpeg_sent_at = time.time()
 
     def record_mjpeg_encode_failure(self):
         with self.lock:
@@ -83,11 +85,13 @@ class OverlayState:
                     "mjpeg_frame_count": self.mjpeg_frame_count,
                     "mjpeg_encode_latency_ms": self.mjpeg_encode_latency_ms,
                     "mjpeg_encode_fail_count": self.mjpeg_encode_fail_count,
+                    "last_mjpeg_sent_at": self.last_mjpeg_sent_at,
                 },
             }
 
 
 class OverlayHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
     state = None
 
     def do_GET(self):
@@ -155,6 +159,7 @@ class OverlayHandler(BaseHTTPRequestHandler):
         self.state.client_connected()
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+        self.send_header("Connection", "keep-alive")
         self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
         self.send_header("Pragma", "no-cache")
         self.send_header("Access-Control-Allow-Origin", "*")

@@ -35,12 +35,15 @@ class MjpegOverlayHttpTest(unittest.TestCase):
             with closing(http.client.HTTPConnection(host, port, timeout=2.0)) as connection:
                 connection.request("GET", "/mjpeg/cam_01")
                 response = connection.getresponse()
-                chunk = response.read(256)
+                chunk = response.read(4096)
 
             self.assertEqual(response.status, 200)
             self.assertEqual(response.getheader("Content-Type"), "multipart/x-mixed-replace; boundary=frame")
+            self.assertEqual(response.getheader("Connection"), "keep-alive")
             self.assertIn(b"--frame", chunk)
             self.assertIn(b"Content-Type: image/jpeg", chunk)
+            # Count the occurrences of b"--frame" in the chunk to verify multiple frames are streamed
+            self.assertGreaterEqual(chunk.count(b"--frame"), 2)
         finally:
             server.shutdown()
             server.server_close()
