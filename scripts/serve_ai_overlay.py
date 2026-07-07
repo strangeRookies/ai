@@ -1027,7 +1027,7 @@ def main():
     parser.add_argument(
         "--mjpeg-enable-overlay",
         action=argparse.BooleanOptionalAction,
-        default=os.getenv("MJPEG_ENABLE_OVERLAY", "false").lower() in {"1", "true", "yes", "on"},
+        default=os.getenv("MJPEG_ENABLE_OVERLAY", "true").lower() in {"1", "true", "yes", "on"},
     )
     parser.add_argument(
         "--mjpeg-debug",

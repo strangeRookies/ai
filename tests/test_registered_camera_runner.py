@@ -21,12 +21,18 @@ from ai.registered_cameras import (
 from ai.overlay_ports import overlay_port_for_camera_login_id
 from ai.registered_camera_workers import CameraWorker, next_overlay_port, publish_unavailable_camera_status, start_camera_worker, sync_camera_workers
 from ai.overlay_registry_client import overlay_stream_url
-from scripts.run_registered_cameras import log_camera_api_config, warn_if_multiple_registered_camera_runners
+from scripts.run_registered_cameras import config_from_args, log_camera_api_config, parse_args, warn_if_multiple_registered_camera_runners
 
 
 class RegisteredCameraRunnerTest(unittest.TestCase):
     def test_default_backend_base_url_uses_host_18080(self):
         self.assertEqual(DEFAULT_BACKEND_BASE_URL, "http://localhost:18080")
+
+    def test_registered_camera_runner_defaults_to_mjpeg_overlay_enabled(self):
+        with patch.dict("os.environ", {}, clear=True):
+            config = config_from_args(parse_args([]))
+
+        self.assertTrue(config.mjpeg_enable_overlay)
 
     def test_camera_api_config_log_includes_effective_endpoint(self):
         config = replace(fake_config(Path("video_pool")), backend_base_url="http://localhost:18080")
@@ -252,7 +258,6 @@ class RegisteredCameraRunnerTest(unittest.TestCase):
             mjpeg_width=640,
             mjpeg_height=360,
             mjpeg_jpeg_quality=65,
-            mjpeg_enable_overlay=False,
         )
 
         command = build_overlay_command(camera, "rtsp://cctv/icu", 8012, config)
@@ -263,6 +268,24 @@ class RegisteredCameraRunnerTest(unittest.TestCase):
         self.assertEqual(command[command.index("--mjpeg-width") + 1], "640")
         self.assertEqual(command[command.index("--mjpeg-height") + 1], "360")
         self.assertEqual(command[command.index("--mjpeg-jpeg-quality") + 1], "65")
+        self.assertNotIn("--no-mjpeg-enable-overlay", command)
+
+    def test_overlay_command_can_disable_mjpeg_overlay_explicitly(self):
+        camera = RegisteredCamera(
+            camera_id="9",
+            camera_login_id="icu_01",
+            rtsp_url="rtsp://cctv/icu",
+            source_type="REAL_RTSP",
+            assigned_video_path=None,
+        )
+        config = replace(
+            fake_config(Path("video_pool")),
+            mjpeg_enabled=True,
+            mjpeg_enable_overlay=False,
+        )
+
+        command = build_overlay_command(camera, "rtsp://cctv/icu", 8012, config)
+
         self.assertIn("--no-mjpeg-enable-overlay", command)
 
     def test_overlay_registry_reports_mjpeg_camera_path(self):
