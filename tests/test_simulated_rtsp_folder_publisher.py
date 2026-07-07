@@ -8,6 +8,7 @@ from ai.registered_cameras import RegisteredCamera
 from ai.ffmpeg_command import build_ffmpeg_command
 from ai.simulated_rtsp_publisher import FfmpegRestartPolicy, PublisherLock, select_initial_ffmpeg_mode, tail_text_file
 from scripts.start_simulated_rtsp_from_folder import build_ffmpeg_cmd, parse_arguments, stable_video_index, video_for_camera
+from ai.simulated_rtsp_sources import filter_video_files
 
 
 class SimulatedRtspFolderPublisherTest(unittest.TestCase):
@@ -181,6 +182,40 @@ class SimulatedRtspFolderPublisherTest(unittest.TestCase):
             selected = video_for_camera(camera, [short_video], 0)
 
         self.assertEqual(selected, full_video)
+
+    def test_video_for_camera_ignores_backend_assigned_chromakey_video(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            video_pool = Path(temp_dir)
+            chromakey_video = video_pool / "indoor_chromakey_faint.mp4"
+            normal_video = video_pool / "outdoor_real_faint.mp4"
+            chromakey_video.write_bytes(b"chromakey")
+            normal_video.write_bytes(b"normal")
+            camera = RegisteredCamera(
+                camera_id="1",
+                camera_login_id="cam_01",
+                rtsp_url=None,
+                source_type="SIMULATED_RTSP",
+                assigned_video_path=str(chromakey_video),
+            )
+
+            selected = video_for_camera(camera, [normal_video], 0)
+
+        self.assertEqual(selected, normal_video)
+
+    def test_filter_video_files_excludes_chromakey_candidates(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            chromakey_video = root / "indoor_chromakey" / "fall.mp4"
+            normal_video = root / "outdoor" / "fall.mp4"
+            chromakey_video.parent.mkdir()
+            normal_video.parent.mkdir()
+            chromakey_video.write_bytes(b"chromakey")
+            normal_video.write_bytes(b"normal")
+
+            matching, excluded = filter_video_files([chromakey_video, normal_video], None, None, None)
+
+        self.assertEqual(matching, [normal_video])
+        self.assertEqual(excluded, [chromakey_video])
 
     def test_video_for_camera_ignores_assigned_video_outside_video_pool(self):
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -303,6 +303,30 @@ class RegisteredCameraRunnerTest(unittest.TestCase):
         self.assertEqual(overlay_port_for_camera_login_id("cam_05", config), 8014)
         self.assertEqual(overlay_port_for_camera_login_id("cam_12", config), 8021)
 
+    def test_simulated_rtsp_ignores_backend_assigned_chromakey_video(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            video_pool = Path(temp_dir)
+            chromakey_video = video_pool / "indoor_chromakey_faint.mp4"
+            normal_video = video_pool / "outdoor_real_faint.mp4"
+            chromakey_video.write_bytes(b"chromakey")
+            normal_video.write_bytes(b"normal")
+            camera = RegisteredCamera(
+                camera_id="7",
+                camera_login_id="cam_01",
+                rtsp_url=None,
+                source_type="SIMULATED_RTSP",
+                assigned_video_path=str(chromakey_video),
+            )
+            config = replace(fake_config(video_pool), domain=None)
+
+            rtsp_url, ffmpeg_command = input_rtsp_for_camera(camera, config)
+
+        self.assertEqual(rtsp_url, "rtsp://gpu-pc:8554/cam_01")
+        self.assertIsNotNone(ffmpeg_command)
+        assert ffmpeg_command is not None
+        self.assertIn(str(normal_video), ffmpeg_command)
+        self.assertNotIn(str(chromakey_video), ffmpeg_command)
+
     def test_start_camera_worker_reports_overlay_when_mjpeg_enabled(self):
         camera = RegisteredCamera(
             camera_id="9",
