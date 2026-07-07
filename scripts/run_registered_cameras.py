@@ -189,7 +189,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--mjpeg-enable-overlay",
         action=argparse.BooleanOptionalAction,
-        default=env_bool("MJPEG_ENABLE_OVERLAY", False),
+        default=env_bool("MJPEG_ENABLE_OVERLAY", True),
     )
     parser.add_argument("--print-events", action="store_true")
     parser.add_argument("--dry-run", action="store_true")

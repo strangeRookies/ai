@@ -132,7 +132,7 @@ class RunnerConfig:
     mjpeg_height: int = 360
     mjpeg_jpeg_quality: int = 70
     mjpeg_base_path: str = "/mjpeg"
-    mjpeg_enable_overlay: bool = False
+    mjpeg_enable_overlay: bool = True
     skip_ffmpeg_spawn: bool = False
     overlay_public_base_url: str | None = None
     overlay_report_enabled: bool = False
