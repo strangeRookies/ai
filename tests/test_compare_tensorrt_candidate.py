@@ -2,10 +2,16 @@ from __future__ import annotations
 
 import unittest
 
-from scripts.compare_tensorrt_candidate import adoption_recommendation
+from scripts.compare_tensorrt_candidate import BenchmarkArgs, adoption_recommendation, parse_args
 
 
 class TensorRtDecisionTest(unittest.TestCase):
+    def test_engine_export_defaults_to_fp32(self) -> None:
+        args = parse_args(["--video", "sample_videos/sample.mp4", "--export-engine"])
+
+        self.assertIsInstance(args, BenchmarkArgs)
+        self.assertFalse(args.engine_half)
+
     def test_recommends_adoption_when_latency_improves_enough(self) -> None:
         result = adoption_recommendation(speedup=1.5, latency_delta_ms=12.0, torch_fps=8.0, tensorrt_fps=13.0)
 
