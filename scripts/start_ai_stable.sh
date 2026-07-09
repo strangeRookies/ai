@@ -7,6 +7,9 @@ MQTT_HOST="${1:-15.165.248.37}"
 MQTT_PORT="${2:-1883}"
 DEFAULT_ACTION_MODEL="runs/evaluation_manifest_v2_bbox54_balanced/retrained_best.pt"
 ACTION_MODEL="${3:-${ACTION_MODEL:-$DEFAULT_ACTION_MODEL}}"
+DEFAULT_YOLO_MODEL="yolo26n-pose.engine"
+FALLBACK_YOLO_MODEL="yolo26n-pose.pt"
+YOLO_MODEL="${YOLO_MODEL_PATH:-${YOLO_MODEL:-$DEFAULT_YOLO_MODEL}}"
 
 cd "$REMOTE_ROOT"
 
@@ -37,7 +40,19 @@ if [ ! -f "$ACTION_MODEL" ]; then
     exit 1
 fi
 
+if [ ! -f "$YOLO_MODEL" ]; then
+    if [ "$YOLO_MODEL" = "$DEFAULT_YOLO_MODEL" ] && [ -f "$FALLBACK_YOLO_MODEL" ]; then
+        echo "[start_ai_stable][warning] TensorRT engine not found: $YOLO_MODEL"
+        echo "[start_ai_stable][warning] Falling back to Torch model: $FALLBACK_YOLO_MODEL"
+        YOLO_MODEL="$FALLBACK_YOLO_MODEL"
+    else
+        echo "[start_ai_stable][error] YOLO_MODEL not found: $YOLO_MODEL"
+        exit 1
+    fi
+fi
+
 echo "[start_ai_stable] Using ACTION_MODEL=$ACTION_MODEL"
+echo "[start_ai_stable] Using YOLO_MODEL=$YOLO_MODEL"
 
 WEBRTC_SYNC_ARGS=()
 if [ "${AI_WEBRTC_SYNC_ENABLED:-false}" = "true" ] || [ "${AI_WEBRTC_SYNC_ENABLED:-false}" = "1" ]; then
@@ -66,7 +81,7 @@ nohup python scripts/run_registered_cameras.py \
     --video-pool /home/$USER/yolo_training/ai_fall_experiments/data/raw \
     --overlay-report-enabled \
     --detector-mode real \
-    --yolo-model yolo26n-pose.pt \
+    --yolo-model "$YOLO_MODEL" \
     --action-model "$ACTION_MODEL" \
     --publisher mqtt \
     --mqtt-host "$MQTT_HOST" \

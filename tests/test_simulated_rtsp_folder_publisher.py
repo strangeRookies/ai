@@ -81,6 +81,15 @@ class SimulatedRtspFolderPublisherTest(unittest.TestCase):
         self.assertIn("ACTION_MODEL checkpoint not found", script)
         self.assertIn("--action-model \"$ACTION_MODEL\"", script)
 
+    def test_stable_start_script_prefers_tensorrt_with_torch_fallback(self):
+        script = Path("scripts/start_ai_stable.sh").read_text(encoding="utf-8")
+
+        self.assertIn("DEFAULT_YOLO_MODEL=\"yolo26n-pose.engine\"", script)
+        self.assertIn("FALLBACK_YOLO_MODEL=\"yolo26n-pose.pt\"", script)
+        self.assertIn("TensorRT engine not found", script)
+        self.assertIn("Falling back to Torch model", script)
+        self.assertIn("--yolo-model \"$YOLO_MODEL\"", script)
+
     def test_click_launcher_cleanup_kills_relative_ai_processes(self):
         for script_path in (Path("AI_실행_딸깍.bat"), Path("../AI_실행_딸깍.bat")):
             with self.subTest(script_path=script_path):
