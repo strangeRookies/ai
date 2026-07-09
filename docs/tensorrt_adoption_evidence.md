@@ -8,15 +8,26 @@ TensorRT should be adopted only if local measurements show that YOLO pose infere
 
 This comparison does not change the running worker path. It benchmarks the current `.pt` model and an optional TensorRT `.engine` file against the same video on the GPU PC.
 
-First, connect to the GPU PC and activate the virtual environment. Do not use `cd strange_ai` from `~`; the current GPU-PC checkout is under `/home/welabs/yolo_training/strange_ai_lstm`.
+### 1. Connect to GPU PC & Activate Environment
+
+Do not run the benchmark locally or use `cd strange_ai` from `~`. Connect to the remote GPU PC and navigate to the project directory:
 
 ```bash
+# SSH connection to GPU PC
 ssh welabs@58.151.205.220
+
+# Navigate to project checkout
 cd /home/welabs/yolo_training/strange_ai_lstm
+
+# Activate virtual environment
 source .venv/bin/activate
 ```
 
-Confirm the files before running:
+*(Note: If `python` is not available after activating the venv, use `python3` instead.)*
+
+### 2. Confirm Required Files
+
+Before running the script, verify that the required files and scripts exist in the repository:
 
 ```bash
 pwd
@@ -25,57 +36,60 @@ ls yolo26n-pose.pt
 ls sample_videos
 ```
 
-Run the Torch baseline first:
+### 3. Run Torch Baseline
+
+Run the baseline benchmark to record PyTorch inference latency. 
 
 ```bash
 python scripts/compare_tensorrt_candidate.py --model yolo26n-pose.pt --video sample_videos/sample.mp4 --max-frames 300
 ```
 
-If the output says `DEFER: No comparable TensorRT result is available.`, that is expected before a valid `.engine` exists. The baseline still writes the Torch row to the report.
+> [!NOTE]
+> If the output says `DEFER: No comparable TensorRT result is available.`, this is expected before a valid `.engine` file exists. The baseline results will still be saved to the report.
 
-If an engine already exists, pass it explicitly:
+### 4. Export TensorRT Engine
 
-```bash
-python scripts/compare_tensorrt_candidate.py --model yolo26n-pose.pt --engine yolo26n-pose.engine --video sample_videos/sample.mp4 --max-frames 300
-```
+Exporting the model to a TensorRT `.engine` file is opt-in. Run this step only after the Torch baseline runs successfully.
 
-Engine export is opt-in. Run it only after the Torch baseline succeeds. The default export is FP32 because TensorRT 11.1.0.106 on the RTX 5080 host failed on the Ultralytics FP16 path with:
-
-```text
-AttributeError: type object 'tensorrt_bindings.tensorrt.BuilderFlag' has no attribute 'FP16'
-```
-
-Run the safer FP32 export first:
+#### Option A: FP32 Export (Recommended / Safer)
+The default export is FP32. TensorRT 11.1.0.106 on the RTX 5080 host might fail on the FP16 path with an `AttributeError` (`BuilderFlag` has no attribute `FP16`). Run the safer FP32 path first:
 
 ```bash
 python scripts/compare_tensorrt_candidate.py --model yolo26n-pose.pt --video sample_videos/sample.mp4 --max-frames 300 --export-engine
 ```
 
-If FP32 succeeds and the comparison result is promising, FP16 can be tested explicitly:
+#### Option B: FP16 Export (Optional)
+If FP32 succeeds and you want to test FP16 explicitly:
 
 ```bash
 python scripts/compare_tensorrt_candidate.py --model yolo26n-pose.pt --video sample_videos/sample.mp4 --max-frames 300 --export-engine --engine-half
 ```
 
-Treat the FP16 `BuilderFlag.FP16` failure as an environment/package compatibility issue, not as evidence that TensorRT is slower. The risk-free decision should be based on Torch vs a successfully generated `.engine`.
+> [!TIP]
+> * During the first export, Ultralytics may automatically install missing packages (e.g., `onnx`, `onnxslim`, `onnxruntime-gpu`, `tensorrt-cu13`). 
+> * If it prints `Restart runtime or rerun command for updates to take effect`, simply rerun the export command after the installation finishes.
+> * Treat the FP16 `BuilderFlag.FP16` failure as a package compatibility issue, not as evidence that TensorRT is slower. The final decision should compare Torch against a successfully generated `.engine`.
 
-Ultralytics may install missing packages such as `onnx`, `onnxslim`, `onnxruntime-gpu`, or `tensorrt-cu13` during the first export. If it prints `Restart runtime or rerun command for updates to take effect`, rerun the same export command after it finishes. Then run the explicit engine comparison command again.
+### 5. Run Comparison Benchmark
 
-Reports are written to `benchmark/results/tensorrt_candidate/`.
+Once the `.engine` file is generated, run the explicit comparison again:
 
-Check the report:
+```bash
+# For FP32 comparison
+python scripts/compare_tensorrt_candidate.py --model yolo26n-pose.pt --engine yolo26n-pose.engine --video sample_videos/sample.mp4 --max-frames 300
+```
+
+### 6. Verify Comparison Report
+
+Reports are saved to `benchmark/results/tensorrt_candidate/`. Run the following command to check the results:
 
 ```bash
 cat benchmark/results/tensorrt_candidate/tensorrt_candidate_comparison.md
 ```
 
-If `python` is not available but the venv is active, use:
+*(Reminder: Always use forward slashes `/` for paths on Linux/Bash, not Windows backslashes `\`.)*
 
-```bash
-python3 scripts/compare_tensorrt_candidate.py --model yolo26n-pose.pt --video sample_videos/sample.mp4 --max-frames 300
-```
-
-On bash/Linux paths, use `/`, not Windows `\`.
+---
 
 ## Decision Rule
 
