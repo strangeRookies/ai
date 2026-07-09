@@ -28,7 +28,10 @@ COLUMNS = [
 
 
 def load_metrics(path):
-    return json.loads(path.read_text(encoding="utf-8"))
+    row = json.loads(path.read_text(encoding="utf-8"))
+    row["_source_path"] = str(path)
+    row["_source_mtime"] = path.stat().st_mtime
+    return row
 
 
 def value_for(row, column):
@@ -59,6 +62,22 @@ def print_table(rows):
         print(" | ".join(cells))
 
 
+def is_valid_measurement(row):
+    return int(row.get("frames_processed") or 0) > 0 and float(row.get("runtime_seconds") or 0.0) > 1.0
+
+
+def select_latest_valid_per_camera(rows):
+    latest = {}
+    for row in rows:
+        if not is_valid_measurement(row):
+            continue
+        camera_id = row.get("camera_id") or row.get("rtsp_url") or row.get("_source_path")
+        previous = latest.get(camera_id)
+        if previous is None or float(row.get("_source_mtime") or 0.0) > float(previous.get("_source_mtime") or 0.0):
+            latest[camera_id] = row
+    return [latest[key] for key in sorted(latest)]
+
+
 def decision_hint(rows, target_fps):
     if any(float(row.get("avg_frame_read_ms") or 0.0) > 80.0 for row in rows):
         return "RTSP/read slow or unstable -> investigate GStreamer."
@@ -75,6 +94,7 @@ def parse_args():
     parser.add_argument("--dir", default="runs/verification")
     parser.add_argument("--pattern", default="cam*_rtsp_metrics*.json")
     parser.add_argument("--target-fps", type=float, default=10.0)
+    parser.add_argument("--all", action="store_true", help="Show every matching file, including stale and zero-frame rows.")
     return parser.parse_args()
 
 
@@ -84,6 +104,10 @@ def main():
     if not paths:
         raise SystemExit(f"No metrics JSON files found in {args.dir} matching {args.pattern}")
     rows = [load_metrics(path) for path in paths]
+    if not args.all:
+        rows = select_latest_valid_per_camera(rows)
+        if not rows:
+            raise SystemExit("No valid metrics rows found. Use --all to inspect stale or failed rows.")
     print_table(rows)
     print()
     print(f"Decision hint: {decision_hint(rows, args.target_fps)}")

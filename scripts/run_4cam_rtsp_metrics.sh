@@ -15,19 +15,20 @@ CAMERA_COOLDOWN_SECONDS="${CAMERA_COOLDOWN_SECONDS:-10}"
 
 mkdir -p "$OUTPUT_DIR"
 
-suffix=""
-if [[ "$MAX_FRAMES" != "300" ]]; then
-  suffix="_${MAX_FRAMES}"
-fi
+model_label="$(basename "$YOLO_MODEL")"
+model_label="${model_label%.*}"
+model_label="${model_label//[^A-Za-z0-9_-]/_}"
+suffix="_${model_label}_${MAX_FRAMES}"
 
 for idx in 1 2 3 4; do
-  camera_id="camera-${idx}"
-  rtsp_url="rtsp://localhost:8554/cam${idx}"
-  output="${OUTPUT_DIR}/cam${idx}_rtsp_metrics${suffix}.json"
+  camera_id="$(printf "cam_%02d" "$idx")"
+  rtsp_url="rtsp://localhost:8554/${camera_id}"
+  output="${OUTPUT_DIR}/${camera_id}_rtsp_metrics${suffix}.json"
   echo "[4cam-metrics] ${camera_id} ${rtsp_url} -> ${output}"
   python -u scripts/run_rtsp_inference.py \
     --rtsp-url "$rtsp_url" \
     --camera-id "$camera_id" \
+    --camera-login-id "$camera_id" \
     --max-frames "$MAX_FRAMES" \
     --detector-mode real \
     --yolo-model "$YOLO_MODEL" \

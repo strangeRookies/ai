@@ -143,7 +143,7 @@ def maybe_export_engine(args: BenchmarkArgs) -> tuple[Path | None, str]:
 
 def compare(torch_result: BackendResult, tensorrt_result: BackendResult | None) -> Comparison:
     if tensorrt_result is None or tensorrt_result.status != "OK" or torch_result.status != "OK":
-        return Comparison(torch_result, tensorrt_result, 0.0, 0.0, "DEFER: No comparable TensorRT result is available.")
+        return Comparison(torch_result, tensorrt_result, 0.0, 0.0, non_comparable_recommendation(torch_result, tensorrt_result))
     speedup = torch_result.avg_latency_ms / max(tensorrt_result.avg_latency_ms, 0.001)
     latency_delta = torch_result.avg_latency_ms - tensorrt_result.avg_latency_ms
     recommendation = adoption_recommendation(speedup, latency_delta, torch_result.fps, tensorrt_result.fps)
@@ -158,6 +158,14 @@ def adoption_recommendation(speedup: float, latency_delta_ms: float, torch_fps: 
     if speedup < 1.15:
         return "DEFER: Speedup is too small. Check RTSP decode, frame queue, and LSTM bottlenecks first."
     return "MEASURE_MORE: Gain exists, but run a long 4-camera test before runtime adoption."
+
+
+def non_comparable_recommendation(torch_result: BackendResult, tensorrt_result: BackendResult | None) -> str:
+    tensorrt_status = "MISSING: no TensorRT row" if tensorrt_result is None else tensorrt_result.status
+    return (
+        "DEFER: No comparable TensorRT result is available. "
+        f"torch_status={torch_result.status}; tensorrt_status={tensorrt_status}"
+    )
 
 
 def failed_result(backend: str, model_path: Path, status: str) -> BackendResult:
@@ -219,8 +227,18 @@ def main(argv: list[str]) -> int:
     csv_path, md_path = write_reports(comparison, args.output_dir)
     print(f"Saved CSV: {csv_path}")
     print(f"Saved Markdown: {md_path}")
+    print_backend_result(torch_result)
+    if tensorrt_result is not None:
+        print_backend_result(tensorrt_result)
     print(comparison.recommendation)
     return 0
+
+
+def print_backend_result(result: BackendResult) -> None:
+    print(
+        f"{result.backend}: status={result.status}; frames={result.frames}; "
+        f"avg_latency_ms={result.avg_latency_ms:.3f}; fps={result.fps:.3f}"
+    )
 
 
 if __name__ == "__main__":
