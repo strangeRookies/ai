@@ -144,7 +144,7 @@ def build_confirmed_event_payload(
     payload: dict[str, JsonValue] = {
         "schemaVersion": SCHEMA_VERSION,
         "messageType": "event",
-        "eventId": event_id or _default_event_id(stream_id, emitted_at),
+        "eventId": event_id or _default_event_id(stream_id, emitted_at, frame_id, tracking_id),
         "timestampMs": emitted_at,
         "timestamp": emitted_at / 1000.0,
         "streamId": stream_id,
@@ -408,6 +408,11 @@ def _clamp_value(value: float, lower: float, upper: float) -> float:
     return max(lower, min(upper, value))
 
 
-def _default_event_id(stream_id: str, timestamp_ms: int) -> str:
+def _default_event_id(stream_id: str, timestamp_ms: int, frame_id: int | None, tracking_id: int | None) -> str:
     event_date = time.strftime("%Y%m%d", time.localtime(timestamp_ms / 1000.0))
-    return f"evt-{event_date}-{stream_id}-{timestamp_ms}"
+    parts = ["evt", event_date, stream_id, str(timestamp_ms)]
+    if frame_id is not None:
+        parts.append(f"f{frame_id}")
+    if tracking_id is not None:
+        parts.append(f"t{tracking_id}")
+    return "-".join(parts)

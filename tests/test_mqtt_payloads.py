@@ -224,6 +224,30 @@ class MqttPayloadsTest(unittest.TestCase):
         self.assertEqual(payload["bbox"], [120, 80, 260, 360])
         self.assertEqual(payload["track_id"], 7)
 
+    def test_default_event_id_distinguishes_tracks_in_same_frame(self):
+        common = {
+            "stream_id": "cam_05",
+            "frame_width": 1280,
+            "frame_height": 720,
+            "timestamp_ms": 1783571870313,
+            "frame_id": 412,
+            "prediction": {"label": "Faint", "score": 0.91},
+            "boxes": [],
+        }
+
+        first = build_confirmed_event_payload(
+            **common,
+            sequence={"bbox": [1, 2, 3, 4], "track_id": 1},
+        )
+        second = build_confirmed_event_payload(
+            **common,
+            sequence={"bbox": [1, 2, 3, 4], "track_id": 2},
+        )
+
+        self.assertEqual(first["eventId"], "evt-20260709-cam_05-1783571870313-f412-t1")
+        self.assertEqual(second["eventId"], "evt-20260709-cam_05-1783571870313-f412-t2")
+        self.assertNotEqual(first["eventId"], second["eventId"])
+
     def test_payload_events_preserve_sequence_keypoints(self):
         payload = build_confirmed_event_payload(
             stream_id="cam_11",
