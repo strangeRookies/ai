@@ -34,6 +34,12 @@ class RegisteredCameraRunnerTest(unittest.TestCase):
 
         self.assertTrue(config.mjpeg_enable_overlay)
 
+    def test_registered_camera_runner_defaults_to_tracking_stability_fallback_enabled(self):
+        with patch.dict("os.environ", {}, clear=True):
+            config = config_from_args(parse_args([]))
+
+        self.assertTrue(config.tracking_stability_fallback)
+
     def test_camera_api_config_log_includes_effective_endpoint(self):
         config = replace(fake_config(Path("video_pool")), backend_base_url="http://localhost:18080")
 
@@ -141,7 +147,7 @@ class RegisteredCameraRunnerTest(unittest.TestCase):
         self.assertEqual(command[command.index("--track-buffer") + 1], "150")
         self.assertEqual(command[command.index("--bbox-smoothing-alpha") + 1], "0.45")
 
-    def test_overlay_command_passes_tracking_stability_fallback_only_when_enabled(self):
+    def test_overlay_command_enables_tracking_stability_fallback_by_default(self):
         camera = RegisteredCamera(
             camera_id="9",
             camera_login_id="icu_01",
@@ -151,15 +157,15 @@ class RegisteredCameraRunnerTest(unittest.TestCase):
         )
 
         default_command = build_overlay_command(camera, "rtsp://cctv/icu", 8012, fake_config(Path("video_pool")))
-        fallback_command = build_overlay_command(
+        disabled_command = build_overlay_command(
             camera,
             "rtsp://cctv/icu",
             8012,
-            replace(fake_config(Path("video_pool")), tracking_stability_fallback=True),
+            replace(fake_config(Path("video_pool")), tracking_stability_fallback=False),
         )
 
-        self.assertNotIn("--tracking-stability-fallback", default_command)
-        self.assertIn("--tracking-stability-fallback", fallback_command)
+        self.assertIn("--tracking-stability-fallback", default_command)
+        self.assertNotIn("--tracking-stability-fallback", disabled_command)
 
     def test_overlay_command_can_enable_tracking_stability_fallback_for_one_camera(self):
         cam4 = RegisteredCamera(
@@ -302,6 +308,30 @@ class RegisteredCameraRunnerTest(unittest.TestCase):
         self.assertEqual(overlay_port_for_camera_login_id("cam_02", config), 8011)
         self.assertEqual(overlay_port_for_camera_login_id("cam_05", config), 8014)
         self.assertEqual(overlay_port_for_camera_login_id("cam_12", config), 8021)
+
+    def test_simulated_rtsp_ignores_backend_assigned_chromakey_video(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            video_pool = Path(temp_dir)
+            chromakey_video = video_pool / "indoor_chromakey_faint.mp4"
+            normal_video = video_pool / "outdoor_real_faint.mp4"
+            chromakey_video.write_bytes(b"chromakey")
+            normal_video.write_bytes(b"normal")
+            camera = RegisteredCamera(
+                camera_id="7",
+                camera_login_id="cam_01",
+                rtsp_url=None,
+                source_type="SIMULATED_RTSP",
+                assigned_video_path=str(chromakey_video),
+            )
+            config = replace(fake_config(video_pool), domain=None)
+
+            rtsp_url, ffmpeg_command = input_rtsp_for_camera(camera, config)
+
+        self.assertEqual(rtsp_url, "rtsp://gpu-pc:8554/cam_01")
+        self.assertIsNotNone(ffmpeg_command)
+        assert ffmpeg_command is not None
+        self.assertIn(str(normal_video), ffmpeg_command)
+        self.assertNotIn(str(chromakey_video), ffmpeg_command)
 
     def test_start_camera_worker_reports_overlay_when_mjpeg_enabled(self):
         camera = RegisteredCamera(

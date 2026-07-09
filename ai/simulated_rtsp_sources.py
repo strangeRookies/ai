@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import sys
 from pathlib import Path
 from typing import Final
@@ -10,6 +11,10 @@ from ai.registered_cameras import RegisteredCamera
 
 
 DEFAULT_STREAM_DOMAIN: Final = "outside"
+CHROMAKEY_PATH_PATTERN: Final = re.compile(
+    r"(indoor_chromakey|croki|크로마키|chroma|chromakey|green[_ -]?screen|studio|chm)",
+    re.IGNORECASE,
+)
 
 
 def scan_video_directory(directory_path: str) -> list[Path]:
@@ -24,6 +29,10 @@ def scan_video_directory(directory_path: str) -> list[Path]:
     return video_files
 
 
+def is_chromakey_video_path(video_path: Path) -> bool:
+    return CHROMAKEY_PATH_PATTERN.search(str(video_path)) is not None
+
+
 def filter_video_files(
     video_files: list[Path],
     domain: str | None,
@@ -36,6 +45,9 @@ def filter_video_files(
     for p in video_files:
         path_lower = str(p.absolute()).lower()
         matched = True
+
+        if is_chromakey_video_path(p):
+            matched = False
         
         if domain and domain.lower() not in path_lower:
             matched = False
@@ -101,7 +113,7 @@ def resolve_assigned_video_path(camera: RegisteredCamera, video_pool: Path, repo
 
     pool_root = resolved_video_pool(video_pool, repo_root)
     for candidate in assigned_video_candidates(camera.assigned_video_path, pool_root, repo_root):
-        if candidate.exists() and candidate.is_file() and is_path_under(candidate, pool_root):
+        if candidate.exists() and candidate.is_file() and is_path_under(candidate, pool_root) and not is_chromakey_video_path(candidate):
             return candidate
 
     return None

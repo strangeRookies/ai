@@ -358,6 +358,7 @@ def _process_frame_impl(
     summary["latest_frame_bbox"] = len(boxes)
     summary["latest_frame_keypoints"] = frame_keypoint_count
     summary["active_tracks"] = active_tracks
+    summary["active_track_ids"] = sorted(list({int(item["track_id"]) for item in detections if item.get("track_id") is not None}))
     summary["max_active_tracks"] = max(summary.get("max_active_tracks", 0), active_tracks)
     if tracker is not None:
         update_tracking_summary(summary, tracker.diagnostics())
@@ -970,13 +971,17 @@ class OverlayWorker:
                 mjpeg_summary = self.state.status()["summary"]
                 latest_cap = mjpeg_summary.get("latest_captured_at_ms")
                 last_frame_age_ms = int(time.time() * 1000 - latest_cap) if latest_cap else -1
+                track_ids = mjpeg_summary.get("active_track_ids", [])
                 print(
                     f"[heartbeat-inference] camera={self.camera_login_id} "
-                    f"inference_count={inference_count} "
-                    f"mqtt_publish_count={mqtt_publish_count} "
-                    f"fps={inference_count / (now - last_heartbeat_time):.1f} "
-                    f"dropped={self.queue.dropped_frame_count} "
+                    f"frame_id={frame_packet.frame_id} "
+                    f"processed_frame_count={mjpeg_summary.get('frames_processed', 0)} "
+                    f"detection_count={mjpeg_summary.get('bbox_detections', 0)} "
+                    f"active_tracks={mjpeg_summary.get('active_tracks', 0)} "
+                    f"track_ids={track_ids} "
+                    f"dropped_frame_count={self.queue.dropped_frame_count} "
                     f"mjpeg_frame_count={mjpeg_summary.get('mjpeg_frame_count', 0)} "
+                    f"last_processed_at={mjpeg_summary.get('latest_processed_at_ms', 0)} "
                     f"last_mjpeg_sent_at={mjpeg_summary.get('last_mjpeg_sent_at', 0.0):.3f} "
                     f"last_frame_age_ms={last_frame_age_ms} "
                     f"stream_clients={mjpeg_summary.get('mjpeg_client_count', 0)} "
@@ -1028,14 +1033,19 @@ def main():
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8010)
     parser.add_argument("--mjpeg-fps", type=float, default=float(os.getenv("MJPEG_FPS", "8.0")))
-    parser.add_argument("--mjpeg-width", type=int, default=int(os.getenv("MJPEG_WIDTH", "640")))
-    parser.add_argument("--mjpeg-height", type=int, default=int(os.getenv("MJPEG_HEIGHT", "360")))
-    parser.add_argument("--mjpeg-jpeg-quality", type=int, default=int(os.getenv("MJPEG_JPEG_QUALITY", "70")))
+    parser.add_argument("--mjpeg-width", type=int, default=int(os.getenv("MJPEG_WIDTH", "1280")))
+    parser.add_argument("--mjpeg-height", type=int, default=int(os.getenv("MJPEG_HEIGHT", "720")))
+    parser.add_argument("--mjpeg-jpeg-quality", type=int, default=int(os.getenv("MJPEG_JPEG_QUALITY", "80")))
     parser.add_argument("--mjpeg-base-path", default=os.getenv("MJPEG_BASE_PATH", "/mjpeg"))
     parser.add_argument(
         "--mjpeg-enable-overlay",
         action=argparse.BooleanOptionalAction,
         default=os.getenv("MJPEG_ENABLE_OVERLAY", "true").lower() in {"1", "true", "yes", "on"},
+    )
+    parser.add_argument(
+        "--mjpeg-debug-watermark",
+        action=argparse.BooleanOptionalAction,
+        default=os.getenv("MJPEG_DEBUG_WATERMARK", "false").lower() in {"1", "true", "yes", "on"},
     )
     parser.add_argument(
         "--mjpeg-debug",
@@ -1094,7 +1104,7 @@ def main():
     parser.add_argument(
         "--tracking-stability-fallback",
         action=argparse.BooleanOptionalAction,
-        default=os.getenv("TRACKING_STABILITY_FALLBACK", "false").lower() in {"1", "true", "yes", "on"},
+        default=os.getenv("TRACKING_STABILITY_FALLBACK", "true").lower() in {"1", "true", "yes", "on"},
         help="Use a lightweight bbox continuity tracker after supervision to stabilize final track_id values.",
     )
     parser.add_argument("--overlay-debug-tracks", action="store_true")

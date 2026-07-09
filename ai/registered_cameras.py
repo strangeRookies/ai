@@ -119,7 +119,7 @@ class RunnerConfig:
     dry_run: bool
     rtsp_probe_enabled: bool
     refresh_interval_seconds: float
-    tracking_stability_fallback: bool = False
+    tracking_stability_fallback: bool = True
     tracking_stability_fallback_camera_ids: tuple[str, ...] = ()
     mjpeg_debug: bool = False
     webrtc_sync_enabled: bool = False
@@ -128,11 +128,12 @@ class RunnerConfig:
     webrtc_sync_token: str | None = None
     mjpeg_enabled: bool = False
     mjpeg_fps: float = 8.0
-    mjpeg_width: int = 640
-    mjpeg_height: int = 360
-    mjpeg_jpeg_quality: int = 70
+    mjpeg_width: int = 1280
+    mjpeg_height: int = 720
+    mjpeg_jpeg_quality: int = 80
     mjpeg_base_path: str = "/mjpeg"
     mjpeg_enable_overlay: bool = True
+    mjpeg_debug_watermark: bool = False
     skip_ffmpeg_spawn: bool = False
     overlay_public_base_url: str | None = None
     overlay_report_enabled: bool = False
@@ -326,13 +327,16 @@ def resolve_simulated_video(camera: RegisteredCamera, video_pool: Path, config: 
 
     if camera.assigned_video_path:
         pool_root = resolved_video_pool(video_pool, REPO_ROOT)
+        from ai.simulated_rtsp_sources import is_chromakey_video_path
         for candidate in assigned_video_candidates(camera.assigned_video_path, video_pool, REPO_ROOT):
             if candidate.exists() and candidate.is_file():
-                if is_path_under(candidate, pool_root):
-                    return candidate
-                raise RuntimeError(
-                    f"assignedVideoPath must stay under video_pool for camera_login_id={camera.camera_login_id}"
-                )
+                if not is_path_under(candidate, pool_root):
+                    raise RuntimeError(
+                        f"assignedVideoPath must stay under video_pool for camera_login_id={camera.camera_login_id}"
+                    )
+                if is_chromakey_video_path(candidate):
+                    continue
+                return candidate
 
     # Load and filter pool videos
     if not video_pool.exists():
@@ -350,7 +354,11 @@ def resolve_simulated_video(camera: RegisteredCamera, video_pool: Path, config: 
     if not video_files:
         raise RuntimeError(f"no matching videos found in pool {video_pool}")
 
-    from ai.simulated_rtsp_sources import stable_video_index, estimate_video_metadata
+    from ai.simulated_rtsp_sources import estimate_video_metadata, is_chromakey_video_path, stable_video_index
+    video_files = [video for video in video_files if not is_chromakey_video_path(video)]
+    if not video_files:
+        raise RuntimeError(f"no non-chromakey videos found in pool {video_pool}")
+
     idx = stable_video_index(camera.camera_login_id, len(video_files))
     assigned = video_files[idx]
 
@@ -478,6 +486,8 @@ def build_overlay_command(
     )
     if not config.mjpeg_enable_overlay:
         command.append("--no-mjpeg-enable-overlay")
+    if config.mjpeg_debug_watermark:
+        command.append("--mjpeg-debug-watermark")
     optional_pairs = [
         ("--mqtt-host", config.mqtt_host),
         ("--mqtt-port", str(config.mqtt_port) if config.mqtt_port is not None else None),

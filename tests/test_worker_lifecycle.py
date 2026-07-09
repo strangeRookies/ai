@@ -162,7 +162,7 @@ class TestWorkerLifecycle(unittest.TestCase):
         workers = {
             "cam_05": CameraWorker(
                 processes=[MagicMock()],
-                overlay_port=8010,
+                overlay_port=8014,
                 source_signature="REAL_RTSP:rtsp://mock_input|roi:[]|exit_roi:[]",
                 camera_login_id="cam_05",
                 rtsp_url="rtsp://mock_input",
@@ -170,7 +170,7 @@ class TestWorkerLifecycle(unittest.TestCase):
         }
         mock_start.return_value = CameraWorker(
             processes=[MagicMock()],
-            overlay_port=8010,
+            overlay_port=8014,
             source_signature="new",
             camera_login_id="cam_05",
             rtsp_url="rtsp://mock_input",
@@ -179,7 +179,7 @@ class TestWorkerLifecycle(unittest.TestCase):
         sync_camera_workers(workers, [camera], changed_config)
 
         mock_stop.assert_called_once()
-        mock_start.assert_called_once_with(camera, changed_config, 8010)
+        mock_start.assert_called_once_with(camera, changed_config, 8014)
 
     @patch("ai.registered_camera_workers.stop_processes")
     def test_sync_camera_workers_handles_deletions(self, mock_stop):

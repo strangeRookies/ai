@@ -49,6 +49,79 @@ class MjpegOverlayHttpTest(unittest.TestCase):
             server.server_close()
             thread.join(timeout=2.0)
 
+    def test_health_response_allows_browser_fetch_with_cors_headers(self):
+        state = OverlayState()
+        state.update_frame(np.zeros((8, 8, 3), dtype=np.uint8), {"frames_processed": 7, "active_tracks": 2})
+        server = create_overlay_server(
+            "127.0.0.1",
+            0,
+            state,
+            "cam_05",
+            8.0,
+            base_path="/mjpeg",
+            jpeg_quality=80,
+            width=1280,
+            height=720,
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            host, port = server.server_address
+            with closing(http.client.HTTPConnection(host, port, timeout=2.0)) as connection:
+                connection.request("GET", "/health")
+                response = connection.getresponse()
+                body = response.read()
+
+            self.assertEqual(response.status, 200)
+            self.assertEqual(response.getheader("Access-Control-Allow-Origin"), "*")
+            self.assertEqual(response.getheader("Access-Control-Allow-Methods"), "GET, OPTIONS")
+            self.assertEqual(response.getheader("Access-Control-Allow-Headers"), "Content-Type")
+            self.assertEqual(response.getheader("Cache-Control"), "no-store")
+            self.assertIn(b'"frame_age_ms"', body)
+            self.assertIn(b'"processed_frame_count": 7', body)
+            self.assertIn(b'"mjpeg_frame_count"', body)
+            self.assertIn(b'"active_tracks": 2', body)
+            self.assertIn(b'"output_resolution": "1280x720"', body)
+            self.assertIn(b'"fps": 8.0', body)
+            self.assertIn(b'"jpeg_quality": 80', body)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2.0)
+
+    def test_health_options_preflight_returns_cors_headers_without_body(self):
+        state = OverlayState()
+        server = create_overlay_server(
+            "127.0.0.1",
+            0,
+            state,
+            "cam_05",
+            8.0,
+            base_path="/mjpeg",
+            jpeg_quality=80,
+            width=1280,
+            height=720,
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            host, port = server.server_address
+            with closing(http.client.HTTPConnection(host, port, timeout=2.0)) as connection:
+                connection.request("OPTIONS", "/health")
+                response = connection.getresponse()
+                body = response.read()
+
+            self.assertIn(response.status, {200, 204})
+            self.assertEqual(response.getheader("Access-Control-Allow-Origin"), "*")
+            self.assertEqual(response.getheader("Access-Control-Allow-Methods"), "GET, OPTIONS")
+            self.assertEqual(response.getheader("Access-Control-Allow-Headers"), "Content-Type")
+            self.assertEqual(response.getheader("Cache-Control"), "no-store")
+            self.assertEqual(body, b"")
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2.0)
+
 
 if __name__ == "__main__":
     unittest.main()
