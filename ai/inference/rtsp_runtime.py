@@ -127,6 +127,8 @@ def create_detection_postprocessor(args):
             stability_fallback=bool(getattr(args, "tracking_stability_fallback", False)),
             fallback_max_missing_seconds=getattr(args, "track_max_missing_seconds", 4.0),
             fallback_center_match_ratio=getattr(args, "center_match_ratio", 0.70),
+            session_reconnect=bool(getattr(args, "person_session_reconnect", False)),
+            session_reconnect_max_missing_seconds=getattr(args, "person_session_reconnect_max_missing_seconds", 3.0),
         )
         return SupervisionPostProcessor(config=config), "supervision"
     return SimpleTrackAssigner(

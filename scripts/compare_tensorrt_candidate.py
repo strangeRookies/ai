@@ -42,6 +42,18 @@ class Comparison:
     recommendation: str
 
 
+@dataclass(frozen=True, slots=True)
+class DetectionEquivalence:
+    frame_index: int
+    torch_count: int
+    tensorrt_count: int
+    matched_count: int
+    detection_count_diff: int
+    avg_bbox_iou: float
+    avg_keypoint_confidence_diff: float
+    event_decision_diff: int
+
+
 def parse_args(argv: list[str]) -> BenchmarkArgs:
     parser = argparse.ArgumentParser(
         description="Compare current YOLO .pt inference with an optional TensorRT .engine without changing runtime code."
@@ -172,6 +184,70 @@ def failed_result(backend: str, model_path: Path, status: str) -> BackendResult:
     return BackendResult(backend, str(model_path), status, 0, 0.0, 0.0, 0.0)
 
 
+def compare_detection_equivalence(
+    frame_index: int,
+    torch_detections: list[dict],
+    tensorrt_detections: list[dict],
+    iou_threshold: float = 0.50,
+    torch_event_decision: bool = False,
+    tensorrt_event_decision: bool = False,
+) -> DetectionEquivalence:
+    matches: list[tuple[int, int, float]] = []
+    used_tensorrt: set[int] = set()
+    for torch_index, torch_detection in enumerate(torch_detections):
+        best_index: int | None = None
+        best_iou = 0.0
+        for tensorrt_index, tensorrt_detection in enumerate(tensorrt_detections):
+            if tensorrt_index in used_tensorrt:
+                continue
+            iou = bbox_iou(torch_detection.get("bbox"), tensorrt_detection.get("bbox"))
+            if iou > best_iou:
+                best_iou = iou
+                best_index = tensorrt_index
+        if best_index is not None and best_iou >= iou_threshold:
+            used_tensorrt.add(best_index)
+            matches.append((torch_index, best_index, best_iou))
+    keypoint_diffs = [
+        _optional_float(tensorrt_detections[tensorrt_index].get("keypoint_confidence"), 0.0)
+        - _optional_float(torch_detections[torch_index].get("keypoint_confidence"), 0.0)
+        for torch_index, tensorrt_index, _iou in matches
+    ]
+    return DetectionEquivalence(
+        frame_index=frame_index,
+        torch_count=len(torch_detections),
+        tensorrt_count=len(tensorrt_detections),
+        matched_count=len(matches),
+        detection_count_diff=len(tensorrt_detections) - len(torch_detections),
+        avg_bbox_iou=statistics.fmean([iou for _torch_index, _tensorrt_index, iou in matches]) if matches else 0.0,
+        avg_keypoint_confidence_diff=statistics.fmean(keypoint_diffs) if keypoint_diffs else 0.0,
+        event_decision_diff=int(bool(torch_event_decision) != bool(tensorrt_event_decision)),
+    )
+
+
+def bbox_iou(left, right) -> float:
+    if not left or not right or len(left) < 4 or len(right) < 4:
+        return 0.0
+    lx1, ly1, lx2, ly2 = [float(value) for value in left[:4]]
+    rx1, ry1, rx2, ry2 = [float(value) for value in right[:4]]
+    ix1 = max(lx1, rx1)
+    iy1 = max(ly1, ry1)
+    ix2 = min(lx2, rx2)
+    iy2 = min(ly2, ry2)
+    intersection = max(ix2 - ix1, 0.0) * max(iy2 - iy1, 0.0)
+    left_area = max(lx2 - lx1, 0.0) * max(ly2 - ly1, 0.0)
+    right_area = max(rx2 - rx1, 0.0) * max(ry2 - ry1, 0.0)
+    union = left_area + right_area - intersection
+    if union <= 0.0:
+        return 0.0
+    return intersection / union
+
+
+def _optional_float(value, default: float) -> float:
+    if value is None:
+        return default
+    return float(value)
+
+
 def write_reports(comparison: Comparison, output_dir: Path) -> tuple[Path, Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     csv_path = output_dir / "tensorrt_candidate_comparison.csv"
@@ -215,6 +291,92 @@ def markdown_report(comparison: Comparison) -> str:
     )
 
 
+def markdown_equivalence_report(rows: list[DetectionEquivalence]) -> str:
+    table_rows = "\n".join(
+        "| "
+        f"{row.frame_index} | "
+        f"{row.torch_count} | "
+        f"{row.tensorrt_count} | "
+        f"{row.matched_count} | "
+        f"{row.detection_count_diff} | "
+        f"{row.avg_bbox_iou:.3f} | "
+        f"{row.avg_keypoint_confidence_diff:.4f} | "
+        f"{row.event_decision_diff} |"
+        for row in rows
+    )
+    total_event_diff = sum(row.event_decision_diff for row in rows)
+    avg_detection_diff = statistics.fmean([abs(row.detection_count_diff) for row in rows]) if rows else 0.0
+    avg_keypoint_diff = statistics.fmean([row.avg_keypoint_confidence_diff for row in rows]) if rows else 0.0
+    return (
+        "# TensorRT Detection Equivalence Debug\n\n"
+        "| frame | torch_count | tensorrt_count | matched | detection_count_diff | avg_bbox_iou | keypoint_confidence_diff | event_decision_diff |\n"
+        "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n"
+        f"{table_rows}\n\n"
+        f"- frames_compared: {len(rows)}\n"
+        f"- avg_abs_detection_count_diff: {avg_detection_diff:.3f}\n"
+        f"- avg_keypoint_confidence_diff: {avg_keypoint_diff:.4f}\n"
+        f"- event_decision_diff: {total_event_diff}\n"
+    )
+
+
+def get_yolo_detections(model_path: Path, args: BenchmarkArgs) -> list[list[dict]]:
+    if not model_path.exists():
+        return []
+    try:
+        import cv2
+        from ultralytics import YOLO
+    except ImportError as exc:
+        print(f"ImportError in get_yolo_detections: {exc}", flush=True)
+        return []
+
+    model = YOLO(str(model_path))
+    capture = cv2.VideoCapture(str(args.video))
+    if not capture.isOpened():
+        return []
+
+    frames_detections: list[list[dict]] = []
+    frames = 0
+    try:
+        while frames < args.max_frames:
+            ok, frame = capture.read()
+            if not ok:
+                break
+            results = model.predict(frame, imgsz=args.imgsz, device=args.device, verbose=False)
+            frame_detections: list[dict] = []
+            if results and len(results) > 0:
+                result = results[0]
+                boxes = getattr(result, "boxes", None)
+                keypoints = getattr(result, "keypoints", None)
+                if boxes is not None and boxes.xyxy is not None:
+                    xyxy = boxes.xyxy.cpu().numpy().tolist()
+                    conf = boxes.conf.cpu().numpy().tolist()
+                    
+                    kp_conf = None
+                    if keypoints is not None and getattr(keypoints, "conf", None) is not None:
+                        kp_conf = keypoints.conf.cpu().numpy().tolist()
+                        
+                    for idx in range(len(xyxy)):
+                        bbox = xyxy[idx]
+                        c_val = conf[idx]
+                        
+                        avg_kp_conf = 0.0
+                        if kp_conf is not None and idx < len(kp_conf):
+                            valid_kp = [float(v) for v in kp_conf[idx] if float(v) > 0.0]
+                            if valid_kp:
+                                avg_kp_conf = sum(valid_kp) / len(valid_kp)
+                                
+                        frame_detections.append({
+                            "bbox": bbox,
+                            "confidence": c_val,
+                            "keypoint_confidence": avg_kp_conf,
+                        })
+            frames_detections.append(frame_detections)
+            frames += 1
+    finally:
+        capture.release()
+    return frames_detections
+
+
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
     torch_result = benchmark_yolo(args.model, "torch", args)
@@ -230,6 +392,49 @@ def main(argv: list[str]) -> int:
     print_backend_result(torch_result)
     if tensorrt_result is not None:
         print_backend_result(tensorrt_result)
+        if torch_result.status == "OK" and tensorrt_result.status == "OK" and engine is not None and engine.exists():
+            print("Running detection equivalence comparison...", flush=True)
+            torch_dets = get_yolo_detections(args.model, args)
+            trt_dets = get_yolo_detections(engine, args)
+            
+            eq_records = []
+            min_len = min(len(torch_dets), len(trt_dets))
+            for f_idx in range(min_len):
+                eq = compare_detection_equivalence(
+                    frame_index=f_idx,
+                    torch_detections=torch_dets[f_idx],
+                    tensorrt_detections=trt_dets[f_idx],
+                    iou_threshold=0.50,
+                    torch_event_decision=False,
+                    tensorrt_event_decision=False,
+                )
+                eq_records.append(eq)
+            
+            if eq_records:
+                eq_md = markdown_equivalence_report(eq_records)
+                eq_md_path = args.output_dir / "tensorrt_equivalence_report.md"
+                eq_md_path.write_text(eq_md, encoding="utf-8")
+                print(f"Saved Equivalence Markdown: {eq_md_path}")
+                
+                eq_csv_path = args.output_dir / "tensorrt_equivalence_report.csv"
+                with eq_csv_path.open("w", newline="", encoding="utf-8") as f_csv:
+                    writer = csv.writer(f_csv)
+                    writer.writerow([
+                        "frame", "torch_count", "tensorrt_count", "matched",
+                        "detection_count_diff", "avg_bbox_iou", "keypoint_confidence_diff", "event_decision_diff"
+                    ])
+                    for eq in eq_records:
+                        writer.writerow([
+                            eq.frame_index,
+                            eq.torch_count,
+                            eq.tensorrt_count,
+                            eq.matched_count,
+                            eq.detection_count_diff,
+                            f"{eq.avg_bbox_iou:.3f}",
+                            f"{eq.avg_keypoint_confidence_diff:.4f}",
+                            eq.event_decision_diff
+                        ])
+                print(f"Saved Equivalence CSV: {eq_csv_path}")
     print(comparison.recommendation)
     return 0
 

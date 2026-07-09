@@ -109,6 +109,33 @@ class MqttPayloadsTest(unittest.TestCase):
         self.assertEqual(event["display_id"], 2)
         self.assertEqual(event["displayLabel"], "ID 2")
 
+    def test_overlay_payload_includes_raw_track_and_person_session_ids(self):
+        payload = build_overlay_payload(
+            stream_id="cam_01",
+            frame_width=640,
+            frame_height=360,
+            timestamp_ms=1782180000123,
+            boxes=[
+                {
+                    "x1": 1,
+                    "y1": 2,
+                    "x2": 30,
+                    "y2": 40,
+                    "score": 0.9,
+                    "track_id": 5,
+                    "raw_track_id": 99,
+                    "person_session_id": 5,
+                }
+            ],
+        )
+
+        event = payload["events"][0]
+        self.assertEqual(event["trackingId"], 5)
+        self.assertEqual(event["rawTrackId"], 99)
+        self.assertEqual(event["raw_track_id"], 99)
+        self.assertEqual(event["personSessionId"], 5)
+        self.assertEqual(event["person_session_id"], 5)
+
     def test_overlay_payload_clamps_bbox_to_frame_bounds(self):
         payload = build_overlay_payload(
             stream_id="cam_01",
@@ -247,6 +274,32 @@ class MqttPayloadsTest(unittest.TestCase):
         self.assertEqual(first["eventId"], "evt-20260709-cam_05-1783571870313-f412-t1")
         self.assertEqual(second["eventId"], "evt-20260709-cam_05-1783571870313-f412-t2")
         self.assertNotEqual(first["eventId"], second["eventId"])
+
+    def test_confirmed_event_payload_includes_raw_track_and_person_session_ids(self):
+        payload = build_confirmed_event_payload(
+            stream_id="cam_05",
+            frame_width=1280,
+            frame_height=720,
+            timestamp_ms=1783571870313,
+            frame_id=412,
+            prediction={"label": "Faint", "score": 0.91},
+            sequence={
+                "bbox": [1, 2, 3, 4],
+                "track_id": 5,
+                "raw_track_id": 99,
+                "person_session_id": 5,
+            },
+            boxes=[],
+        )
+
+        self.assertEqual(payload["trackingId"], 5)
+        self.assertEqual(payload["track_id"], 5)
+        self.assertEqual(payload["rawTrackId"], 99)
+        self.assertEqual(payload["raw_track_id"], 99)
+        self.assertEqual(payload["personSessionId"], 5)
+        self.assertEqual(payload["person_session_id"], 5)
+        self.assertEqual(payload["events"][0]["rawTrackId"], 99)
+        self.assertEqual(payload["events"][0]["personSessionId"], 5)
 
     def test_payload_events_preserve_sequence_keypoints(self):
         payload = build_confirmed_event_payload(

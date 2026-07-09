@@ -9,6 +9,147 @@ def tracking_debug_enabled() -> bool:
     return os.getenv("TRACKING_DEBUG", "false").lower() in {"1", "true", "yes", "on"}
 
 
+def build_tracker_startup_record(
+    camera_login_id: str,
+    tracker_backend: str,
+    postprocessor,
+    args,
+) -> dict:
+    diagnostics = _safe_diagnostics(postprocessor)
+    constructor = diagnostics.get("bytetrack_constructor") or {}
+    return {
+        "stage": "tracker_startup",
+        "cameraLoginId": camera_login_id,
+        "trackerBackend": tracker_backend,
+        "trackerClass": postprocessor.__class__.__name__,
+        "trackerObjectId": id(postprocessor),
+        "trackBuffer": int(getattr(args, "track_buffer", 0)),
+        "lostTrackBuffer": int(getattr(args, "track_buffer", 0)),
+        "matchThreshold": float(getattr(args, "match_thresh", 0.0)),
+        "highTrackThreshold": float(getattr(args, "track_thresh", 0.0)),
+        "lowTrackThreshold": float(getattr(args, "track_thresh", 0.0)),
+        "newTrackThreshold": float(getattr(args, "track_thresh", 0.0)),
+        "assumedFps": int(getattr(args, "frame_rate", 0)),
+        "detectorConfidence": float(getattr(args, "detector_conf", 0.0)),
+        "detectorBackend": _detector_backend(str(getattr(args, "yolo_model", ""))),
+        "bytetrackConstructorUsed": dict(constructor.get("used") or {}),
+        "bytetrackConstructorIgnored": dict(constructor.get("ignored") or {}),
+        "bytetrackConstructorSupportedParameters": list(constructor.get("supported_parameters") or []),
+    }
+
+
+def log_tracker_startup(camera_login_id: str, tracker_backend: str, postprocessor, args) -> None:
+    record = build_tracker_startup_record(camera_login_id, tracker_backend, postprocessor, args)
+    print(f"[tracker-startup] {json.dumps(record, ensure_ascii=False)}", flush=True)
+
+
+def build_frame_tracking_record(
+    camera_login_id: str,
+    frame_id: int | None,
+    captured_at_ms: int | None,
+    processed_at_ms: int | None,
+    frame_gap: int | None,
+    dropped_frame_count: int,
+    raw_detections: Sequence[Mapping[str, object]],
+    tracked_detections: Sequence[Mapping[str, object]],
+    tracker_diagnostics: Mapping[str, object],
+    tracker_object_id: int,
+) -> dict:
+    return {
+        "stage": "tracking",
+        "cameraLoginId": camera_login_id,
+        "frameId": frame_id,
+        "capturedAtMs": captured_at_ms,
+        "processedAtMs": processed_at_ms,
+        "frameGap": frame_gap,
+        "droppedFrameCount": int(dropped_frame_count),
+        "rawDetectionCount": len(raw_detections),
+        "detectionCountAfterConfidenceFilter": len(tracked_detections),
+        "avgDetectionConfidence": _average_field(tracked_detections, "confidence"),
+        "avgKeypointConfidence": _average_field(tracked_detections, "keypoint_confidence"),
+        "activeTrackIds": _track_ids(tracked_detections),
+        "newTrackCount": int(tracker_diagnostics.get("new_tracks", 0) or 0),
+        "lostTrackCount": int(tracker_diagnostics.get("lost_tracks", 0) or 0),
+        "removedTrackIds": list(tracker_diagnostics.get("removed_track_ids") or []),
+        "trackLifetimeFrames": _track_lifetimes(tracker_diagnostics),
+        "trackerObjectId": int(tracker_object_id),
+    }
+
+
+def log_frame_tracking_debug(record: Mapping[str, object]) -> None:
+    if not tracking_debug_enabled():
+        return
+    print(f"[tracking-debug] {json.dumps(dict(record), ensure_ascii=False)}", flush=True)
+
+
+def build_tracker_reset_record(
+    camera_login_id: str,
+    frame_id: int | None,
+    frame_gap: int | None,
+    tracker_object_id: int,
+    reset: bool,
+    reason: str,
+    stream_run_id: str | None = None,
+) -> dict:
+    return {
+        "stage": "tracker_reset_decision",
+        "cameraLoginId": camera_login_id,
+        "frameId": frame_id,
+        "frameGap": frame_gap,
+        "trackerObjectId": int(tracker_object_id),
+        "reset": bool(reset),
+        "reason": reason,
+        "streamRunId": stream_run_id,
+    }
+
+
+def log_tracker_reset_decision(record: Mapping[str, object]) -> None:
+    print(f"[tracker-reset] {json.dumps(dict(record), ensure_ascii=False)}", flush=True)
+
+
+def _safe_diagnostics(postprocessor) -> Mapping[str, object]:
+    diagnostics = getattr(postprocessor, "diagnostics", None)
+    if diagnostics is None:
+        return {}
+    return diagnostics()
+
+
+def _detector_backend(model_path: str) -> str:
+    return "tensorrt" if model_path.lower().endswith(".engine") else "torch"
+
+
+def _average_field(detections: Sequence[Mapping[str, object]], field: str) -> float | None:
+    values = [
+        float(item[field])
+        for item in detections
+        if item.get(field) is not None
+    ]
+    if not values:
+        return None
+    return round(sum(values) / len(values), 4)
+
+
+def _track_ids(detections: Sequence[Mapping[str, object]]) -> list[int]:
+    return sorted(
+        int(item["track_id"])
+        for item in detections
+        if item.get("track_id") is not None
+    )
+
+
+def _track_lifetimes(tracker_diagnostics: Mapping[str, object]) -> dict[str, int]:
+    tracks = tracker_diagnostics.get("tracks")
+    if not isinstance(tracks, Mapping):
+        return {}
+    output: dict[str, int] = {}
+    for track_id, value in tracks.items():
+        if not isinstance(value, Mapping):
+            continue
+        age = value.get("track_age", value.get("age", 0))
+        output[str(track_id)] = int(age or 0)
+    return output
+
+
 def log_sequence_stage(
     camera_login_id: str,
     frame_id: int | None,
