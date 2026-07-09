@@ -136,7 +136,7 @@ def maybe_export_engine(args: BenchmarkArgs) -> Path | None:
 
 def compare(torch_result: BackendResult, tensorrt_result: BackendResult | None) -> Comparison:
     if tensorrt_result is None or tensorrt_result.status != "OK" or torch_result.status != "OK":
-        return Comparison(torch_result, tensorrt_result, 0.0, 0.0, "보류: 비교 가능한 TensorRT 결과가 없습니다.")
+        return Comparison(torch_result, tensorrt_result, 0.0, 0.0, "DEFER: No comparable TensorRT result is available.")
     speedup = torch_result.avg_latency_ms / max(tensorrt_result.avg_latency_ms, 0.001)
     latency_delta = torch_result.avg_latency_ms - tensorrt_result.avg_latency_ms
     recommendation = adoption_recommendation(speedup, latency_delta, torch_result.fps, tensorrt_result.fps)
@@ -145,12 +145,12 @@ def compare(torch_result: BackendResult, tensorrt_result: BackendResult | None) 
 
 def adoption_recommendation(speedup: float, latency_delta_ms: float, torch_fps: float, tensorrt_fps: float) -> str:
     if speedup >= 1.4 and latency_delta_ms >= 10.0:
-        return "도입 후보: TensorRT가 충분한 latency 이득을 보입니다. Torch fallback을 유지하고 단계 적용하세요."
+        return "ADOPT_CANDIDATE: TensorRT shows enough latency gain. Keep Torch fallback and roll out gradually."
     if torch_fps < 10.0 and tensorrt_fps >= 10.0:
-        return "도입 후보: 목표 FPS 미달을 TensorRT가 회복합니다."
+        return "ADOPT_CANDIDATE: TensorRT restores the target FPS budget."
     if speedup < 1.15:
-        return "보류: 이득이 작아 RTSP decode/frame queue/LSTM 병목을 먼저 확인하세요."
-    return "추가 측정: 이득은 있으나 운영 전 4-camera 장시간 테스트가 필요합니다."
+        return "DEFER: Speedup is too small. Check RTSP decode, frame queue, and LSTM bottlenecks first."
+    return "MEASURE_MORE: Gain exists, but run a long 4-camera test before runtime adoption."
 
 
 def failed_result(backend: str, model_path: Path, status: str) -> BackendResult:
