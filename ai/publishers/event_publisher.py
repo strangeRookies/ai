@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+import time
 
 
 def _env_int(name, default):
@@ -73,20 +74,23 @@ class MqttEventPublisher(EventPublisher):
                 )
                 return False
         try:
+            publish_started_at_ms = _current_timestamp_ms()
+            _stamp_event_publish_attempt(payload, publish_started_at_ms)
             print(
                 f"[mqtt] publishing: {_payload_context(payload, target_topic, connected=self.connected, rc='pending')}",
                 flush=True,
             )
             result = self.client.publish(target_topic, json.dumps(payload, ensure_ascii=False), qos=0)
+            publish_returned_at_ms = _current_timestamp_ms()
             if result.rc != self.mqtt.MQTT_ERR_SUCCESS:
                 self.connected = False
                 print(
-                    f"[mqtt] publish failed: {_payload_context(payload, target_topic, connected=self.connected, rc=result.rc)}",
+                    f"[mqtt] publish failed: {_payload_context(payload, target_topic, connected=self.connected, rc=result.rc, publish_returned_at_ms=publish_returned_at_ms)}",
                     file=sys.stderr,
                 )
                 return False
             print(
-                f"[mqtt] published: {_payload_context(payload, target_topic, connected=self.connected, rc=result.rc)}",
+                f"[mqtt] published: {_payload_context(payload, target_topic, connected=self.connected, rc=result.rc, publish_returned_at_ms=publish_returned_at_ms)}",
                 flush=True,
             )
             return True
@@ -164,7 +168,7 @@ def mqtt_topic_settings_from_args(args):
     }
 
 
-def _payload_context(payload, topic, connected=None, rc=None):
+def _payload_context(payload, topic, connected=None, rc=None, publish_returned_at_ms=None):
     if not isinstance(payload, dict):
         return _format_payload_context(topic, "unknown", "unknown", "unknown", "unknown", connected, rc, "none", "unknown")
     message_type = payload.get("messageType") or payload.get("message_type") or payload.get("event_type") or "unknown"
@@ -174,15 +178,78 @@ def _payload_context(payload, topic, connected=None, rc=None):
     event_id = payload.get("eventId") or "none"
     payload_bytes = len(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
     return _format_payload_context(
-        topic, message_type, stream_id, camera_login_id, frame_id, connected, rc, event_id, payload_bytes
+        topic,
+        message_type,
+        stream_id,
+        camera_login_id,
+        frame_id,
+        connected,
+        rc,
+        event_id,
+        payload_bytes,
+        payload=payload,
+        publish_returned_at_ms=publish_returned_at_ms,
     )
 
 
-def _format_payload_context(topic, message_type, stream_id, camera_login_id, frame_id, connected, rc, event_id, payload_bytes):
+def _format_payload_context(
+    topic,
+    message_type,
+    stream_id,
+    camera_login_id,
+    frame_id,
+    connected,
+    rc,
+    event_id,
+    payload_bytes,
+    payload=None,
+    publish_returned_at_ms=None,
+):
     connected_text = "unknown" if connected is None else str(bool(connected)).lower()
     rc_text = "unknown" if rc is None else str(rc)
-    return (
+    context = (
         f"topic={topic}, messageType={message_type}, streamId={stream_id}, "
         f"cameraLoginId={camera_login_id}, frameId={frame_id}, eventId={event_id}, "
         f"rc={rc_text}, connected={connected_text}, payloadBytes={payload_bytes}"
     )
+    if isinstance(payload, dict) and _is_event_payload(payload):
+        started_at = _optional_int(payload.get("mqttPublishStartedAtMs"))
+        processed_at = _optional_int(payload.get("processedAtMs"))
+        captured_at = _optional_int(payload.get("capturedAtMs"))
+        returned_at = _optional_int(publish_returned_at_ms)
+        if started_at is not None:
+            context += f", mqttPublishStartedAtMs={started_at}"
+        if processed_at is not None and started_at is not None:
+            context += f", processedToMqttMs={max(0, started_at - processed_at)}"
+        if captured_at is not None and started_at is not None:
+            context += f", capturedToMqttMs={max(0, started_at - captured_at)}"
+        if returned_at is not None and started_at is not None:
+            context += f", mqttPublishCallMs={max(0, returned_at - started_at)}"
+    return context
+
+
+def _stamp_event_publish_attempt(payload, timestamp_ms):
+    if not isinstance(payload, dict) or not _is_event_payload(payload):
+        return
+    payload["mqttPublishStartedAtMs"] = int(timestamp_ms)
+    payload["mqttPublishedAtMs"] = int(timestamp_ms)
+
+
+def _is_event_payload(payload):
+    message_type = payload.get("messageType") or payload.get("message_type")
+    if message_type == "event":
+        return True
+    return payload.get("eventId") is not None and payload.get("clip_url") is not None
+
+
+def _current_timestamp_ms():
+    return int(time.time() * 1000)
+
+
+def _optional_int(value):
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None

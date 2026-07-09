@@ -1,7 +1,12 @@
 import os
 import unittest
 
-from ai.publishers.event_publisher import MqttEventPublisher, _payload_context, mqtt_settings_from_env
+from ai.publishers.event_publisher import (
+    MqttEventPublisher,
+    _payload_context,
+    _stamp_event_publish_attempt,
+    mqtt_settings_from_env,
+)
 
 
 class MqttEventPublisherTest(unittest.TestCase):
@@ -80,6 +85,26 @@ class MqttEventPublisherTest(unittest.TestCase):
             context,
             "topic=camera, messageType=frame_sync, streamId=cam_05, cameraLoginId=cam_05, frameId=42, eventId=none, rc=0, connected=true, payloadBytes=93",
         )
+
+    def test_event_payload_is_stamped_with_mqtt_publish_timing(self):
+        payload = {
+            "messageType": "event",
+            "streamId": "cam_05",
+            "cameraLoginId": "cam_05",
+            "frameId": 42,
+            "eventId": "evt-1",
+            "capturedAtMs": 1000,
+            "processedAtMs": 1200,
+        }
+
+        _stamp_event_publish_attempt(payload, 1500)
+        context = _payload_context(payload, "event", connected=True, rc=0, publish_returned_at_ms=1503)
+
+        self.assertEqual(payload["mqttPublishStartedAtMs"], 1500)
+        self.assertEqual(payload["mqttPublishedAtMs"], 1500)
+        self.assertIn("processedToMqttMs=300", context)
+        self.assertIn("capturedToMqttMs=500", context)
+        self.assertIn("mqttPublishCallMs=3", context)
 
 
 def mqtt_env_names():
