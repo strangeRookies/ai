@@ -55,9 +55,9 @@ echo.
 echo ========================================================
 echo [1/5] 사전 상태 점검
 echo ========================================================
-call :LOG "Checking for busy local ports (8888, 8889, 8189, 8090-8093, 18080, MJPEG %MJPEG_TUNNEL_START_PORT%-%MJPEG_TUNNEL_END_PORT%)..."
+call :LOG "Checking for busy local ports (8888, 8889, 8189, 18080, MJPEG %MJPEG_TUNNEL_START_PORT%-%MJPEG_TUNNEL_END_PORT%)..."
 set "BUSY_PORTS="
-for %%P in (8888 8889 8189 8090 8091 8092 8093 18080) do call :CHECK_LOCAL_PORT %%P
+for %%P in (8888 8889 8189 18080) do call :CHECK_LOCAL_PORT %%P
 for /L %%P in (%MJPEG_TUNNEL_START_PORT%,1,%MJPEG_TUNNEL_END_PORT%) do call :CHECK_LOCAL_PORT %%P
 if not defined BUSY_PORTS goto PORTS_FREE
 
@@ -131,7 +131,7 @@ call :LOG "Cleaning up stale remote ports and starting SSH tunnel in a new windo
 ssh %GPU_USER%@%GPU_HOST% "fuser -k 18080/tcp 2>/dev/null || true; lsof -ti tcp:18080 2>/dev/null | xargs -r kill -9 2>/dev/null || true; ss -lntp 'sport = :18080' 2>/dev/null || true"
 
 call :LOG "TRACE: BEFORE START SSH WINDOW"
-set "TUNNEL_FORWARDS=-L 8888:127.0.0.1:8888 -L 8889:127.0.0.1:8889 -L 8189:127.0.0.1:8189 -L 8090:127.0.0.1:8090 -L 8091:127.0.0.1:8091 -L 8092:127.0.0.1:8092 -L 8093:127.0.0.1:8093"
+set "TUNNEL_FORWARDS=-L 8888:127.0.0.1:8888 -L 8889:127.0.0.1:8889 -L 8189:127.0.0.1:8189"
 for /L %%P in (%MJPEG_TUNNEL_START_PORT%,1,%MJPEG_TUNNEL_END_PORT%) do set "TUNNEL_FORWARDS=!TUNNEL_FORWARDS! -L %%P:127.0.0.1:%%P"
 call :LOG "MJPEG tunnel ports: %MJPEG_TUNNEL_START_PORT%-%MJPEG_TUNNEL_END_PORT% (cam_01 uses 8010, cam_02 uses 8011, ...)"
 if "%RUN_MODE%"=="tunnel_only" start "AI STABLE SSH Tunnel - keep open" cmd /k ssh -o ExitOnForwardFailure=yes -t %TUNNEL_FORWARDS% %GPU_USER%@%GPU_HOST% "echo ==============================================; echo [SSH TUNNEL ACTIVE] Tunnel established successfully.; echo Keep this window open to maintain streams.; echo ==============================================; tail -f /dev/null"
