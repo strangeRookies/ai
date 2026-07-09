@@ -39,11 +39,25 @@ If an engine already exists, pass it explicitly:
 python scripts/compare_tensorrt_candidate.py --model yolo26n-pose.pt --engine yolo26n-pose.engine --video sample_videos/sample.mp4 --max-frames 300
 ```
 
-Engine export is opt-in. Run it only after the Torch baseline succeeds:
+Engine export is opt-in. Run it only after the Torch baseline succeeds. The default export is FP32 because TensorRT 11.1.0.106 on the RTX 5080 host failed on the Ultralytics FP16 path with:
+
+```text
+AttributeError: type object 'tensorrt_bindings.tensorrt.BuilderFlag' has no attribute 'FP16'
+```
+
+Run the safer FP32 export first:
 
 ```bash
 python scripts/compare_tensorrt_candidate.py --model yolo26n-pose.pt --video sample_videos/sample.mp4 --max-frames 300 --export-engine
 ```
+
+If FP32 succeeds and the comparison result is promising, FP16 can be tested explicitly:
+
+```bash
+python scripts/compare_tensorrt_candidate.py --model yolo26n-pose.pt --video sample_videos/sample.mp4 --max-frames 300 --export-engine --engine-half
+```
+
+Treat the FP16 `BuilderFlag.FP16` failure as an environment/package compatibility issue, not as evidence that TensorRT is slower. The risk-free decision should be based on Torch vs a successfully generated `.engine`.
 
 Ultralytics may install missing packages such as `onnx`, `onnxslim`, `onnxruntime-gpu`, or `tensorrt-cu13` during the first export. If it prints `Restart runtime or rerun command for updates to take effect`, rerun the same export command after it finishes. Then run the explicit engine comparison command again.
 

@@ -19,6 +19,7 @@ class BenchmarkArgs:
     device: str
     max_frames: int
     export_engine: bool
+    engine_half: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +54,7 @@ def parse_args(argv: list[str]) -> BenchmarkArgs:
     parser.add_argument("--device", default="0")
     parser.add_argument("--max-frames", type=int, default=300)
     parser.add_argument("--export-engine", action="store_true")
+    parser.add_argument("--engine-half", action="store_true", help="Export FP16 TensorRT engine. Default is FP32 for compatibility.")
     parsed = parser.parse_args(argv)
     engine = Path(parsed.engine) if parsed.engine else Path(parsed.model).with_suffix(".engine")
     return BenchmarkArgs(
@@ -64,6 +66,7 @@ def parse_args(argv: list[str]) -> BenchmarkArgs:
         device=str(parsed.device),
         max_frames=parsed.max_frames,
         export_engine=bool(parsed.export_engine),
+        engine_half=bool(parsed.engine_half),
     )
 
 
@@ -120,18 +123,22 @@ def benchmark_yolo(model_path: Path, backend: str, args: BenchmarkArgs) -> Backe
     )
 
 
-def maybe_export_engine(args: BenchmarkArgs) -> Path | None:
+def maybe_export_engine(args: BenchmarkArgs) -> tuple[Path | None, str]:
     if args.engine is not None and args.engine.exists():
-        return args.engine
+        return args.engine, "OK"
     if not args.export_engine:
-        return args.engine
+        return args.engine, "SKIPPED: TensorRT engine file does not exist and --export-engine was not set"
     try:
         from ultralytics import YOLO
-    except ImportError:
-        return args.engine
+    except ImportError as exc:
+        return args.engine, f"EXPORT_FAILED: ultralytics import failed: {exc}"
     model = YOLO(str(args.model))
-    exported = model.export(format="engine", half=True, imgsz=args.imgsz, device=args.device)
-    return Path(str(exported))
+    try:
+        exported = model.export(format="engine", half=args.engine_half, imgsz=args.imgsz, device=args.device)
+    except (AttributeError, RuntimeError, ImportError, OSError) as exc:
+        precision = "FP16" if args.engine_half else "FP32"
+        return args.engine, f"EXPORT_FAILED: {precision} TensorRT export failed: {exc}"
+    return Path(str(exported)), "OK"
 
 
 def compare(torch_result: BackendResult, tensorrt_result: BackendResult | None) -> Comparison:
@@ -203,8 +210,11 @@ def markdown_report(comparison: Comparison) -> str:
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
     torch_result = benchmark_yolo(args.model, "torch", args)
-    engine = maybe_export_engine(args)
-    tensorrt_result = benchmark_yolo(engine, "tensorrt", args) if engine is not None else None
+    engine, export_status = maybe_export_engine(args)
+    if export_status != "OK" and args.export_engine:
+        tensorrt_result = failed_result("tensorrt", engine or Path(""), export_status)
+    else:
+        tensorrt_result = benchmark_yolo(engine, "tensorrt", args) if engine is not None else None
     comparison = compare(torch_result, tensorrt_result)
     csv_path, md_path = write_reports(comparison, args.output_dir)
     print(f"Saved CSV: {csv_path}")
