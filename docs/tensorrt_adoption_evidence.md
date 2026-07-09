@@ -41,7 +41,7 @@ ls sample_videos
 Run the baseline benchmark to record PyTorch inference latency. 
 
 ```bash
-python scripts/compare_tensorrt_candidate.py --model yolo26n-pose.pt --video sample_videos/dummy.mp4 --imgsz 640 --max-frames 300
+python scripts/compare_tensorrt_candidate.py --model yolo26n-pose.pt --video /home/welabs/yolo_training/ai_fall_experiments/data/raw/outdoor_swoon/videos/outside_swoon_1.mp4 --imgsz 640 --max-frames 300
 ```
 
 > [!NOTE]
@@ -55,14 +55,14 @@ Exporting the model to a TensorRT `.engine` file is opt-in. Run this step only a
 The default export is FP32. TensorRT 11.1.0.106 on the RTX 5080 host might fail on the FP16 path with an `AttributeError` (`BuilderFlag` has no attribute `FP16`). Run the safer FP32 path first:
 
 ```bash
-python scripts/compare_tensorrt_candidate.py --model yolo26n-pose.pt --video sample_videos/dummy.mp4 --imgsz 640 --max-frames 300 --export-engine
+python scripts/compare_tensorrt_candidate.py --model yolo26n-pose.pt --video /home/welabs/yolo_training/ai_fall_experiments/data/raw/outdoor_swoon/videos/outside_swoon_1.mp4 --imgsz 640 --max-frames 300 --export-engine
 ```
 
 #### Option B: FP16 Export (Optional)
 If FP32 succeeds and you want to test FP16 explicitly:
 
 ```bash
-python scripts/compare_tensorrt_candidate.py --model yolo26n-pose.pt --video sample_videos/dummy.mp4 --imgsz 640 --max-frames 300 --export-engine --engine-half
+python scripts/compare_tensorrt_candidate.py --model yolo26n-pose.pt --video /home/welabs/yolo_training/ai_fall_experiments/data/raw/outdoor_swoon/videos/outside_swoon_1.mp4 --imgsz 640 --max-frames 300 --export-engine --engine-half
 ```
 
 > [!TIP]
@@ -76,7 +76,7 @@ Once the `.engine` file is generated, run the explicit comparison again:
 
 ```bash
 # For FP32 comparison
-python scripts/compare_tensorrt_candidate.py --model yolo26n-pose.pt --engine yolo26n-pose.engine --video sample_videos/dummy.mp4 --imgsz 640 --max-frames 300
+python scripts/compare_tensorrt_candidate.py --model yolo26n-pose.pt --engine yolo26n-pose.engine --video /home/welabs/yolo_training/ai_fall_experiments/data/raw/outdoor_swoon/videos/outside_swoon_1.mp4 --imgsz 640 --max-frames 300
 ```
 
 ### 6. Verify Comparison Report
@@ -103,6 +103,26 @@ Defer TensorRT when:
 - Speedup is below `1.15x`.
 - RTSP frame read latency or frame queue pressure is the dominant bottleneck.
 - LSTM/post-processing or MQTT/overlay publish latency dominates the end-to-end path.
+
+## 4-Camera Follow-Up
+
+The single-video TensorRT result is only the first gate. Run the RTSP metrics with separate output directories so Torch, TensorRT, stale, and failed rows do not mix:
+
+```bash
+YOLO_MODEL=yolo26n-pose.pt IMGSZ=640 MAX_FRAMES=3000 OUTPUT_DIR=runs/verification_torch bash scripts/run_4cam_rtsp_metrics.sh
+python scripts/summarize_4cam_metrics.py --dir runs/verification_torch --target-fps 10
+```
+
+```bash
+YOLO_MODEL=yolo26n-pose.engine IMGSZ=640 MAX_FRAMES=3000 OUTPUT_DIR=runs/verification_tensorrt bash scripts/run_4cam_rtsp_metrics.sh
+python scripts/summarize_4cam_metrics.py --dir runs/verification_tensorrt --target-fps 10
+```
+
+`summarize_4cam_metrics.py` defaults to the latest valid row per camera and ignores zero-frame rows. Use `--all` only when diagnosing failed runs:
+
+```bash
+python scripts/summarize_4cam_metrics.py --dir runs/verification_tensorrt --all
+```
 
 ## Rollout Shape
 
