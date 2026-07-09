@@ -3,7 +3,7 @@ set -euo pipefail
 
 MAX_FRAMES="${MAX_FRAMES:-300}"
 OUTPUT_DIR="${OUTPUT_DIR:-runs/verification}"
-YOLO_MODEL="${YOLO_MODEL:-yolo26n-pose.pt}"
+YOLO_MODEL="${YOLO_MODEL:-yolo26n-pose.engine}"
 ACTION_MODEL="${ACTION_MODEL:-benchmark/results/lstm_yolo26n_error_augmented_compare_smoke/YOLO26n-pose=./yolo26n-pose.pt/best.pt}"
 DEVICE="${DEVICE:-0}"
 ACTION_DEVICE="${ACTION_DEVICE:-0}"
