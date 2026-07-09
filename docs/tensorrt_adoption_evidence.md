@@ -41,7 +41,7 @@ ls sample_videos
 Run the baseline benchmark to record PyTorch inference latency. 
 
 ```bash
-python scripts/compare_tensorrt_candidate.py --model yolo26n-pose.pt --video sample_videos/sample.mp4 --max-frames 300
+python scripts/compare_tensorrt_candidate.py --model yolo26n-pose.pt --video sample_videos/dummy.mp4 --imgsz 640 --max-frames 300
 ```
 
 > [!NOTE]
@@ -55,14 +55,14 @@ Exporting the model to a TensorRT `.engine` file is opt-in. Run this step only a
 The default export is FP32. TensorRT 11.1.0.106 on the RTX 5080 host might fail on the FP16 path with an `AttributeError` (`BuilderFlag` has no attribute `FP16`). Run the safer FP32 path first:
 
 ```bash
-python scripts/compare_tensorrt_candidate.py --model yolo26n-pose.pt --video sample_videos/sample.mp4 --max-frames 300 --export-engine
+python scripts/compare_tensorrt_candidate.py --model yolo26n-pose.pt --video sample_videos/dummy.mp4 --imgsz 640 --max-frames 300 --export-engine
 ```
 
 #### Option B: FP16 Export (Optional)
 If FP32 succeeds and you want to test FP16 explicitly:
 
 ```bash
-python scripts/compare_tensorrt_candidate.py --model yolo26n-pose.pt --video sample_videos/sample.mp4 --max-frames 300 --export-engine --engine-half
+python scripts/compare_tensorrt_candidate.py --model yolo26n-pose.pt --video sample_videos/dummy.mp4 --imgsz 640 --max-frames 300 --export-engine --engine-half
 ```
 
 > [!TIP]
@@ -76,7 +76,7 @@ Once the `.engine` file is generated, run the explicit comparison again:
 
 ```bash
 # For FP32 comparison
-python scripts/compare_tensorrt_candidate.py --model yolo26n-pose.pt --engine yolo26n-pose.engine --video sample_videos/sample.mp4 --max-frames 300
+python scripts/compare_tensorrt_candidate.py --model yolo26n-pose.pt --engine yolo26n-pose.engine --video sample_videos/dummy.mp4 --imgsz 640 --max-frames 300
 ```
 
 ### 6. Verify Comparison Report
