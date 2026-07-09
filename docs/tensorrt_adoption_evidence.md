@@ -6,23 +6,32 @@ TensorRT should be adopted only if local measurements show that YOLO pose infere
 
 ## Safe Comparison
 
-This comparison does not change the running worker path. It benchmarks the current `.pt` model and an optional TensorRT `.engine` file against the same video.
+This comparison does not change the running worker path. It benchmarks the current `.pt` model and an optional TensorRT `.engine` file against the same video on the GPU PC.
 
-```powershell
-cd strange_ai
-python scripts/compare_tensorrt_candidate.py --model yolo26n-pose.pt --video sample_videos\sample.mp4 --max-frames 300
+First, connect to the GPU PC and activate the virtual environment:
+
+```bash
+ssh welabs@58.151.205.220
+cd /home/welabs/yolo_training/strange_ai_lstm
+source .venv/bin/activate
+```
+
+Run the benchmark:
+
+```bash
+python scripts/compare_tensorrt_candidate.py --model yolo26n-pose.pt --video sample_videos/sample.mp4 --max-frames 300
 ```
 
 If an engine already exists, pass it explicitly:
 
-```powershell
-python scripts/compare_tensorrt_candidate.py --model yolo26n-pose.pt --engine yolo26n-pose.engine --video sample_videos\sample.mp4 --max-frames 300
+```bash
+python scripts/compare_tensorrt_candidate.py --model yolo26n-pose.pt --engine yolo26n-pose.engine --video sample_videos/sample.mp4 --max-frames 300
 ```
 
 Engine export is opt-in:
 
-```powershell
-python scripts/compare_tensorrt_candidate.py --model yolo26n-pose.pt --video sample_videos\sample.mp4 --max-frames 300 --export-engine
+```bash
+python scripts/compare_tensorrt_candidate.py --model yolo26n-pose.pt --video sample_videos/sample.mp4 --max-frames 300 --export-engine
 ```
 
 Reports are written to `benchmark/results/tensorrt_candidate/`.
