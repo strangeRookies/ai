@@ -1,6 +1,6 @@
 import unittest
 
-from scripts.summarize_4cam_metrics import decision_hint, format_value, value_for
+from scripts.summarize_4cam_metrics import decision_hint, format_value, select_latest_valid_per_camera, value_for
 
 
 class Summarize4CamMetricsTest(unittest.TestCase):
@@ -28,6 +28,18 @@ class Summarize4CamMetricsTest(unittest.TestCase):
         rows = [{"avg_frame_read_ms": 10.0, "effective_fps": 15.0, "avg_yolo_inference_ms": 20.0}]
 
         self.assertIn("defer", decision_hint(rows, target_fps=10.0))
+
+    def test_select_latest_valid_per_camera_ignores_zero_frame_rows(self):
+        rows = [
+            {"camera_id": "camera-1", "frames_processed": 0, "runtime_seconds": 0.006, "_source_mtime": 3},
+            {"camera_id": "camera-1", "frames_processed": 300, "runtime_seconds": 10.0, "_source_mtime": 1},
+            {"camera_id": "camera-1", "frames_processed": 3000, "runtime_seconds": 100.0, "_source_mtime": 2},
+        ]
+
+        selected = select_latest_valid_per_camera(rows)
+
+        self.assertEqual(len(selected), 1)
+        self.assertEqual(selected[0]["frames_processed"], 3000)
 
 
 if __name__ == "__main__":

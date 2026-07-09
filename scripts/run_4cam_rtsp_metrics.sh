@@ -15,10 +15,10 @@ CAMERA_COOLDOWN_SECONDS="${CAMERA_COOLDOWN_SECONDS:-10}"
 
 mkdir -p "$OUTPUT_DIR"
 
-suffix=""
-if [[ "$MAX_FRAMES" != "300" ]]; then
-  suffix="_${MAX_FRAMES}"
-fi
+model_label="$(basename "$YOLO_MODEL")"
+model_label="${model_label%.*}"
+model_label="${model_label//[^A-Za-z0-9_-]/_}"
+suffix="_${model_label}_${MAX_FRAMES}"
 
 for idx in 1 2 3 4; do
   camera_id="camera-${idx}"
