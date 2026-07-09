@@ -7,9 +7,14 @@ MQTT_HOST="${1:-15.165.248.37}"
 MQTT_PORT="${2:-1883}"
 DEFAULT_ACTION_MODEL="runs/evaluation_manifest_v2_bbox54_balanced/retrained_best.pt"
 ACTION_MODEL="${3:-${ACTION_MODEL:-$DEFAULT_ACTION_MODEL}}"
-DEFAULT_YOLO_MODEL="yolo26n-pose.engine"
-FALLBACK_YOLO_MODEL="yolo26n-pose.pt"
-YOLO_MODEL="${YOLO_MODEL_PATH:-${YOLO_MODEL:-$DEFAULT_YOLO_MODEL}}"
+DEFAULT_YOLO_MODEL="yolo26n-pose.pt"
+TENSORRT_YOLO_MODEL="yolo26n-pose.engine"
+USE_TENSORRT="${USE_TENSORRT:-false}"
+if [ "$USE_TENSORRT" = "true" ] || [ "$USE_TENSORRT" = "1" ]; then
+    YOLO_MODEL="${YOLO_MODEL_PATH:-${YOLO_MODEL:-$TENSORRT_YOLO_MODEL}}"
+else
+    YOLO_MODEL="${YOLO_MODEL_PATH:-${YOLO_MODEL:-$DEFAULT_YOLO_MODEL}}"
+fi
 
 cd "$REMOTE_ROOT"
 
@@ -41,10 +46,10 @@ if [ ! -f "$ACTION_MODEL" ]; then
 fi
 
 if [ ! -f "$YOLO_MODEL" ]; then
-    if [ "$YOLO_MODEL" = "$DEFAULT_YOLO_MODEL" ] && [ -f "$FALLBACK_YOLO_MODEL" ]; then
-        echo "[start_ai_stable][warning] TensorRT engine not found: $YOLO_MODEL"
-        echo "[start_ai_stable][warning] Falling back to Torch model: $FALLBACK_YOLO_MODEL"
-        YOLO_MODEL="$FALLBACK_YOLO_MODEL"
+    if [ "$YOLO_MODEL" = "$TENSORRT_YOLO_MODEL" ] && [ -f "$DEFAULT_YOLO_MODEL" ]; then
+        echo "[start_ai_stable][warning] TensorRT requested but engine not found: $YOLO_MODEL"
+        echo "[start_ai_stable][warning] Falling back to Torch model: $DEFAULT_YOLO_MODEL"
+        YOLO_MODEL="$DEFAULT_YOLO_MODEL"
     else
         echo "[start_ai_stable][error] YOLO_MODEL not found: $YOLO_MODEL"
         exit 1
