@@ -134,3 +134,33 @@ class ExitEventPostProcessor:
 
     def reset_track(self, camera_id, track_id):
         self._consecutive_by_track[f"{camera_id}:track:{track_id}"] = 0
+
+
+DEFAULT_HAZARD_MIN_CONSECUTIVE = 2
+DEFAULT_HAZARD_COOLDOWN_SECONDS = 15.0
+
+
+class HazardEventPostProcessor:
+    """HAZARD ROI 위험구역 침범 후처리기 — 사람이 위험구역 안에 연속 N회 감지되면 알림."""
+
+    def __init__(self, min_consecutive=DEFAULT_HAZARD_MIN_CONSECUTIVE, cooldown_seconds=DEFAULT_HAZARD_COOLDOWN_SECONDS):
+        self.min_consecutive = max(1, int(min_consecutive))
+        self.cooldown_seconds = max(0.0, float(cooldown_seconds))
+        self._consecutive_by_track = {}
+        self._last_event_time = {}
+
+    def should_trigger(self, camera_id, track_id, timestamp):
+        key = f"{camera_id}:track:{track_id}"
+        consecutive = self._consecutive_by_track.get(key, 0) + 1
+        self._consecutive_by_track[key] = consecutive
+        if consecutive < self.min_consecutive:
+            return False
+        cooldown_key = str(camera_id)
+        last = self._last_event_time.get(cooldown_key)
+        if last is not None and float(timestamp) - last < self.cooldown_seconds:
+            return False
+        self._last_event_time[cooldown_key] = float(timestamp)
+        return True
+
+    def reset_track(self, camera_id, track_id):
+        self._consecutive_by_track[f"{camera_id}:track:{track_id}"] = 0
