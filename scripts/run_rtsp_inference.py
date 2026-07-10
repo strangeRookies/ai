@@ -35,6 +35,11 @@ from ai.inference.rtsp_runtime import (
     update_prediction_counts,
     update_tracking_summary,
 )
+from ai.inference.tracking_debug import (
+    build_frame_tracking_record,
+    log_frame_tracking_debug,
+    log_tracker_startup,
+)
 from ai.evaluation.prediction_log import append_prediction_jsonl, build_prediction_log_row
 import threading
 from ai.frame_sync import FrameMetadataBuffer, FramePacket, CameraFrameQueue
@@ -53,6 +58,7 @@ def run(args):
     detection_postprocessor, postprocessing_mode = create_detection_postprocessor(args)
     pose_reporter = create_pose_diagnostics_reporter(args)
     log_pose_tracking_config(args, detection_postprocessor)
+    log_tracker_startup(camera_login_id, postprocessing_mode, detection_postprocessor, args)
     cheap_filter_config = cheap_filter_config_from_args(args)
     keypoint_buffers = PerTrackKeypointSequenceBuffers(
         args.sequence_length,
@@ -225,6 +231,7 @@ def run(args):
     reader_thread.start()
 
     try:
+        previous_processed_frame_id = None
         while True:
             if args.max_frames > 0 and summary["frames_processed"] >= args.max_frames:
                 break
@@ -332,6 +339,26 @@ def run(args):
                 frame_metadata = frame_buffer.mark_processed(camera_login_id, frame_metadata.frame_id)
                 summary["latest_processed_at_ms"] = frame_metadata.processed_at_ms
                 summary["latest_ai_latency_ms"] = frame_metadata.ai_latency_ms
+                frame_gap = (
+                    None
+                    if previous_processed_frame_id is None
+                    else int(frame_metadata.frame_id) - int(previous_processed_frame_id)
+                )
+                previous_processed_frame_id = frame_metadata.frame_id
+                log_frame_tracking_debug(
+                    build_frame_tracking_record(
+                        camera_login_id=camera_login_id,
+                        frame_id=frame_metadata.frame_id,
+                        captured_at_ms=frame_metadata.captured_at_ms,
+                        processed_at_ms=frame_metadata.processed_at_ms,
+                        frame_gap=frame_gap,
+                        dropped_frame_count=queue.dropped_frame_count,
+                        raw_detections=raw_detections,
+                        tracked_detections=detections,
+                        tracker_diagnostics=detection_postprocessor.diagnostics(),
+                        tracker_object_id=id(detection_postprocessor),
+                    )
+                )
             for track_id, track_prediction in predictions_by_track.items():
                 cooldown_was_active = post_processor.cooldown_active(args.camera_id, frame_packet.timestamp, track_id=track_id)
                 event_emitted = post_processor.should_trigger(args.camera_id, track_prediction, frame_packet.timestamp, track_id=track_id)

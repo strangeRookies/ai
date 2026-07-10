@@ -917,6 +917,8 @@ class OverlayWorker:
         last_heartbeat_time = time.monotonic()
         inference_count = 0
         mqtt_publish_count = 0
+        last_frame_id = None
+        last_captured_at_ms = None
 
         while not self.stop_event.is_set():
             if not camera_ids:
@@ -932,6 +934,55 @@ class OverlayWorker:
             if frame_packet is None:
                 time.sleep(0.005)
                 continue
+
+            # RTSP reconnect / large frame gap tracker reset check
+            frame_gap = None
+            if last_frame_id is not None and frame_packet.frame_idx is not None:
+                frame_gap = frame_packet.frame_idx - last_frame_id
+            
+            time_gap = None
+            if last_captured_at_ms is not None:
+                time_gap = frame_packet.captured_at_ms - last_captured_at_ms
+            
+            reset_decided = False
+            reset_reason = ""
+            if frame_gap is not None and frame_gap < 0:
+                reset_decided = True
+                reset_reason = "FRAME_ID_RESET"
+            elif time_gap is not None and time_gap > 3000.0:
+                reset_decided = True
+                reset_reason = "LARGE_TIME_GAP"
+            elif frame_gap is not None and frame_gap > 90:
+                reset_decided = True
+                reset_reason = "LARGE_FRAME_GAP"
+
+            if reset_decided:
+                tracker, postprocessing_mode = create_detection_postprocessor(self.args)
+                from ai.inference.tracking_debug import log_tracker_reset_decision, build_tracker_reset_record
+                record = build_tracker_reset_record(
+                    camera_login_id=self.camera_login_id,
+                    frame_id=frame_packet.frame_id,
+                    frame_gap=frame_gap,
+                    tracker_object_id=id(tracker),
+                    reset=True,
+                    reason=reset_reason,
+                )
+                log_tracker_reset_decision(record)
+            elif os.getenv("TRACKING_DEBUG", "false").lower() in {"1", "true", "yes", "on"}:
+                from ai.inference.tracking_debug import log_tracker_reset_decision, build_tracker_reset_record
+                status_reason = "FRAME_GAP_OK" if frame_gap is not None else "NO_PREVIOUS_FRAME"
+                record = build_tracker_reset_record(
+                    camera_login_id=self.camera_login_id,
+                    frame_id=frame_packet.frame_id,
+                    frame_gap=frame_gap,
+                    tracker_object_id=id(tracker),
+                    reset=False,
+                    reason=status_reason,
+                )
+                log_tracker_reset_decision(record)
+
+            last_frame_id = frame_packet.frame_idx
+            last_captured_at_ms = frame_packet.captured_at_ms
 
             # 매 프레임마다 스냅샷 클립 버퍼에 기록
             if self.state.clip_buffer is not None:

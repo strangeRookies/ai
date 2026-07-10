@@ -138,6 +138,7 @@ def build_confirmed_event_payload(
     }
     if tracking_id is not None:
         event["trackingId"] = tracking_id
+    _add_track_identity_fields(event, sequence)
     if frame_id is not None:
         event["frameId"] = int(frame_id)
 
@@ -181,6 +182,7 @@ def build_confirmed_event_payload(
     if tracking_id is not None:
         payload["trackingId"] = tracking_id
         payload["track_id"] = tracking_id
+    _add_track_identity_fields(payload, sequence)
     return payload
 
 
@@ -236,6 +238,7 @@ def _overlay_event(
         event["trackingId"] = val
         event["trackId"] = val
         event["track_id"] = val
+    _add_track_identity_fields(event, box)
     display_id = box.get("display_id")
     if display_id is not None:
         val = int(float(str(display_id)))
@@ -386,6 +389,25 @@ def _event_type(prediction: JsonMap) -> str:
 
 def _tracking_id(sequence: JsonMap) -> int | None:
     value = sequence.get("track_id")
+    if value is None:
+        return None
+    return int(float(str(value)))
+
+
+def _add_track_identity_fields(target: dict[str, JsonValue], source: JsonMap | None) -> None:
+    if source is None:
+        return
+    raw_track_id = _optional_int(source.get("raw_track_id"))
+    if raw_track_id is not None:
+        target["rawTrackId"] = raw_track_id
+        target["raw_track_id"] = raw_track_id
+    person_session_id = _optional_int(source.get("person_session_id"))
+    if person_session_id is not None:
+        target["personSessionId"] = person_session_id
+        target["person_session_id"] = person_session_id
+
+
+def _optional_int(value: JsonValue) -> int | None:
     if value is None:
         return None
     return int(float(str(value)))

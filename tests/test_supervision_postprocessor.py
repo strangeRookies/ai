@@ -290,6 +290,36 @@ class SupervisionPostProcessorTest(unittest.TestCase):
         self.assertEqual([first[0]["track_id"], second[0]["track_id"], third[0]["track_id"]], [1, 1, 1])
         self.assertEqual(proc.diagnostics()["new_tracks"], 0)
 
+    def test_session_reconnect_preserves_raw_bytetrack_id(self):
+        from ai.postprocess.supervision_postprocessor import SupervisionByteTrackAdapter
+        adapter = SupervisionByteTrackAdapter(
+            track_thresh=0.10,
+            track_buffer=30,
+            match_thresh=0.20,
+            bbox_smoothing_alpha=1.0,
+            session_reconnect=True,
+        )
+        adapter._tracker = FakeIncrementingRoboflowByteTrack()
+        proc = SupervisionPostProcessor(byte_tracker=adapter)
+
+        first = proc.process(
+            [{"bbox": [20, 20, 60, 60], "confidence": 0.85}],
+            np.zeros((200, 200, 3), dtype=np.uint8),
+        )
+        second = proc.process(
+            [{"bbox": [22, 22, 62, 62], "confidence": 0.84}],
+            np.zeros((200, 200, 3), dtype=np.uint8),
+        )
+        third = proc.process(
+            [{"bbox": [24, 24, 64, 64], "confidence": 0.83}],
+            np.zeros((200, 200, 3), dtype=np.uint8),
+        )
+
+        self.assertEqual([first[0]["raw_track_id"], second[0]["raw_track_id"], third[0]["raw_track_id"]], [1, 2, 3])
+        self.assertEqual([first[0]["person_session_id"], second[0]["person_session_id"], third[0]["person_session_id"]], [1, 1, 1])
+        self.assertEqual([first[0]["track_id"], second[0]["track_id"], third[0]["track_id"]], [1, 1, 1])
+        self.assertGreaterEqual(proc.diagnostics()["person_session_reconnect_success"], 2)
+
 
 class FakeByteTrackAdapter:
     def __init__(self, track_ids):

@@ -79,6 +79,8 @@ def parse_args(argv=None):
     parser.add_argument("--tracking-relink-iou-threshold", type=float, default=env_float("TRACKING_RELINK_IOU_THRESHOLD", 0.30))
     parser.add_argument("--tracking-relink-center-ratio", type=float, default=env_float("TRACKING_RELINK_CENTER_RATIO", 0.70))
     parser.add_argument("--tracking-relink-max-time-gap-seconds", type=float, default=env_float("TRACKING_RELINK_MAX_TIME_GAP_SECONDS", 2.0))
+    parser.add_argument("--person-session-reconnect", action=argparse.BooleanOptionalAction, default=os.getenv("PERSON_SESSION_RECONNECT", "false").lower() in {"1", "true", "yes", "on"})
+    parser.add_argument("--person-session-reconnect-max-missing-seconds", type=float, default=env_float("PERSON_SESSION_RECONNECT_MAX_MISSING_SECONDS", 3.0))
     parser.add_argument("--pose-debug", action=argparse.BooleanOptionalAction, default=os.getenv("POSE_DEBUG", "false").lower() in {"1", "true", "yes", "on"})
     parser.add_argument("--pose-debug-summary-every-n", type=int, default=env_int("POSE_DEBUG_SUMMARY_EVERY_N", 60))
     parser.add_argument("--pose-min-keypoint-confidence", type=float, default=env_float("POSE_MIN_KEYPOINT_CONFIDENCE", 0.25))

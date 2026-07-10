@@ -7,6 +7,7 @@ from typing import Protocol
 
 import numpy as np
 
+from ai.postprocess.person_session import PersonSessionConfig, PersonSessionReconnector
 from tracking.simple_tracker import SimpleTrackAssigner
 
 
@@ -44,6 +45,8 @@ class SupervisionPostProcessorConfig:
     stability_fallback: bool = False
     fallback_max_missing_seconds: float = 4.0
     fallback_center_match_ratio: float = 0.70
+    session_reconnect: bool = False
+    session_reconnect_max_missing_seconds: float = 3.0
 
 
 class SupervisionPostProcessor:
@@ -62,6 +65,8 @@ class SupervisionPostProcessor:
             stability_fallback=self.config.stability_fallback,
             fallback_max_missing_seconds=self.config.fallback_max_missing_seconds,
             fallback_center_match_ratio=self.config.fallback_center_match_ratio,
+            session_reconnect=self.config.session_reconnect,
+            session_reconnect_max_missing_seconds=self.config.session_reconnect_max_missing_seconds,
         )
 
     def process(self, detections: list[dict], frame: np.ndarray) -> list[dict]:
@@ -90,6 +95,8 @@ class SupervisionByteTrackAdapter:
         stability_fallback: bool = False,
         fallback_max_missing_seconds: float = 4.0,
         fallback_center_match_ratio: float = 0.70,
+        session_reconnect: bool = False,
+        session_reconnect_max_missing_seconds: float = 3.0,
         sv_module=None,
     ) -> None:
         if sv_module is None:
@@ -120,6 +127,19 @@ class SupervisionByteTrackAdapter:
         self._bbox_smoothing_alpha = bbox_smoothing_alpha
         self._previous_bboxes: dict[int, list[float]] = {}
         self._stability_fallback = bool(stability_fallback)
+        self._session_reconnector = (
+            PersonSessionReconnector(
+                PersonSessionConfig(
+                    track_thresh=track_thresh,
+                    match_thresh=match_thresh,
+                    track_buffer=track_buffer,
+                    max_missing_seconds=session_reconnect_max_missing_seconds,
+                    center_match_ratio=fallback_center_match_ratio,
+                )
+            )
+            if session_reconnect
+            else None
+        )
         self._fallback_assigner = (
             SimpleTrackAssigner(
                 track_thresh=track_thresh,
@@ -220,6 +240,13 @@ class SupervisionByteTrackAdapter:
             }
             return fallback_output
 
+        if self._session_reconnector is not None:
+            output = self._session_reconnector.update(output)
+            self._active_track_ids = {
+                int(item["track_id"])
+                for item in output
+                if item.get("track_id") is not None
+            }
         return output
 
     def diagnostics(self) -> dict:
@@ -227,13 +254,23 @@ class SupervisionByteTrackAdapter:
             diagnostics = self._fallback_assigner.diagnostics()
             diagnostics["stability_fallback"] = True
             return diagnostics
+        session_diagnostics = (
+            self._session_reconnector.diagnostics()
+            if self._session_reconnector is not None
+            else {
+                "person_session_reconnect_success": 0,
+                "person_session_reconnect_failure": 0,
+            }
+        )
         return {
             "active_tracks": len(self._active_track_ids),
-            "new_tracks": 0,
-            "lost_tracks": 0,
-            "id_switch_like_events": 0,
+            "new_tracks": int(session_diagnostics.get("new_tracks", 0)),
+            "lost_tracks": int(session_diagnostics.get("lost_tracks", 0)),
+            "id_switch_like_events": int(session_diagnostics.get("id_switch_like_events", 0)),
             "tracks": {str(track_id): {"track_id": track_id} for track_id in sorted(self._active_track_ids)},
             "stability_fallback": False,
+            "person_session_reconnect_success": int(session_diagnostics.get("person_session_reconnect_success", 0)),
+            "person_session_reconnect_failure": int(session_diagnostics.get("person_session_reconnect_failure", 0)),
             "bytetrack_constructor": self._bytetrack_constructor,
         }
 
