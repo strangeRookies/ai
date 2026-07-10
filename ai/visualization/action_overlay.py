@@ -189,19 +189,32 @@ def draw_metrics_panel(frame, summary, args, prediction):
         
     if getattr(args, "mjpeg_debug_watermark", False):
         import time
+
         now_str = time.strftime("%H:%M:%S")
         frame_id = summary.get("latest_frame_id", "?")
-        watermark = f"FRAME: {frame_id} | TIME: {now_str} | TRACKS: {active_tracks}"
+        captured_at_ms = summary.get("latest_captured_at_ms", "?")
+        camera_id = getattr(args, "camera_id", "?")
+        watermark_lines = [
+            f"cam={camera_id} frameId={frame_id}",
+            f"capturedAtMs={captured_at_ms} wall={now_str} tracks={active_tracks}",
+        ]
         
         h, w = frame.shape[:2]
         wt_scale = 0.45
         wt_thickness = 1
-        wt_size = cv2.getTextSize(watermark, font, wt_scale, wt_thickness)[0]
-        wt_x = w - wt_size[0] - 15
-        wt_y = h - 15
+        line_sizes = [cv2.getTextSize(line, font, wt_scale, wt_thickness)[0] for line in watermark_lines]
+        line_height = max(size[1] for size in line_sizes) + 6
+        box_width = max(size[0] for size in line_sizes) + 10
+        box_height = line_height * len(watermark_lines) + 6
+        wt_x = max(8, w - box_width - 15)
+        wt_y = max(box_height + 8, h - 15)
         
-        cv2.rectangle(frame, (wt_x - 5, wt_y - wt_size[1] - 5), (wt_x + wt_size[0] + 5, wt_y + 5), (15, 23, 42), -1)
-        cv2.putText(frame, watermark, (wt_x, wt_y), font, wt_scale, (74, 222, 128), wt_thickness, cv2.LINE_AA)
+        cv2.rectangle(frame, (wt_x - 5, wt_y - box_height + 5), (wt_x + box_width, wt_y + 5), (15, 23, 42), -1)
+        cv2.rectangle(frame, (wt_x - 5, wt_y - box_height + 5), (wt_x + box_width, wt_y + 5), (74, 222, 128), 1)
+        for idx, line in enumerate(watermark_lines):
+            line_y = wt_y - box_height + 20 + idx * line_height
+            color = (74, 222, 128) if idx == 0 else (191, 219, 254)
+            cv2.putText(frame, line, (wt_x, line_y), font, wt_scale, color, wt_thickness, cv2.LINE_AA)
 
 
 def make_placeholder(message):
