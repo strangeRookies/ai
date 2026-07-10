@@ -3,6 +3,11 @@ import os
 import sys
 import time
 
+from ai.event_idempotency import EventIdempotencyStore
+
+# Process-local de-dupe gate for event payloads (not a substitute for Backend UNIQUE).
+_EVENT_IDEM_STORE = EventIdempotencyStore()
+
 
 def _env_int(name, default):
     value = os.getenv(name, str(default))
@@ -12,6 +17,37 @@ def _env_int(name, default):
         raise ValueError(f"{name} must be an integer, got: {value}") from exc
 
 
+def event_idempotency_store() -> EventIdempotencyStore:
+    """Shared process store used by all EventPublisher instances."""
+    return _EVENT_IDEM_STORE
+
+
+def _accept_event_publish(payload, topic=None, *, store: EventIdempotencyStore | None = None) -> bool:
+    """Return False if this eventId was already accepted (skip retransmit).
+
+    Overlay/frame_sync messages without a durable eventId always pass.
+    Final durable uniqueness should still be enforced by Backend UNIQUE.
+    """
+    if not isinstance(payload, dict):
+        return True
+    # De-dupe only event-like payloads that carry eventId
+    if not _is_event_payload(payload) and payload.get("eventId") is None:
+        return True
+    event_id = payload.get("eventId")
+    if event_id is None or str(event_id).strip() == "":
+        return True
+    camera = payload.get("cameraLoginId") or payload.get("streamId") or payload.get("camera_login_id")
+    store = store or _EVENT_IDEM_STORE
+    if store.accept(str(event_id), camera_login_id=str(camera) if camera else None):
+        return True
+    print(
+        f"[event][idempotency] skip duplicate eventId={event_id} camera={camera} topic={topic or 'default'} "
+        f"(process-local gate; Backend UNIQUE is the durable defense)",
+        flush=True,
+    )
+    return False
+
+
 class EventPublisher:
     def publish(self, payload, topic=None):
         raise NotImplementedError
@@ -19,8 +55,11 @@ class EventPublisher:
 
 class ConsoleEventPublisher(EventPublisher):
     def publish(self, payload, topic=None):
+        if not _accept_event_publish(payload, topic):
+            return False
         topic_text = topic or "console"
         print(f"[event][topic={topic_text}] {json.dumps(payload, ensure_ascii=False)}", flush=True)
+        return True
 
 
 class MqttEventPublisher(EventPublisher):
@@ -65,6 +104,8 @@ class MqttEventPublisher(EventPublisher):
 
     def publish(self, payload, topic=None):
         target_topic = topic or self.topic
+        if not _accept_event_publish(payload, target_topic):
+            return False
         if not self.connected or self.client is None:
             if self.client is None or not self.connect():
                 print(

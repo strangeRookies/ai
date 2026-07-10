@@ -21,24 +21,50 @@ class FramePacket:
     frame_idx: int
     timestamp: float
     fps: float = 0.0
+    # Session boundary tags: packets older than current generation must be dropped.
+    stream_run_id: str | None = None
+    session_generation: int = 0
 
 
 class CameraFrameQueue:
-    def __init__(self, camera_login_id: str, maxsize: int = 5):
+    """Bounded per-camera queue. Overflow prefers latest frames (drops oldest).
+
+    Age-based drop uses captured_at_ms (UTC epoch ms) vs optional now_ms callback;
+    latency intervals elsewhere should use monotonic clocks.
+    """
+
+    def __init__(
+        self,
+        camera_login_id: str,
+        maxsize: int = 5,
+        *,
+        max_packet_age_ms: float | None = None,
+        now_ms: Callable[[], int] | None = None,
+    ):
         self.camera_login_id = str(camera_login_id)
         self.maxlen = max(1, int(maxsize))
         self.queue: deque[FramePacket] = deque(maxlen=self.maxlen)
         self.dropped_frame_count = 0
+        self.queue_overflow_drop_total = 0
+        self.aged_packet_drop_total = 0
+        self.max_packet_age_ms = None if max_packet_age_ms is None else max(0.0, float(max_packet_age_ms))
+        self._now_ms = now_ms or current_epoch_ms
         self._lock = threading.Lock()
+
+    @property
+    def capacity(self) -> int:
+        return self.maxlen
 
     def put_latest(self, packet: FramePacket) -> None:
         with self._lock:
             if len(self.queue) >= self.maxlen:
                 self.dropped_frame_count += 1
+                self.queue_overflow_drop_total += 1
             self.queue.append(packet)
 
     def get_latest(self, drop_stale: bool = True) -> FramePacket | None:
         with self._lock:
+            self._drop_aged_locked()
             if not self.queue:
                 return None
             if drop_stale:
@@ -49,9 +75,54 @@ class CameraFrameQueue:
                         self.queue.popleft()
             return self.queue.popleft()
 
+    def clear(self) -> int:
+        """Drop all queued packets (session boundary). Returns cleared count."""
+        with self._lock:
+            cleared = len(self.queue)
+            self.queue.clear()
+            if cleared:
+                self.dropped_frame_count += cleared
+            return cleared
+
     def size(self) -> int:
         with self._lock:
             return len(self.queue)
+
+    def oldest_packet_age_ms(self, *, now_ms: int | None = None) -> float | None:
+        with self._lock:
+            if not self.queue:
+                return None
+            now = int(self._now_ms() if now_ms is None else now_ms)
+            oldest = self.queue[0]
+            return max(0.0, float(now - int(oldest.captured_at_ms)))
+
+    def stats(self) -> dict[str, float | int | None]:
+        with self._lock:
+            age = None
+            if self.queue:
+                now = int(self._now_ms())
+                age = max(0.0, float(now - int(self.queue[0].captured_at_ms)))
+            return {
+                "camera_login_id": self.camera_login_id,
+                "queue_size": len(self.queue),
+                "queue_capacity": self.maxlen,
+                "queue_overflow_drop_total": self.queue_overflow_drop_total,
+                "oldest_packet_age_ms": age,
+                "dropped_frame_count": self.dropped_frame_count,
+                "aged_packet_drop_total": self.aged_packet_drop_total,
+            }
+
+    def _drop_aged_locked(self) -> None:
+        if self.max_packet_age_ms is None:
+            return
+        now = int(self._now_ms())
+        while self.queue:
+            age = now - int(self.queue[0].captured_at_ms)
+            if age <= self.max_packet_age_ms:
+                break
+            self.queue.popleft()
+            self.dropped_frame_count += 1
+            self.aged_packet_drop_total += 1
 
 
 @dataclass(frozen=True, slots=True)

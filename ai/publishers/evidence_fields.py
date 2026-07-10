@@ -19,12 +19,17 @@ def add_evidence_fields(
     dropped_frame_count: int | None = None,
     snapshot_path: str | None = None,
     clip_path: str | None = None,
+    stream_run_id: str | None = None,
 ) -> None:
     if dropped_frame_count is None and snapshot_path is None and clip_path is None:
         return
     if frame_id is None or captured_at_ms is None:
         return
-    evidence_key = evidence_id(stream_id, frame_id, captured_at_ms)
+    # Prefer explicit stream_run_id, else optional field already on payload.
+    sid = stream_run_id or (
+        str(payload.get("streamRunId")) if isinstance(payload.get("streamRunId"), str) else None
+    )
+    evidence_key = evidence_id(stream_id, frame_id, captured_at_ms, stream_run_id=sid)
     evidence: dict[str, JsonValue] = {
         "evidenceId": evidence_key,
         "traceId": evidence_key,
@@ -38,6 +43,9 @@ def add_evidence_fields(
         "droppedFrameCount": int(dropped_frame_count or 0),
         "latencyOrderValid": latency_order_valid(captured_at_ms, processed_at_ms, published_at_ms),
     }
+    if sid:
+        evidence["streamRunId"] = sid
+
     if snapshot_path is not None:
         evidence["snapshotPath"] = snapshot_path
     if clip_path is not None:

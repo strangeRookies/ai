@@ -9,6 +9,11 @@ class TrackSelector:
         
         self.missing_frames_count = 0
         self.active_fallback_track_id = None
+
+    def reset(self) -> None:
+        """Clear fallback / missing-frame state on session boundary."""
+        self.missing_frames_count = 0
+        self.active_fallback_track_id = None
         
     def filter(self, detections):
         if self.selected_track_id is None:

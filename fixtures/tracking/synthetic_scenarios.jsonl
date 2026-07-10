@@ -1,0 +1,20 @@
+{"frame_index": 0, "source_id": "video_a", "now": 1.0, "detections": [{"bbox": [10, 10, 60, 120], "confidence": 0.9}], "scenario": "bbox_jitter_start"}
+{"frame_index": 1, "source_id": "video_a", "now": 1.1, "detections": [{"bbox": [12, 12, 62, 122], "confidence": 0.88}], "scenario": "bbox_jitter"}
+{"frame_index": 2, "source_id": "video_a", "now": 1.2, "detections": [{"bbox": [11, 14, 61, 124], "confidence": 0.87}], "scenario": "bbox_jitter"}
+{"frame_index": 3, "source_id": "video_a", "now": 1.3, "detections": [], "scenario": "detection_loss"}
+{"frame_index": 4, "source_id": "video_a", "now": 1.4, "detections": [], "scenario": "detection_loss"}
+{"frame_index": 5, "source_id": "video_a", "now": 1.5, "detections": [{"bbox": [14, 16, 64, 126], "confidence": 0.86}], "scenario": "after_short_loss"}
+{"frame_index": 6, "source_id": "video_a", "now": 1.6, "detections": [{"bbox": [20, 20, 70, 130], "confidence": 0.9}, {"bbox": [200, 20, 250, 130], "confidence": 0.91}], "scenario": "two_person"}
+{"frame_index": 7, "source_id": "video_a", "now": 1.7, "detections": [{"bbox": [40, 22, 90, 132], "confidence": 0.9}, {"bbox": [180, 22, 230, 132], "confidence": 0.9}], "scenario": "two_person_crossing"}
+{"frame_index": 8, "source_id": "video_a", "now": 1.8, "detections": [{"bbox": [60, 24, 110, 134], "confidence": 0.89}, {"bbox": [160, 24, 210, 134], "confidence": 0.89}], "scenario": "two_person_crossing"}
+{"frame_index": 9, "source_id": "video_a", "now": 1.9, "detections": [{"bbox": [80, 26, 130, 136], "confidence": 0.88}], "scenario": "exit_one_person"}
+{"frame_index": 10, "source_id": "video_a", "now": 2.0, "detections": [], "scenario": "short_occlusion"}
+{"frame_index": 11, "source_id": "video_a", "now": 2.1, "detections": [{"bbox": [82, 28, 132, 138], "confidence": 0.87}], "scenario": "reentry"}
+{"frame_index": 12, "source_id": "video_a", "now": 2.2, "detections": [{"bbox": [300, 40, 360, 160], "confidence": 0.92}], "scenario": "sole_detection_far"}
+{"frame_index": 13, "source_id": "video_a", "now": 2.3, "detections": [{"bbox": [305, 42, 365, 162], "confidence": 0.9}], "scenario": "sole_track"}
+{"frame_index": 14, "source_id": "video_a", "now": 2.4, "detections": [{"bbox": [100, 100, 160, 220], "confidence": 0.85}], "scenario": "low_iou_close_center_setup"}
+{"frame_index": 15, "source_id": "video_a", "now": 2.5, "detections": [{"bbox": [118, 105, 178, 225], "confidence": 0.84}], "scenario": "low_iou_close_center"}
+{"frame_index": 16, "source_id": "video_a", "now": 2.6, "detections": [{"bbox": [10, 10, 80, 150], "confidence": 0.9}, {"bbox": [12, 12, 82, 152], "confidence": 0.88}], "scenario": "high_iou_wrong_person_candidates"}
+{"frame_index": 17, "source_id": "video_a", "now": 2.7, "detections": [{"bbox": [15, 15, 70, 130], "confidence": 0.9}, {"bbox": [200, 200, 250, 300], "confidence": 0.01}, {"bbox": [5, 5, 6, 6], "confidence": 0.95}], "scenario": "filter_low_conf_and_tiny_box"}
+{"frame_index": 18, "source_id": "video_b", "video_boundary": true, "now": 10.0, "detections": [{"bbox": [10, 10, 60, 120], "confidence": 0.95}], "scenario": "new_video_boundary"}
+{"frame_index": 19, "source_id": "video_b", "now": 10.1, "detections": [{"bbox": [12, 12, 62, 122], "confidence": 0.94}], "scenario": "new_video_continue"}

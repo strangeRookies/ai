@@ -83,6 +83,23 @@ class SupervisionPostProcessor:
     def diagnostics(self) -> dict:
         return self._tracker.diagnostics()
 
+    def reset(self, *, reason: str | None = None) -> dict:
+        """Rebuild tracker state for video boundary / reconnect (new stream)."""
+        del reason
+        self._tracker = SupervisionByteTrackAdapter(
+            track_thresh=self.config.track_thresh,
+            track_buffer=self.config.track_buffer,
+            match_thresh=self.config.match_thresh,
+            frame_rate=self.config.frame_rate,
+            bbox_smoothing_alpha=self.config.bbox_smoothing_alpha,
+            stability_fallback=self.config.stability_fallback,
+            fallback_max_missing_seconds=self.config.fallback_max_missing_seconds,
+            fallback_center_match_ratio=self.config.fallback_center_match_ratio,
+            session_reconnect=self.config.session_reconnect,
+            session_reconnect_max_missing_seconds=self.config.session_reconnect_max_missing_seconds,
+        )
+        return {"reset": True, "mode": "supervision"}
+
 
 class SupervisionByteTrackAdapter:
     def __init__(

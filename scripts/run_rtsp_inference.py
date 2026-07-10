@@ -42,6 +42,7 @@ from ai.inference.rtsp_runtime import (
     update_prediction_counts,
     update_tracking_summary,
 )
+from ai.analysis_session import AnalysisWorkerRuntime, backend_start_log_from_detector
 from ai.inference.tensorrt_runtime import (
     attach_runtime_summary_fields,
     finalize_runtime_summary_fields,
@@ -97,11 +98,26 @@ def run(args):
         else None
     )
     post_processor = build_faint_post_processor_from_args(args)
+    analysis_runtime = AnalysisWorkerRuntime.start(
+        camera_login_id,
+        tracker=detection_postprocessor,
+        sequence_buffers=keypoint_buffers,
+        fall_faint_processor=post_processor,
+        crop_sequence_buffers=crop_buffers,
+    )
     log_worker_backend_startup(
         camera_login_id=getattr(args, "camera_login_id", None) or args.camera_id,
         requested_model=args.yolo_model,
         detector=detector,
         device=getattr(args, "device", None),
+    )
+    backend_start_log_from_detector(
+        detector,
+        requested_model=args.yolo_model,
+        device=getattr(args, "device", None),
+        worker_run_id=analysis_runtime.session.worker_run_id,
+        stream_run_id=analysis_runtime.session.stream_run_id,
+        camera_login_id=camera_login_id,
     )
     publisher = None
     publisher_mode = "preflight" if getattr(args, "preflight_only", False) else None
@@ -157,6 +173,8 @@ def run(args):
         "events_generated": 0,
         "sample_event": None,
         "alert_delivery_result": publisher_mode,
+        "workerRunId": analysis_runtime.session.worker_run_id,
+        "streamRunId": analysis_runtime.session.stream_run_id,
     }
     attach_runtime_summary_fields(summary, detector, requested_model=args.yolo_model)
 
@@ -219,6 +237,7 @@ def run(args):
                         break
                     
                     frame_metadata = frame_buffer.record_capture(camera_login_id, packet, packet.frame.shape)
+                    stamp = analysis_runtime.stamp_snapshot()
                     packet_wrapped = FramePacket(
                         camera_login_id=camera_login_id,
                         frame_id=frame_metadata.frame_id,
@@ -228,7 +247,9 @@ def run(args):
                         height=frame_metadata.height,
                         frame_idx=packet.frame_idx,
                         timestamp=packet.timestamp,
-                        fps=getattr(packet, "fps", 0.0)
+                        fps=getattr(packet, "fps", 0.0),
+                        stream_run_id=stamp.get("stream_run_id"),
+                        session_generation=int(stamp.get("session_generation") or 0),
                     )
                     queue.put_latest(packet_wrapped)
                     
@@ -266,6 +287,11 @@ def run(args):
                 continue
                 
             frame_started_at = time.perf_counter()
+            if not analysis_runtime.accept_packet(frame_packet):
+                continue
+            capture_generation = int(getattr(frame_packet, "session_generation", 0) or analysis_runtime.session_generation)
+            capture_stream = getattr(frame_packet, "stream_run_id", None) or analysis_runtime.session.stream_run_id
+            analysis_runtime.advance_frame()
             frame_metadata = frame_buffer.get_by_frame_id(camera_login_id, frame_packet.frame_id)
             if frame_metadata is not None:
                 summary["latest_frame_id"] = frame_metadata.frame_id
@@ -283,6 +309,10 @@ def run(args):
                 detections,
                 frame_packet.frame,
                 frame_packet.timestamp,
+            )
+            analysis_runtime.note_tracker_events(
+                detection_postprocessor,
+                now=frame_packet.timestamp,
             )
             boxes = normalize_detections(detections)
             frame_keypoint_count = sum(1 for item in detections if item.get("keypoints"))
@@ -464,6 +494,14 @@ def run(args):
                         dropped_frame_count=queue.dropped_frame_count,
                         **lifecycle_payload_kwargs(emit_decision),
                     )
+                    payload = analysis_runtime.enrich_payload(
+                        payload,
+                        capture_generation=capture_generation,
+                        capture_stream_run_id=capture_stream,
+                    )
+                    if payload is None:
+                        summary["stale_event_dropped"] = int(summary.get("stale_event_dropped", 0)) + 1
+                        continue
                     event_log = build_inference_event_log(args, frame_packet, track_prediction, boxes, sequence)
                     if getattr(args, "event_log_dir", None):
                         save_inference_event_log(args.event_log_dir, event_log)
@@ -506,6 +544,16 @@ def run(args):
     finally:
         stop_event.set()
         reader_thread.join(timeout=3)
+        try:
+            # Worker exit/EOF: flush only — no empty next-session artifact.
+            analysis_runtime.finalize_for_exit(blocking=True)
+            summary["last_video_reset_reason"] = "VIDEO_EOF_FINALIZE"
+            summary["streamRunId"] = analysis_runtime.session.stream_run_id
+            summary["workerRunId"] = analysis_runtime.session.worker_run_id
+            summary["analysis_reset_count"] = analysis_runtime.session.reset_count
+            summary.update(analysis_runtime.safety_counters())
+        except Exception as exc:
+            print(f"[rtsp-inference] analysis session flush/reset failed: {exc}", flush=True)
         close = getattr(publisher, "close", None) if publisher is not None else None
         if close:
             close()

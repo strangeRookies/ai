@@ -26,7 +26,17 @@ from ai.registered_cameras import (
     tracking_stability_fallback_enabled,
 )
 from ai.streams.video_reader import VideoReader
+from ai.supervisor_policy import (
+    AssignmentConflictError,
+    CameraAssignment,
+    SupervisorRestartBook,
+    plan_source_change_restarts,
+    validate_camera_assignments,
+)
 from stream.rtsp_reader import redact_url
+
+# Module-level restart book (one supervisor process).
+_RESTART_BOOK = SupervisorRestartBook()
 
 CameraFailureStatus = Literal["DISCONNECTED", "ERROR"]
 
@@ -87,18 +97,28 @@ def restart_exited_worker(
     *,
     cameras_by_id: dict[str, RegisteredCamera],
     config: RunnerConfig,
+    restart_book: SupervisorRestartBook | None = None,
 ) -> None:
-    """ffmpeg 또는 overlay 중 하나가 죽으면 둘 다 정리하고 동일 overlay 포트로 전체 워커를 재생성한다."""
+    """ffmpeg 또는 overlay 중 하나가 죽으면 둘 다 정리하고 동일 overlay 포트로 해당 카메라만 재생성한다.
+
+    Never restarts other cameras. Applies exponential backoff + max consecutive failures
+    from SupervisorRestartBook (env-configurable; defaults are not production optima).
+    """
+    book = restart_book or _RESTART_BOOK
     worker = workers.get(camera_login_id)
     if worker is None:
         return
 
+    decision = book.on_worker_exited(camera_login_id)
     port = worker.overlay_port
     cmd_text = safe_command_text(worker.command) if getattr(worker, "command", None) else "unknown"
     masked_url = redact_url(worker.rtsp_url) if worker.rtsp_url else "unknown"
     print(
-        f"[registered-cameras][warning] worker exited; restarting camera={camera_login_id} "
-        f"| cameraLoginId={camera_login_id} | streamId={camera_login_id} "
+        f"[registered-cameras][warning] worker exited camera={camera_login_id} "
+        f"| consecutive_failures={decision.get('consecutive_failures')} "
+        f"| restart_count={decision.get('restart_count')} "
+        f"| allow_restart={decision.get('allow_restart')} "
+        f"| delay_sec={decision.get('delay_sec')} "
         f"| rtsp_url={masked_url} | overlay_port={port} "
         f"| overlay_log={worker.overlay_log_path} | command={cmd_text}",
         file=sys.stderr,
@@ -106,6 +126,29 @@ def restart_exited_worker(
     )
     stop_processes(worker.processes)
     report_overlay_stopped(camera_login_id, worker.rtsp_url, worker.overlay_port, config)
+
+    if not decision.get("allow_restart"):
+        st = book.state_for(camera_login_id)
+        status = {
+            "camera_login_id": camera_login_id,
+            "restart_blocked": True,
+            "blocked": True,
+            "reason": decision.get("reason") or st.last_block_reason,
+            "consecutive_failures": decision.get("consecutive_failures"),
+            "restart_count": decision.get("restart_count"),
+            "overlay_port": port,
+        }
+        # Structured status for ops/log scrapers (external visibility).
+        print(f"[registered-cameras][status] {status}", flush=True)
+        print(
+            f"[registered-cameras][error] restart blocked for camera={camera_login_id} "
+            f"reason={status['reason']} consecutive_failures={status['consecutive_failures']} "
+            f"restart_blocked=true",
+            file=sys.stderr,
+            flush=True,
+        )
+        del workers[camera_login_id]
+        return
 
     camera = cameras_by_id.get(camera_login_id)
     if camera is None:
@@ -117,6 +160,10 @@ def restart_exited_worker(
         )
         return
 
+    delay = float(decision.get("delay_sec") or 0.0)
+    if delay > 0:
+        time.sleep(delay)
+
     new_worker = start_camera_worker(camera, config, port)
     if new_worker is None:
         del workers[camera_login_id]
@@ -127,9 +174,11 @@ def restart_exited_worker(
         )
         return
 
+    book.on_worker_started(camera_login_id)
     workers[camera_login_id] = new_worker
     print(
-        f"[registered-cameras] restarted camera={camera_login_id} on overlay_port={port}",
+        f"[registered-cameras] restarted camera={camera_login_id} on overlay_port={port} "
+        f"| restart_count={decision.get('restart_count')}",
         flush=True,
     )
 
@@ -349,40 +398,93 @@ def sync_camera_workers(
     workers: dict[str, CameraWorker],
     cameras: list[RegisteredCamera],
     config: RunnerConfig,
+    *,
+    restart_book: SupervisorRestartBook | None = None,
+    apply_startup_stagger: bool = False,
 ) -> None:
     """backend active camera 목록과 현재 worker set을 맞춘다.
 
     삭제된 카메라는 즉시 stop하고, 설정 fingerprint가 바뀐 카메라는 같은 overlay port를
-    우선 재사용해 restart한다. 새 카메라는 `next_overlay_port()`로 빈 포트를 찾아
-    cam_01~cam_N처럼 동적인 cameraLoginId를 하드코딩 없이 처리한다.
+    우선 재사용해 **해당 카메라만** restart한다. 새 카메라는 `next_overlay_port()`로 빈 포트를 찾아
+    동적 cameraLoginId를 하드코딩 없이 처리한다.
     """
-
+    book = restart_book or _RESTART_BOOK
     active_cameras = {camera.camera_login_id: camera for camera in cameras}
+
+    # Fail-fast on assignment conflicts (id / planned ports / metrics output paths).
+    planned_assignments: list[CameraAssignment] = []
+    simulated_owners: dict[str, object] = dict(workers)
+    for camera in cameras:
+        preferred = (
+            workers[camera.camera_login_id].overlay_port
+            if camera.camera_login_id in workers
+            else None
+        )
+        port = next_overlay_port(
+            simulated_owners,  # type: ignore[arg-type]
+            config,
+            preferred_port=preferred,
+            camera_login_id=camera.camera_login_id,
+        )
+        # Reserve port so subsequent cameras cannot plan the same port.
+        simulated_owners[f"__plan__{camera.camera_login_id}"] = type(
+            "P", (), {"overlay_port": port}
+        )()
+        planned_assignments.append(
+            CameraAssignment(
+                camera_login_id=camera.camera_login_id,
+                source=camera_source_signature(camera, config),
+                overlay_port=port,
+                output_path=f"runs/tracking_metrics/{camera.camera_login_id}",
+            )
+        )
+    try:
+        validate_camera_assignments(planned_assignments)
+    except AssignmentConflictError as exc:
+        print(f"[registered-cameras][error] assignment conflict: {exc}", file=sys.stderr, flush=True)
+        raise
+
+    current_sigs = {cid: w.source_signature for cid, w in workers.items()}
+    desired_sigs = {cam.camera_login_id: camera_source_signature(cam, config) for cam in cameras}
+    plan = plan_source_change_restarts(current_sigs, desired_sigs)
+
     for camera_login_id in list(workers):
-        if camera_login_id not in active_cameras:
+        if plan.get(camera_login_id) == "removed" or camera_login_id not in active_cameras:
             print(f"[registered-cameras] stopping inactive camera={camera_login_id}", flush=True)
             stop_processes(workers[camera_login_id].processes)
             report_overlay_stopped(camera_login_id, workers[camera_login_id].rtsp_url, workers[camera_login_id].overlay_port, config)
             del workers[camera_login_id]
 
+    start_index = 0
     for camera in active_cameras.values():
+        action = plan.get(camera.camera_login_id)
         existing_worker = workers.get(camera.camera_login_id)
-        if existing_worker is not None and existing_worker.source_signature == camera_source_signature(camera, config):
+        if action is None and existing_worker is not None:
+            # unchanged — do not restart
             continue
         if existing_worker is not None:
-            print(f"[registered-cameras] restarting updated camera={camera.camera_login_id}", flush=True)
+            print(
+                f"[registered-cameras] restarting updated camera={camera.camera_login_id} reason={action}",
+                flush=True,
+            )
             preferred_port = existing_worker.overlay_port
             stop_processes(existing_worker.processes)
             report_overlay_stopped(camera.camera_login_id, existing_worker.rtsp_url, existing_worker.overlay_port, config)
             del workers[camera.camera_login_id]
         else:
             preferred_port = None
+        if apply_startup_stagger:
+            delay = book.startup_stagger_delay(start_index)
+            if delay > 0:
+                time.sleep(delay)
+            start_index += 1
         worker = start_camera_worker(
             camera,
             config,
             next_overlay_port(workers, config, preferred_port=preferred_port, camera_login_id=camera.camera_login_id),
         )
         if worker is not None:
+            book.on_worker_started(camera.camera_login_id)
             workers[camera.camera_login_id] = worker
 
 
@@ -402,7 +504,8 @@ def run_camera_sync_loop(cameras: list[RegisteredCamera], config: RunnerConfig) 
     """
 
     workers: dict[str, CameraWorker] = {}
-    sync_camera_workers(workers, cameras, config)
+    # Initial multi-camera spawn: optional stagger to reduce simultaneous process/file storms.
+    sync_camera_workers(workers, cameras, config, apply_startup_stagger=True)
     if config.dry_run:
         return
 

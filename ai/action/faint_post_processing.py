@@ -451,6 +451,11 @@ class ExitEventPostProcessor:
     def reset_track(self, camera_id, track_id):
         self._consecutive_by_track[f"{camera_id}:track:{track_id}"] = 0
 
+    def reset(self) -> None:
+        """Clear all exit state (video boundary / reconnect)."""
+        self._consecutive_by_track.clear()
+        self._last_event_time.clear()
+
 
 DEFAULT_HAZARD_MIN_CONSECUTIVE = 2
 DEFAULT_HAZARD_COOLDOWN_SECONDS = 15.0
@@ -478,3 +483,8 @@ class HazardEventPostProcessor:
 
     def reset_track(self, camera_id, track_id):
         self._consecutive_by_track[f"{camera_id}:track:{track_id}"] = 0
+
+    def reset(self) -> None:
+        """Clear all hazard state (video boundary / reconnect)."""
+        self._consecutive_by_track.clear()
+        self._last_event_time.clear()

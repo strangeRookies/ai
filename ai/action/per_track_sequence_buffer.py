@@ -60,6 +60,21 @@ class PerTrackKeypointSequenceBuffers:
         self.buffer_retained_count = 0
         self.buffer_deleted_count = 0
 
+    def clear(self) -> None:
+        """Drop all per-track sequence state (session/video boundary)."""
+        self._buffers.clear()
+        self._last_seen_at.clear()
+        self._last_detection_by_track.clear()
+        self.sequences_generated_by_track.clear()
+        self.sequences_kept_by_filter = 0
+        self.sequences_skipped_by_filter = 0
+        self.cheap_filter_reasons.clear()
+        self.last_sequence_diagnostics.clear()
+        self.relink_success_count = 0
+        self.relink_failure_count = 0
+        self.buffer_retained_count = 0
+        self.buffer_deleted_count = 0
+
     def add(self, frame_idx, detections, frame_shape=None, now=None, frame_id=None, captured_at_ms=None):
         """현재 프레임의 tracked detections를 buffer에 넣고 준비된 sequence들을 반환한다.
 
@@ -241,6 +256,12 @@ class PerTrackCropSequenceBuffers:
         self._last_seen_at = {}
         self.sequences_generated_by_track = {}
         self.last_sequence_diagnostics = {}
+
+    def clear(self) -> None:
+        self._buffers.clear()
+        self._last_seen_at.clear()
+        self.sequences_generated_by_track.clear()
+        self.last_sequence_diagnostics.clear()
 
     def add(self, frame_idx, frame, boxes, now=None, frame_id=None, captured_at_ms=None):
         now = time.time() if now is None else float(now)

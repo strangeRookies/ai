@@ -314,6 +314,21 @@ class SimpleTrackAssigner:
     def diagnostics(self):
         return dict(self.last_diagnostics)
 
+    def reset(self, *, reason: str | None = None) -> dict:
+        """Clear all tracks and match state for a new video/session boundary."""
+        previous_active = len(self._tracks)
+        previous_next = self._next_track_id
+        self._tracks = {}
+        self._next_track_id = 1
+        self._frame_index = 0
+        self.last_events = []
+        self.last_diagnostics = self._empty_diagnostics()
+        return {
+            "reason": reason or "reset",
+            "previous_active_tracks": previous_active,
+            "previous_next_track_id": previous_next,
+        }
+
     def _empty_diagnostics(self):
         return {
             "active_tracks": 0,

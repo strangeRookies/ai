@@ -57,6 +57,7 @@ from scripts.run_rtsp_inference import FaintEventPostProcessor, create_classifie
 from ai.action.fall_lifecycle_config import build_faint_post_processor_from_args, resolved_faint_threshold
 from ai.inference.tensorrt_runtime import log_periodic_inference_metrics, log_worker_backend_startup
 from ai.runtime_metrics import RuntimeMetrics
+from ai.analysis_session import AnalysisWorkerRuntime, backend_start_log_from_detector
 from ai.action.faint_post_processing import ExitEventPostProcessor, DEFAULT_EXIT_MIN_CONSECUTIVE, DEFAULT_EXIT_COOLDOWN_SECONDS, HazardEventPostProcessor, DEFAULT_HAZARD_MIN_CONSECUTIVE, DEFAULT_HAZARD_COOLDOWN_SECONDS
 from stream.rtsp_reader import redact_url
 from tracking.display_id_mapper import DisplayIdMapper
@@ -196,6 +197,7 @@ def process_frame(
     track_selector=None,
     sync_sink=None,
     pose_reporter=None,
+    analysis_runtime=None,
 ):
     """프레임 처리 중 예외가 나면 stage 정보를 붙여 worker log에 남긴다.
 
@@ -228,6 +230,7 @@ def process_frame(
             track_selector=track_selector,
             sync_sink=sync_sink,
             pose_reporter=pose_reporter,
+            analysis_runtime=analysis_runtime,
         )
     except Exception as exc:
         stage = getattr(exc, "stage", "yolo_inference")
@@ -260,6 +263,7 @@ def _process_frame_impl(
     track_selector=None,
     sync_sink=None,
     pose_reporter=None,
+    analysis_runtime=None,
 ):
     """RTSP frame 하나를 YOLO Pose -> tracking -> LSTM -> MQTT payload로 처리한다.
 
@@ -298,6 +302,8 @@ def _process_frame_impl(
     _pre_track_detections = detections
     if tracker is not None:
         detections = update_detections_with_postprocessor(tracker, detections, frame_packet.frame, frame_packet.timestamp)
+        if analysis_runtime is not None:
+            analysis_runtime.note_tracker_events(tracker, now=getattr(frame_packet, "timestamp", None))
 
     # Stage 2: tracking association 로그. raw detection은 있는데 active track이 0이면
     # detector가 아니라 tracker threshold/association 문제로 분류할 수 있다.
@@ -593,12 +599,23 @@ def _process_frame_impl(
         published_at_ms=published_at_ms,
         dropped_frame_count=dropped_frame_count,
     )
+    _cap_gen = getattr(frame_packet, "session_generation", None)
+    _cap_stream = getattr(frame_packet, "stream_run_id", None)
+    if analysis_runtime is not None:
+        overlay_payload = analysis_runtime.enrich_payload(
+            overlay_payload,
+            capture_generation=_cap_gen,
+            capture_stream_run_id=_cap_stream,
+        )
     # Stage 4: Payload log + quantitative metrics update
     _payload_frame_id = getattr(frame_metadata, "frame_id", None) or _log_frame_id
-    log_payload_stage(stream_id, _payload_frame_id, overlay_payload)
-    update_quantitative_summary(summary, boxes, _tracker_diag if tracker is not None else None)
-    summary["latest_overlay_event_count"] = len(overlay_payload["events"])
-    if sync_sink is not None:
+    if overlay_payload is not None:
+        log_payload_stage(stream_id, _payload_frame_id, overlay_payload)
+        update_quantitative_summary(summary, boxes, _tracker_diag if tracker is not None else None)
+        summary["latest_overlay_event_count"] = len(overlay_payload.get("events") or [])
+    else:
+        summary["stale_overlay_dropped"] = int(summary.get("stale_overlay_dropped", 0)) + 1
+    if sync_sink is not None and overlay_payload is not None:
         try:
             sync_sink.publish_frame(frame_packet.frame, overlay_payload)
         except Exception as exc:
@@ -607,7 +624,7 @@ def _process_frame_impl(
                 file=sys.stderr,
                 flush=True,
             )
-    if publisher is not None:
+    if publisher is not None and overlay_payload is not None:
         try:
             publisher.publish(overlay_payload, topic=topic_settings["camera_topic"])
         except Exception as exc:
@@ -627,6 +644,15 @@ def _process_frame_impl(
             dropped_frame_count=dropped_frame_count,
             **lifecycle_payload_kwargs(emit_decision),
         )
+        if analysis_runtime is not None:
+            payload = analysis_runtime.enrich_payload(
+                payload,
+                capture_generation=_cap_gen,
+                capture_stream_run_id=_cap_stream,
+            )
+        if payload is None:
+            summary["stale_event_dropped"] = int(summary.get("stale_event_dropped", 0)) + 1
+            continue
         log_lstm_event(args, stream_id, sequence, track_prediction)
         summary["events_generated"] += 1
         if emit_decision is not None and emit_decision.is_unrecovered:
@@ -749,11 +775,31 @@ class OverlayWorker:
         self.camera_login_id = getattr(self.args, "camera_login_id", self.args.camera_id) or self.args.camera_id
         self.queue = CameraFrameQueue(self.camera_login_id, maxsize=getattr(self.args, "frame_queue_maxsize", 3))
         self.frame_buffer = FrameMetadataBuffer(maxlen=self.args.frame_sync_buffer_size)
+        # Reader increments on STREAM_ENDED / error reconnect so inference can reset analysis state.
+        self._reconnect_generation = 0
+        self._reconnect_lock = threading.Lock()
+        # Create runtime early so reader can stamp session_generation / stream_run_id on packets.
+        self.analysis_runtime = AnalysisWorkerRuntime.start(self.camera_login_id)
 
         # 10초 스냅샷 비디오 클립 버퍼 및 큐 초기화 (state에 공유하여 process_frame에서도 접근 가능케 함)
         self.state.clip_queue = queue.Queue(maxsize=10)
         self.state.clip_buffer = EventClipBuffer()
         self.clip_worker = None
+
+    def _bump_reconnect_generation(self, reason: str = "RTSP_RECONNECTED") -> int:
+        with self._reconnect_lock:
+            self._reconnect_generation += 1
+            gen = self._reconnect_generation
+        print(
+            f"[ai-overlay-reader] camera={self.camera_login_id} reconnect_generation={gen} reason={reason}",
+            flush=True,
+        )
+        return gen
+
+    def _consume_reconnect_generation(self, seen: int) -> tuple[int, bool]:
+        with self._reconnect_lock:
+            current = self._reconnect_generation
+        return current, current != seen
 
     def start(self):
         self.reader_thread = threading.Thread(target=self._reader_run, name="ai-overlay-reader", daemon=True)
@@ -794,12 +840,18 @@ class OverlayWorker:
                             packet = reader.read()
                             if packet is None:
                                 status_publisher.notify_disconnected(reason="STREAM_ENDED")
+                                self._bump_reconnect_generation("VIDEO_EOF")
                                 break
                             
                             frame_metadata = self.frame_buffer.record_capture(
                                 self.camera_login_id,
                                 packet,
                                 packet.frame.shape
+                            )
+                            stamp = (
+                                self.analysis_runtime.stamp_snapshot()
+                                if self.analysis_runtime is not None
+                                else {"session_generation": 0, "stream_run_id": None}
                             )
                             packet_wrapped = FramePacket(
                                 camera_login_id=self.camera_login_id,
@@ -810,7 +862,9 @@ class OverlayWorker:
                                 height=frame_metadata.height,
                                 frame_idx=packet.frame_idx,
                                 timestamp=packet.timestamp,
-                                fps=getattr(packet, "fps", 0.0)
+                                fps=getattr(packet, "fps", 0.0),
+                                stream_run_id=stamp.get("stream_run_id"),
+                                session_generation=int(stamp.get("session_generation") or 0),
                             )
                             self.queue.put_latest(packet_wrapped)
                             
@@ -847,6 +901,7 @@ class OverlayWorker:
                 if not self.stop_event.is_set():
                     reconnect_count += 1
                     print(f"[ai-overlay-reader] camera={self.camera_login_id} reconnecting (count={reconnect_count}) after error/end", flush=True)
+                    self._bump_reconnect_generation("RTSP_RECONNECTED")
                     if status_publisher is not None:
                         status_publisher.notify_reconnecting()
                     time.sleep(self.args.reconnect_delay)
@@ -861,12 +916,6 @@ class OverlayWorker:
         classifier, _classifier_mode = create_classifier(self.args.action_model, self.args.action_device, action_threshold)
         publisher, publisher_mode = create_event_publisher(self.args)
         print(f"[ai-overlay-inference] initialized event publisher: {publisher_mode}", flush=True)
-        log_worker_backend_startup(
-            camera_login_id=self.camera_login_id,
-            requested_model=self.args.yolo_model,
-            detector=detector,
-            device=getattr(self.args, "device", None),
-        )
         yolo_metrics = RuntimeMetrics()
         yolo_metrics.set_warmup_skip(int(getattr(self.args, "infer_warmup_frames", 20)))
         
@@ -948,11 +997,110 @@ class OverlayWorker:
                     relink_max_time_gap_seconds=getattr(self.args, "tracking_relink_max_time_gap_seconds", 2.0),
                 )
 
+        analysis_runtime = self.analysis_runtime or AnalysisWorkerRuntime.start(self.camera_login_id)
+        analysis_runtime.bind_optional(
+            tracker=tracker,
+            sequence_buffers=sequence_buffers[self.camera_login_id],
+            fall_faint_processor=post_processor,
+            display_id_mapper=display_id_mapper,
+            overlay_publish_state=overlay_publish_state,
+            exit_post_processor=exit_post_processor,
+            hazard_post_processor=hazard_post_processor,
+            track_selector=track_selector,
+        )
+        self.analysis_runtime = analysis_runtime
+        # Real detector backend identity once at worker start (no fake TRT numbers).
+        log_worker_backend_startup(
+            camera_login_id=self.camera_login_id,
+            requested_model=self.args.yolo_model,
+            detector=detector,
+            device=getattr(self.args, "device", None),
+        )
+        backend_start_log_from_detector(
+            detector,
+            requested_model=self.args.yolo_model,
+            device=getattr(self.args, "device", None),
+            worker_run_id=analysis_runtime.session.worker_run_id,
+            stream_run_id=analysis_runtime.session.stream_run_id,
+            camera_login_id=self.camera_login_id,
+        )
+        summary["workerRunId"] = analysis_runtime.session.worker_run_id
+        summary["streamRunId"] = analysis_runtime.session.stream_run_id
+
+        def _make_sequence_buffer():
+            if self.args.classifier_input == "crops":
+                return PerTrackCropSequenceBuffers(
+                    self.args.sequence_length,
+                    self.args.sequence_stride,
+                    self.args.resize_size,
+                    max_track_age_seconds=self.args.track_max_missing_seconds,
+                )
+            return PerTrackKeypointSequenceBuffers(
+                self.args.sequence_length,
+                self.args.sequence_stride,
+                max_track_age_seconds=self.args.track_max_missing_seconds,
+                cheap_filter_config=cheap_filter_config,
+                missing_track_grace_seconds=getattr(self.args, "tracking_grace_period_seconds", self.args.track_max_missing_seconds),
+                relink_iou_threshold=getattr(self.args, "tracking_relink_iou_threshold", 0.30),
+                relink_center_distance_ratio=getattr(self.args, "tracking_relink_center_ratio", 0.70),
+                relink_max_time_gap_seconds=getattr(self.args, "tracking_relink_max_time_gap_seconds", 2.0),
+            )
+
+        def _apply_analysis_reset(reset_reason: str, *, frame_gap=None, frame_id=None):
+            nonlocal tracker, post_processor, display_id_mapper, overlay_publish_state
+            nonlocal exit_post_processor, hazard_post_processor, track_selector, postprocessing_mode
+            record = analysis_runtime.reset_analysis_session(
+                reset_reason,
+                tracker_factory=lambda: create_detection_postprocessor(self.args)[0],
+                sequence_factory=_make_sequence_buffer,
+                fall_faint_factory=lambda: build_faint_post_processor_from_args(self.args),
+                display_id_mapper_factory=DisplayIdMapper,
+                overlay_publish_state_factory=OverlayPublishState,
+                exit_post_processor_factory=lambda: ExitEventPostProcessor(
+                    min_consecutive=getattr(self.args, "exit_min_consecutive", DEFAULT_EXIT_MIN_CONSECUTIVE),
+                    cooldown_seconds=getattr(self.args, "exit_cooldown_seconds", DEFAULT_EXIT_COOLDOWN_SECONDS),
+                ),
+                hazard_post_processor_factory=lambda: HazardEventPostProcessor(
+                    min_consecutive=getattr(self.args, "hazard_min_consecutive", DEFAULT_HAZARD_MIN_CONSECUTIVE),
+                    cooldown_seconds=getattr(self.args, "hazard_cooldown_seconds", DEFAULT_HAZARD_COOLDOWN_SECONDS),
+                ),
+                frame_queue=self.queue,
+                flush_blocking=False,
+            )
+            tracker = analysis_runtime.session.tracker
+            sequence_buffers[self.camera_login_id] = analysis_runtime.session.sequence_buffers
+            post_processor = analysis_runtime.session.fall_faint_processor
+            display_id_mapper = analysis_runtime.display_id_mapper
+            overlay_publish_state = analysis_runtime.overlay_publish_state
+            exit_post_processor = analysis_runtime.exit_post_processor
+            hazard_post_processor = analysis_runtime.hazard_post_processor
+            summary["video_state_resets"] = summary.get("video_state_resets", 0) + 1
+            summary["last_video_reset_reason"] = reset_reason
+            summary["streamRunId"] = analysis_runtime.session.stream_run_id
+            summary["workerRunId"] = analysis_runtime.session.worker_run_id
+            print(
+                f"[video-boundary] camera={self.camera_login_id} reset={reset_reason} "
+                f"streamRunId={analysis_runtime.session.stream_run_id}",
+                flush=True,
+            )
+            from ai.inference.tracking_debug import log_tracker_reset_decision, build_tracker_reset_record
+            dbg = build_tracker_reset_record(
+                camera_login_id=self.camera_login_id,
+                frame_id=frame_id,
+                frame_gap=frame_gap,
+                tracker_object_id=id(tracker),
+                reset=True,
+                reason=reset_reason,
+            )
+            log_tracker_reset_decision(dbg)
+            return record
+
         last_heartbeat_time = time.monotonic()
         inference_count = 0
         mqtt_publish_count = 0
         last_frame_id = None
         last_captured_at_ms = None
+        seen_reconnect_gen = self._reconnect_generation
 
         while not self.stop_event.is_set():
             if not camera_ids:
@@ -969,7 +1117,15 @@ class OverlayWorker:
                 time.sleep(0.005)
                 continue
 
-            # RTSP reconnect / large frame gap tracker reset check
+            # RTSP reconnect signal from reader thread (EOF / error reconnect) BEFORE accept/advance
+            seen_reconnect_gen, reconnect_pending = self._consume_reconnect_generation(seen_reconnect_gen)
+            if reconnect_pending:
+                _apply_analysis_reset("RTSP_RECONNECTED", frame_id=frame_packet.frame_id)
+                # queue cleared; current packet may be stale — drop
+                if not analysis_runtime.accept_packet(frame_packet):
+                    continue
+
+            # RTSP reconnect / large frame gap tracker reset check (proxy when no explicit signal)
             frame_gap = None
             if last_frame_id is not None and frame_packet.frame_idx is not None:
                 frame_gap = frame_packet.frame_idx - last_frame_id
@@ -991,52 +1147,9 @@ class OverlayWorker:
                 reset_reason = "LARGE_FRAME_GAP"
 
             if reset_decided:
-                tracker, postprocessing_mode = create_detection_postprocessor(self.args)
-                if self.args.classifier_input == "crops":
-                    sequence_buffers[current_cam_id] = PerTrackCropSequenceBuffers(
-                        self.args.sequence_length,
-                        self.args.sequence_stride,
-                        self.args.resize_size,
-                        max_track_age_seconds=self.args.track_max_missing_seconds,
-                    )
-                else:
-                    sequence_buffers[current_cam_id] = PerTrackKeypointSequenceBuffers(
-                        self.args.sequence_length,
-                        self.args.sequence_stride,
-                        max_track_age_seconds=self.args.track_max_missing_seconds,
-                        cheap_filter_config=cheap_filter_config,
-                        missing_track_grace_seconds=getattr(self.args, "tracking_grace_period_seconds", self.args.track_max_missing_seconds),
-                        relink_iou_threshold=getattr(self.args, "tracking_relink_iou_threshold", 0.30),
-                        relink_center_distance_ratio=getattr(self.args, "tracking_relink_center_ratio", 0.70),
-                        relink_max_time_gap_seconds=getattr(self.args, "tracking_relink_max_time_gap_seconds", 2.0),
-                    )
-                post_processor = build_faint_post_processor_from_args(self.args)
-                exit_post_processor = ExitEventPostProcessor(
-                    min_consecutive=getattr(self.args, "exit_min_consecutive", DEFAULT_EXIT_MIN_CONSECUTIVE),
-                    cooldown_seconds=getattr(self.args, "exit_cooldown_seconds", DEFAULT_EXIT_COOLDOWN_SECONDS),
-                )
-                hazard_post_processor = HazardEventPostProcessor(
-                    min_consecutive=getattr(self.args, "hazard_min_consecutive", DEFAULT_HAZARD_MIN_CONSECUTIVE),
-                    cooldown_seconds=getattr(self.args, "hazard_cooldown_seconds", DEFAULT_HAZARD_COOLDOWN_SECONDS),
-                )
-                display_id_mapper = DisplayIdMapper()
-                overlay_publish_state = OverlayPublishState()
-                summary["video_state_resets"] = summary.get("video_state_resets", 0) + 1
-                summary["last_video_reset_reason"] = reset_reason
-                print(
-                    f"[video-boundary] camera={self.camera_login_id} reset={reset_reason}",
-                    flush=True,
-                )
-                from ai.inference.tracking_debug import log_tracker_reset_decision, build_tracker_reset_record
-                record = build_tracker_reset_record(
-                    camera_login_id=self.camera_login_id,
-                    frame_id=frame_packet.frame_id,
-                    frame_gap=frame_gap,
-                    tracker_object_id=id(tracker),
-                    reset=True,
-                    reason=reset_reason,
-                )
-                log_tracker_reset_decision(record)
+                _apply_analysis_reset(reset_reason, frame_gap=frame_gap, frame_id=frame_packet.frame_id)
+                if not analysis_runtime.accept_packet(frame_packet):
+                    continue
             elif os.getenv("TRACKING_DEBUG", "false").lower() in {"1", "true", "yes", "on"}:
                 from ai.inference.tracking_debug import log_tracker_reset_decision, build_tracker_reset_record
                 status_reason = "FRAME_GAP_OK" if frame_gap is not None else "NO_PREVIOUS_FRAME"
@@ -1049,6 +1162,14 @@ class OverlayWorker:
                     reason=status_reason,
                 )
                 log_tracker_reset_decision(record)
+
+            # Drop packets stamped for a previous stream/generation (queue race after reset).
+            if not analysis_runtime.accept_packet(frame_packet):
+                continue
+
+            capture_generation = int(getattr(frame_packet, "session_generation", 0) or analysis_runtime.session_generation)
+            capture_stream = getattr(frame_packet, "stream_run_id", None) or analysis_runtime.session.stream_run_id
+            analysis_runtime.advance_frame()
 
             last_frame_id = frame_packet.frame_idx
             last_captured_at_ms = frame_packet.captured_at_ms
@@ -1105,6 +1226,7 @@ class OverlayWorker:
                 track_selector=track_selector,
                 sync_sink=self.sync_sink,
                 pose_reporter=pose_reporter,
+                analysis_runtime=analysis_runtime,
             )
 
             now_ms = time.time_ns() // 1_000_000
@@ -1120,8 +1242,13 @@ class OverlayWorker:
                 dropped_frame_count=self.queue.dropped_frame_count,
                 processed_at_ms=summary.get("latest_processed_at_ms"),
             )
+            fs_payload = analysis_runtime.enrich_payload(
+                fs_payload,
+                capture_generation=capture_generation,
+                capture_stream_run_id=capture_stream,
+            )
             topic_settings = mqtt_topic_settings_from_args(self.args)
-            if publisher is not None:
+            if publisher is not None and fs_payload is not None:
                 try:
                     publisher.publish(fs_payload, topic=topic_settings["camera_topic"])
                     mqtt_publish_count += 1
@@ -1198,6 +1325,12 @@ class OverlayWorker:
                 break
 
         pose_reporter.log_final_summary()
+        try:
+            # Exit: flush only — do not open a new empty stream session artifact.
+            analysis_runtime.finalize_for_exit(blocking=True)
+            summary.update(analysis_runtime.safety_counters())
+        except Exception as exc:
+            print(f"[analysis-session] final metrics flush failed: {exc}", flush=True)
         close = getattr(publisher, "close", None) if publisher is not None else None
         if close:
             close()
