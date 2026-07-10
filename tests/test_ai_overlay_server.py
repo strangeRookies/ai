@@ -396,6 +396,28 @@ class AiOverlayServerTest(unittest.TestCase):
         self.assertIn("[selected-track-warning]", text)
 
 
+    def test_video_boundary_uses_fresh_sequence_buffer(self):
+        detection = {
+            "track_id": 7,
+            "bbox": [1, 2, 30, 40],
+            "confidence": 0.82,
+            "keypoints": [{"x": 1, "y": 2, "confidence": 0.9}],
+        }
+        first_video_buffer = PerTrackKeypointSequenceBuffers(sequence_length=2, stride=1)
+
+        first_video_buffer.add(99, [detection], (64, 64, 3), now=9.9)
+
+        next_video_buffer = PerTrackKeypointSequenceBuffers(sequence_length=2, stride=1)
+        first_sequences = next_video_buffer.add(0, [detection], (64, 64, 3), now=0.0)
+        second_sequences = next_video_buffer.add(1, [detection], (64, 64, 3), now=0.1)
+
+        self.assertEqual(first_sequences, [])
+        self.assertEqual(next_video_buffer.buffer_lengths(), {7: 2})
+        self.assertEqual(len(second_sequences), 1)
+        self.assertEqual(second_sequences[0]["start_frame"], 0)
+        self.assertEqual(second_sequences[0]["end_frame"], 1)
+
+
 class FakePublisher:
     def __init__(self):
         self.published = []
