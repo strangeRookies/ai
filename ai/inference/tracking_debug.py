@@ -9,6 +9,13 @@ def tracking_debug_enabled() -> bool:
     return os.getenv("TRACKING_DEBUG", "false").lower() in {"1", "true", "yes", "on"}
 
 
+def track_lifecycle_log_enabled() -> bool:
+    """Log track lost/new/filter reasons. On when TRACK_ID_LOG or TRACKING_DEBUG is set."""
+    if tracking_debug_enabled():
+        return True
+    return os.getenv("TRACK_ID_LOG", "false").lower() in {"1", "true", "yes", "on"}
+
+
 def build_tracker_startup_record(
     camera_login_id: str,
     tracker_backend: str,
@@ -80,6 +87,49 @@ def log_frame_tracking_debug(record: Mapping[str, object]) -> None:
     if not tracking_debug_enabled():
         return
     print(f"[tracking-debug] {json.dumps(dict(record), ensure_ascii=False)}", flush=True)
+
+
+def log_track_lifecycle_events(
+    camera_login_id: str,
+    frame_id: int | None,
+    tracker_diagnostics: Mapping[str, object] | None,
+    *,
+    force: bool = False,
+) -> None:
+    """Print structured track lifecycle events (lost/new/filter/match fail).
+
+    Enable with env TRACK_ID_LOG=true (or TRACKING_DEBUG=true).
+    Only emits when there are interesting events (lost/new/filter/id_switch),
+    unless force=True.
+    """
+    if not force and not track_lifecycle_log_enabled():
+        return
+    diag = dict(tracker_diagnostics or {})
+    events = list(diag.get("lifecycle_events") or [])
+    interesting = [
+        e
+        for e in events
+        if e.get("event") in {"lost", "new_track", "filter", "id_switch_like"}
+        or (e.get("event") == "match" and e.get("reason") in {"soft", "sole"})
+    ]
+    if not interesting and not force:
+        # Still log a compact line if counts show activity
+        if int(diag.get("lost_tracks", 0) or 0) == 0 and int(diag.get("new_tracks", 0) or 0) == 0:
+            return
+    record = {
+        "stage": "track_lifecycle",
+        "cameraLoginId": camera_login_id,
+        "frameId": frame_id,
+        "activeTracks": diag.get("active_tracks"),
+        "newTracks": diag.get("new_tracks"),
+        "lostTracks": diag.get("lost_tracks"),
+        "idSwitchLike": diag.get("id_switch_like_events"),
+        "rawDetections": diag.get("raw_detection_count"),
+        "filteredDetections": diag.get("filtered_detection_count"),
+        "removedTrackIds": diag.get("removed_track_ids"),
+        "events": interesting or events[:20],
+    }
+    print(f"[track-lifecycle] {json.dumps(record, ensure_ascii=False)}", flush=True)
 
 
 def build_tracker_reset_record(

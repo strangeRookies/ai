@@ -124,6 +124,10 @@ class SupervisionByteTrackAdapter:
         }
         self._tracker = sv.ByteTrack(**constructor_kwargs)
         self._active_track_ids: set[int] = set()
+        self._previous_active_track_ids: set[int] = set()
+        self._lifecycle_events: list[dict] = []
+        self._last_new_tracks = 0
+        self._last_lost_tracks = 0
         self._bbox_smoothing_alpha = bbox_smoothing_alpha
         self._previous_bboxes: dict[int, list[float]] = {}
         self._stability_fallback = bool(stability_fallback)
@@ -163,7 +167,7 @@ class SupervisionByteTrackAdapter:
         """
 
         if not detections:
-            self._active_track_ids = set()
+            self._record_active_set_delta(set())
             self._previous_bboxes.clear()
             if self._fallback_assigner is not None:
                 self._fallback_assigner.update([])
@@ -238,6 +242,11 @@ class SupervisionByteTrackAdapter:
                 for item in fallback_output
                 if item.get("track_id") is not None
             }
+            # Fallback SimpleTrackAssigner already owns detailed lifecycle events.
+            self._previous_active_track_ids = set(self._active_track_ids)
+            self._lifecycle_events = []
+            self._last_new_tracks = 0
+            self._last_lost_tracks = 0
             return fallback_output
 
         if self._session_reconnector is not None:
@@ -247,7 +256,36 @@ class SupervisionByteTrackAdapter:
                 for item in output
                 if item.get("track_id") is not None
             }
+        self._record_active_set_delta(self._active_track_ids)
         return output
+
+    def _record_active_set_delta(self, active_ids: set[int]) -> None:
+        """Synthesize lost/new lifecycle events from ByteTrack active-id set changes."""
+        previous = self._previous_active_track_ids
+        new_ids = sorted(active_ids - previous)
+        lost_ids = sorted(previous - active_ids)
+        events: list[dict] = []
+        for track_id in lost_ids:
+            events.append(
+                {
+                    "event": "lost",
+                    "reason": "bytetrack_inactive",
+                    "trackId": int(track_id),
+                }
+            )
+        for track_id in new_ids:
+            events.append(
+                {
+                    "event": "new_track",
+                    "reason": "bytetrack_new_or_reactivated",
+                    "trackId": int(track_id),
+                }
+            )
+        self._lifecycle_events = events
+        self._last_new_tracks = len(new_ids)
+        self._last_lost_tracks = len(lost_ids)
+        self._previous_active_track_ids = set(active_ids)
+        self._active_track_ids = set(active_ids)
 
     def diagnostics(self) -> dict:
         if self._fallback_assigner is not None:
@@ -262,11 +300,21 @@ class SupervisionByteTrackAdapter:
                 "person_session_reconnect_failure": 0,
             }
         )
+        # Prefer frame-local active-set deltas; fall back to session reconnector counters.
+        new_tracks = self._last_new_tracks or int(session_diagnostics.get("new_tracks", 0))
+        lost_tracks = self._last_lost_tracks or int(session_diagnostics.get("lost_tracks", 0))
+        removed = [
+            int(e["trackId"])
+            for e in self._lifecycle_events
+            if e.get("event") == "lost" and e.get("trackId") is not None
+        ]
         return {
             "active_tracks": len(self._active_track_ids),
-            "new_tracks": int(session_diagnostics.get("new_tracks", 0)),
-            "lost_tracks": int(session_diagnostics.get("lost_tracks", 0)),
+            "new_tracks": int(new_tracks),
+            "lost_tracks": int(lost_tracks),
             "id_switch_like_events": int(session_diagnostics.get("id_switch_like_events", 0)),
+            "removed_track_ids": removed,
+            "lifecycle_events": list(self._lifecycle_events),
             "tracks": {str(track_id): {"track_id": track_id} for track_id in sorted(self._active_track_ids)},
             "stability_fallback": False,
             "person_session_reconnect_success": int(session_diagnostics.get("person_session_reconnect_success", 0)),

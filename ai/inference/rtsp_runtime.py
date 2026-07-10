@@ -126,25 +126,25 @@ def create_detection_postprocessor(args):
         from ai.postprocess.supervision_postprocessor import SupervisionPostProcessorConfig
         config = SupervisionPostProcessorConfig(
             track_thresh=getattr(args, "track_thresh", 0.10),
-            track_buffer=getattr(args, "track_buffer", 90),
-            match_thresh=getattr(args, "match_thresh", 0.20),
+            track_buffer=getattr(args, "track_buffer", 120),
+            match_thresh=getattr(args, "match_thresh", 0.15),
             frame_rate=getattr(args, "frame_rate", 30),
             bbox_smoothing_alpha=getattr(args, "bbox_smoothing_alpha", 1.0),
-            stability_fallback=bool(getattr(args, "tracking_stability_fallback", False)),
-            fallback_max_missing_seconds=getattr(args, "track_max_missing_seconds", 4.0),
-            fallback_center_match_ratio=getattr(args, "center_match_ratio", 0.70),
+            stability_fallback=bool(getattr(args, "tracking_stability_fallback", True)),
+            fallback_max_missing_seconds=getattr(args, "track_max_missing_seconds", 6.0),
+            fallback_center_match_ratio=getattr(args, "center_match_ratio", 0.85),
             session_reconnect=bool(getattr(args, "person_session_reconnect", False)),
             session_reconnect_max_missing_seconds=getattr(args, "person_session_reconnect_max_missing_seconds", 3.0),
         )
         return SupervisionPostProcessor(config=config), "supervision"
     return SimpleTrackAssigner(
         track_thresh=getattr(args, "track_thresh", 0.10),
-        match_thresh=getattr(args, "match_thresh", 0.20),
-        track_buffer=getattr(args, "track_buffer", 90),
+        match_thresh=getattr(args, "match_thresh", 0.15),
+        track_buffer=getattr(args, "track_buffer", 120),
         min_box_area=getattr(args, "min_box_area", 100.0),
         bbox_smoothing_alpha=getattr(args, "bbox_smoothing_alpha", 0.60),
-        max_missing_seconds=getattr(args, "track_max_missing_seconds", 4.0),
-        center_match_ratio=getattr(args, "center_match_ratio", 0.70),
+        max_missing_seconds=getattr(args, "track_max_missing_seconds", 6.0),
+        center_match_ratio=getattr(args, "center_match_ratio", 0.85),
     ), "simple_tracker"
 
 

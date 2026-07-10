@@ -51,6 +51,7 @@ from ai.inference.tensorrt_runtime import (
 from ai.inference.tracking_debug import (
     build_frame_tracking_record,
     log_frame_tracking_debug,
+    log_track_lifecycle_events,
     log_tracker_startup,
 )
 from ai.evaluation.prediction_log import append_prediction_jsonl, build_prediction_log_row
@@ -285,7 +286,13 @@ def run(args):
             )
             boxes = normalize_detections(detections)
             frame_keypoint_count = sum(1 for item in detections if item.get("keypoints"))
-            update_tracking_summary(summary, detection_postprocessor.diagnostics())
+            tracker_diagnostics = detection_postprocessor.diagnostics()
+            update_tracking_summary(summary, tracker_diagnostics)
+            log_track_lifecycle_events(
+                camera_login_id,
+                frame_packet.frame_id if frame_metadata is None else frame_metadata.frame_id,
+                tracker_diagnostics,
+            )
             metrics.observe_active_tracks(summary["active_tracks"])
             summary["frames_processed"] += 1
             summary["bbox_detections"] += len(boxes)
