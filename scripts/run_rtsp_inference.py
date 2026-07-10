@@ -3,7 +3,9 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.append(str(Path(__file__).resolve().parents[1]))
+_REPO_ROOT = str(Path(__file__).resolve().parents[1])
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
 
 from ai.action.faint_post_processing import (
     DEFAULT_ACTION_MODEL,
@@ -35,6 +37,7 @@ from ai.inference.rtsp_runtime import (
     update_prediction_counts,
     update_tracking_summary,
 )
+from ai.inference.tensorrt_runtime import attach_runtime_summary_fields
 from ai.inference.tracking_debug import (
     build_frame_tracking_record,
     log_frame_tracking_debug,
@@ -138,6 +141,7 @@ def run(args):
         "sample_event": None,
         "alert_delivery_result": publisher_mode,
     }
+    attach_runtime_summary_fields(summary, detector, requested_model=args.yolo_model)
 
     if getattr(args, "preflight_only", False):
         print(

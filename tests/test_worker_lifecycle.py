@@ -163,7 +163,7 @@ class TestWorkerLifecycle(unittest.TestCase):
             "cam_05": CameraWorker(
                 processes=[MagicMock()],
                 overlay_port=8014,
-                source_signature="REAL_RTSP:rtsp://mock_input|roi:[]|exit_roi:[]",
+                source_signature="REAL_RTSP:rtsp://mock_input|roi:[]|exit_roi:[]|hazard_roi:[]",
                 camera_login_id="cam_05",
                 rtsp_url="rtsp://mock_input",
             )

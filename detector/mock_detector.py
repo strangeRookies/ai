@@ -4,6 +4,12 @@ import itertools
 class MockDetector:
     def __init__(self, model_name="mock-detector"):
         self.model_name = model_name
+        self.model_path = model_name
+        self.runtime = "mock"
+        self.engine_validation = None
+        self.fallback_occurred = False
+        self.tensorrt_error = None
+        self.requested_model_path = model_name
         self._counter = itertools.count(1)
 
     def detect(self, frame):
