@@ -9,6 +9,7 @@ class RemoteTensorrtSmokeScriptTest(unittest.TestCase):
         text = script.read_text(encoding="utf-8")
 
         self.assertIn("set -euo pipefail", text)
+        self.assertIn("PYTHONPATH=", text)
         self.assertIn("pytest tests/test_tensorrt_runtime.py", text)
         self.assertIn("preflight-only", text)
         self.assertIn("pytorch_fallback", text)

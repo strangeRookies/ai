@@ -19,6 +19,9 @@ if [[ -f .venv/bin/activate ]]; then
   source .venv/bin/activate
 fi
 
+# Ensure repo root wins over any site-packages package named "ai".
+export PYTHONPATH="${ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
+
 PT_MODEL="${PT_MODEL:-yolo26n-pose.pt}"
 ENGINE_MODEL="${ENGINE_MODEL:-yolo26n-pose.engine}"
 DEFAULT_ACTION_MODEL="runs/evaluation_manifest_v2_bbox54_balanced/retrained_best.pt"
