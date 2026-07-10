@@ -44,7 +44,7 @@ from ai.inference.rtsp_runtime import (
     log_payload_stage,
     update_quantitative_summary,
 )
-from ai.inference.tracking_debug import log_sequence_stage
+from ai.inference.tracking_debug import log_sequence_stage, log_track_lifecycle_events
 from ai.inference.pose_diagnostics import PoseDiagnosticsReporter, config_from_args as pose_diagnostics_config_from_args
 from ai.overlay_http import OverlayState, create_overlay_server
 from ai.roi import apply_roi_mask, combine_roi_masks, find_boxes_in_exit_zone, find_boxes_in_hazard_zone
@@ -303,6 +303,7 @@ def _process_frame_impl(
     # detector가 아니라 tracker threshold/association 문제로 분류할 수 있다.
     _tracker_diag = tracker.diagnostics() if tracker is not None else {}
     log_tracking_stage(stream_id, _log_frame_id, _pre_track_detections, detections, _tracker_diag)
+    log_track_lifecycle_events(stream_id, _log_frame_id, _tracker_diag)
     if os.getenv("TRACKING_DEBUG", "false").lower() in {"1", "true", "yes", "on"}:
         frame_id = frame_metadata.frame_id if frame_metadata is not None else getattr(frame_packet, "frame_idx", 0)
         det_cnt = len(detections)

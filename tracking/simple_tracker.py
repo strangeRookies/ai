@@ -7,13 +7,15 @@ class SimpleTrackAssigner:
     def __init__(
         self,
         iou_threshold=0.3,
-        max_missing_seconds=2.0,
+        max_missing_seconds=6.0,
         track_thresh=0.1,
         match_thresh=None,
-        track_buffer=30,
+        track_buffer=90,
         min_box_area=10.0,
         bbox_smoothing_alpha=0.6,
-        center_match_ratio=0.70,
+        center_match_ratio=0.85,
+        soft_iou_scale=0.45,
+        soft_center_scale=1.25,
     ):
         self.iou_threshold = float(iou_threshold if match_thresh is None else match_thresh)
         self.max_missing_seconds = float(max_missing_seconds)
@@ -22,45 +24,98 @@ class SimpleTrackAssigner:
         self.min_box_area = max(0.0, float(min_box_area))
         self.bbox_smoothing_alpha = min(max(float(bbox_smoothing_alpha), 0.0), 1.0)
         self.center_match_ratio = max(0.0, float(center_match_ratio))
+        # Soft match: keep ID across fall-like bbox shape change (tall→wide) when center stays near.
+        self.soft_iou_scale = max(0.0, float(soft_iou_scale))
+        self.soft_center_scale = max(1.0, float(soft_center_scale))
         self._next_track_id = 1
         self._tracks = {}
         self._frame_index = 0
         self.last_diagnostics = self._empty_diagnostics()
+        self.last_events: list[dict] = []
 
     def update(self, detections, now=None):
         now = time.time() if now is None else float(now)
         self._frame_index += 1
+        events: list[dict] = []
         self._mark_tracks_missing()
-        stale_tracks = self._drop_stale_tracks(now)
+        stale_ids = self._drop_stale_tracks(now, events)
 
         assigned_track_ids = set()
         output = []
         new_tracks = 0
         id_switch_like_events = 0
-        for detection in self._filter_detections(detections):
+        kept, filtered = self._filter_detections_with_reasons(detections, events)
+        for detection in kept:
             detection = dict(detection)
             original_track_id = detection.get("track_id")
             track_id = detection.get("track_id")
+            match_meta = None
             if track_id is None:
-                track_id = self._match_existing_track(detection.get("bbox"), assigned_track_ids)
+                track_id, match_meta = self._match_existing_track_detailed(detection.get("bbox"), assigned_track_ids)
                 if track_id is None:
                     track_id = self._allocate_track_id()
                     new_tracks += 1
+                    events.append(
+                        {
+                            "event": "new_track",
+                            "reason": "no_match",
+                            "trackId": int(track_id),
+                            "bbox": detection.get("bbox"),
+                            "confidence": float(detection.get("confidence", 0.0)),
+                            "activeTracksBefore": len(self._tracks),
+                            "bestRejected": match_meta,
+                        }
+                    )
+                else:
+                    events.append(
+                        {
+                            "event": "match",
+                            "reason": match_meta.get("mode") if match_meta else "match",
+                            "trackId": int(track_id),
+                            "iou": match_meta.get("iou") if match_meta else None,
+                            "centerRatio": match_meta.get("centerRatio") if match_meta else None,
+                            "bbox": detection.get("bbox"),
+                        }
+                    )
             elif int(track_id) in self._tracks:
                 track_id = int(track_id)
+                events.append({"event": "match", "reason": "detector_track_id", "trackId": track_id})
             else:
                 track_id = int(track_id)
                 new_tracks += 1
+                events.append(
+                    {
+                        "event": "new_track",
+                        "reason": "unknown_detector_track_id",
+                        "trackId": track_id,
+                    }
+                )
             track_id = int(track_id)
             if original_track_id is not None and int(original_track_id) != track_id:
                 id_switch_like_events += 1
+                events.append(
+                    {
+                        "event": "id_switch_like",
+                        "fromTrackId": int(original_track_id),
+                        "toTrackId": track_id,
+                    }
+                )
             detection["track_id"] = track_id
             assigned_track_ids.add(track_id)
             self._update_track(track_id, detection, now)
             self._copy_track_fields(detection, self._tracks[track_id])
             output.append(detection)
-        lost_tracks = stale_tracks + self._drop_buffer_expired_tracks()
-        self.last_diagnostics = self._build_diagnostics(new_tracks, lost_tracks, id_switch_like_events)
+        buffer_lost = self._drop_buffer_expired_tracks(events)
+        lost_tracks = stale_ids + buffer_lost
+        self.last_events = events
+        self.last_diagnostics = self._build_diagnostics(
+            new_tracks,
+            lost_tracks,
+            id_switch_like_events,
+            events,
+            raw_detection_count=len(detections or []),
+            filtered_count=filtered,
+        )
         return output
 
     def _allocate_track_id(self):
@@ -69,30 +124,93 @@ class SimpleTrackAssigner:
         return track_id
 
     def _match_existing_track(self, bbox, assigned_track_ids):
+        track_id, _meta = self._match_existing_track_detailed(bbox, assigned_track_ids)
+        return track_id
+
+    def _match_existing_track_detailed(self, bbox, assigned_track_ids):
         best_track_id = None
         best_score = -1.0
+        best_meta = None
+        rejected = []
+        soft_iou = self.iou_threshold * self.soft_iou_scale
+        soft_center = self.center_match_ratio * self.soft_center_scale
         for track_id, track in self._tracks.items():
             if track_id in assigned_track_ids:
                 continue
-            iou_score = bbox_iou(bbox, predicted_bbox(track))
-            center_ratio = center_distance_ratio(bbox, predicted_bbox(track))
-            if iou_score < self.iou_threshold and center_ratio > self.center_match_ratio:
+            pred = predicted_bbox(track)
+            iou_score = bbox_iou(bbox, pred)
+            center_ratio = center_distance_ratio(bbox, pred)
+            hard_ok = iou_score >= self.iou_threshold or center_ratio <= self.center_match_ratio
+            soft_ok = iou_score >= soft_iou and center_ratio <= soft_center
+            sole_track = len(self._tracks) == 1 and center_ratio <= soft_center
+            if not (hard_ok or soft_ok or sole_track):
+                rejected.append(
+                    {
+                        "trackId": int(track_id),
+                        "iou": round(iou_score, 4),
+                        "centerRatio": round(center_ratio, 4) if center_ratio != float("inf") else None,
+                        "reject": "below_iou_and_center",
+                    }
+                )
                 continue
+            mode = "hard" if hard_ok else ("soft" if soft_ok else "sole")
             score = iou_score + max(0.0, self.center_match_ratio - center_ratio)
+            if soft_ok and not hard_ok:
+                score += 0.15
+            if sole_track and not hard_ok:
+                score += 0.05
             if score > best_score:
                 best_score = score
                 best_track_id = track_id
-        return best_track_id
+                best_meta = {
+                    "mode": mode,
+                    "iou": round(iou_score, 4),
+                    "centerRatio": round(center_ratio, 4) if center_ratio != float("inf") else None,
+                    "score": round(score, 4),
+                    "rejectedCandidates": rejected[-5:],
+                }
+        if best_track_id is None and rejected:
+            best_meta = {"mode": None, "rejectedCandidates": rejected[-8:]}
+        return best_track_id, best_meta
 
     def _filter_detections(self, detections):
+        kept, _ = self._filter_detections_with_reasons(detections, events=None)
+        return kept
+
+    def _filter_detections_with_reasons(self, detections, events):
         output = []
-        for detection in detections:
-            if float(detection.get("confidence", 1.0)) < self.track_thresh:
+        filtered = 0
+        for detection in detections or []:
+            conf = float(detection.get("confidence", 1.0))
+            area = bbox_area(detection.get("bbox"))
+            if conf < self.track_thresh:
+                filtered += 1
+                if events is not None:
+                    events.append(
+                        {
+                            "event": "filter",
+                            "reason": "low_confidence",
+                            "confidence": conf,
+                            "trackThresh": self.track_thresh,
+                            "bbox": detection.get("bbox"),
+                        }
+                    )
                 continue
-            if bbox_area(detection.get("bbox")) < self.min_box_area:
+            if area < self.min_box_area:
+                filtered += 1
+                if events is not None:
+                    events.append(
+                        {
+                            "event": "filter",
+                            "reason": "tiny_box",
+                            "area": round(area, 2),
+                            "minBoxArea": self.min_box_area,
+                            "bbox": detection.get("bbox"),
+                        }
+                    )
                 continue
             output.append(detection)
-        return output
+        return output, filtered
 
     def _mark_tracks_missing(self):
         for track in self._tracks.values():
@@ -123,27 +241,48 @@ class SimpleTrackAssigner:
         detection["missing_frames"] = int(track.get("missing_frames", 0))
         detection["track_confidence"] = float(track.get("confidence", detection.get("confidence", 0.0)))
 
-    def _drop_stale_tracks(self, now):
-        stale_track_ids = [
-            track_id
-            for track_id, track in self._tracks.items()
-            if now - track.get("last_seen_at", 0.0) > self.max_missing_seconds
-        ]
-        for track_id in stale_track_ids:
-            del self._tracks[track_id]
+    def _drop_stale_tracks(self, now, events=None):
+        stale_track_ids = []
+        for track_id, track in list(self._tracks.items()):
+            gap = now - track.get("last_seen_at", 0.0)
+            if gap > self.max_missing_seconds:
+                stale_track_ids.append(track_id)
+                if events is not None:
+                    events.append(
+                        {
+                            "event": "lost",
+                            "reason": "max_missing_seconds",
+                            "trackId": int(track_id),
+                            "missingSeconds": round(gap, 3),
+                            "maxMissingSeconds": self.max_missing_seconds,
+                            "missingFrames": int(track.get("missing_frames", 0)),
+                            "lastBbox": track.get("bbox"),
+                        }
+                    )
+                del self._tracks[track_id]
         return len(stale_track_ids)
 
-    def _drop_buffer_expired_tracks(self):
-        stale_track_ids = [
-            track_id
-            for track_id, track in self._tracks.items()
-            if int(track.get("missing_frames", 0)) > self.track_buffer
-        ]
-        for track_id in stale_track_ids:
-            del self._tracks[track_id]
+    def _drop_buffer_expired_tracks(self, events=None):
+        stale_track_ids = []
+        for track_id, track in list(self._tracks.items()):
+            missing = int(track.get("missing_frames", 0))
+            if missing > self.track_buffer:
+                stale_track_ids.append(track_id)
+                if events is not None:
+                    events.append(
+                        {
+                            "event": "lost",
+                            "reason": "track_buffer_exceeded",
+                            "trackId": int(track_id),
+                            "missingFrames": missing,
+                            "trackBuffer": self.track_buffer,
+                            "lastBbox": track.get("bbox"),
+                        }
+                    )
+                del self._tracks[track_id]
         return len(stale_track_ids)
 
-    def _build_diagnostics(self, new_tracks, lost_tracks, id_switch_like_events):
+    def _build_diagnostics(self, new_tracks, lost_tracks, id_switch_like_events, events=None, raw_detection_count=0, filtered_count=0):
         tracks = {
             str(track_id): {
                 "track_age": int(track.get("age", 0)),
@@ -155,11 +294,20 @@ class SimpleTrackAssigner:
             }
             for track_id, track in sorted(self._tracks.items())
         }
+        removed = [
+            int(e["trackId"])
+            for e in (events or [])
+            if e.get("event") == "lost" and e.get("trackId") is not None
+        ]
         return {
             "active_tracks": len(self._tracks),
             "new_tracks": int(new_tracks),
             "lost_tracks": int(lost_tracks),
             "id_switch_like_events": int(id_switch_like_events),
+            "removed_track_ids": removed,
+            "raw_detection_count": int(raw_detection_count),
+            "filtered_detection_count": int(filtered_count),
+            "lifecycle_events": list(events or []),
             "tracks": tracks,
         }
 
@@ -172,6 +320,10 @@ class SimpleTrackAssigner:
             "new_tracks": 0,
             "lost_tracks": 0,
             "id_switch_like_events": 0,
+            "removed_track_ids": [],
+            "raw_detection_count": 0,
+            "filtered_detection_count": 0,
+            "lifecycle_events": [],
             "tracks": {},
         }
 

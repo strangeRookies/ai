@@ -1,7 +1,16 @@
+import io
+import os
 import unittest
+from contextlib import redirect_stdout
 from types import SimpleNamespace
+from unittest.mock import patch
 
-from ai.inference.tracking_debug import build_frame_tracking_record, build_tracker_startup_record
+from ai.inference.tracking_debug import (
+    build_frame_tracking_record,
+    build_tracker_startup_record,
+    log_track_lifecycle_events,
+    track_lifecycle_log_enabled,
+)
 
 
 class TrackingDebugTest(unittest.TestCase):
@@ -85,6 +94,56 @@ class TrackingDebugTest(unittest.TestCase):
         self.assertEqual(record["removedTrackIds"], [9])
         self.assertEqual(record["trackLifetimeFrames"], {"5": 12, "6": 3})
         self.assertEqual(record["trackerObjectId"], 123)
+
+    def test_track_lifecycle_log_enabled_by_track_id_log_env(self):
+        with patch.dict(os.environ, {"TRACK_ID_LOG": "true", "TRACKING_DEBUG": "false"}):
+            self.assertTrue(track_lifecycle_log_enabled())
+        with patch.dict(os.environ, {"TRACK_ID_LOG": "false", "TRACKING_DEBUG": "false"}, clear=False):
+            # TRACKING_DEBUG may still be set from parent env; force both off
+            with patch.dict(os.environ, {"TRACK_ID_LOG": "0", "TRACKING_DEBUG": "0"}):
+                self.assertFalse(track_lifecycle_log_enabled())
+
+    def test_log_track_lifecycle_events_prints_lost_reason(self):
+        diagnostics = {
+            "active_tracks": 0,
+            "new_tracks": 0,
+            "lost_tracks": 1,
+            "id_switch_like_events": 0,
+            "removed_track_ids": [7],
+            "raw_detection_count": 0,
+            "filtered_detection_count": 0,
+            "lifecycle_events": [
+                {
+                    "event": "lost",
+                    "reason": "max_missing_seconds",
+                    "trackId": 7,
+                    "missingSeconds": 2.5,
+                    "maxMissingSeconds": 2.0,
+                }
+            ],
+        }
+        output = io.StringIO()
+        with patch.dict(os.environ, {"TRACK_ID_LOG": "true", "TRACKING_DEBUG": "false"}):
+            with redirect_stdout(output):
+                log_track_lifecycle_events("cam_05", 99, diagnostics)
+        text = output.getvalue()
+        self.assertIn("[track-lifecycle]", text)
+        self.assertIn("max_missing_seconds", text)
+        self.assertIn('"trackId": 7', text)
+        self.assertIn("cam_05", text)
+
+    def test_log_track_lifecycle_events_silent_when_disabled_and_no_activity(self):
+        diagnostics = {
+            "active_tracks": 1,
+            "new_tracks": 0,
+            "lost_tracks": 0,
+            "lifecycle_events": [{"event": "match", "reason": "hard", "trackId": 1}],
+        }
+        output = io.StringIO()
+        with patch.dict(os.environ, {"TRACK_ID_LOG": "0", "TRACKING_DEBUG": "0"}):
+            with redirect_stdout(output):
+                log_track_lifecycle_events("cam_05", 1, diagnostics)
+        self.assertEqual(output.getvalue(), "")
 
 
 class FakePostprocessor:
