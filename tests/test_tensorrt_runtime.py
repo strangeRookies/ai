@@ -18,6 +18,7 @@ from ai.inference.tensorrt_runtime import (
     deserialize_tensorrt_engine,
     resolve_yolo_model_runtime,
     validate_engine_file,
+    validate_engine_for_inference,
 )
 from detector.yolo_pose_detector import YoloPoseDetector
 
@@ -126,6 +127,48 @@ class EngineDeserializeValidationTest(unittest.TestCase):
             result = deserialize_tensorrt_engine(path, trt_module=trt)
             self.assertTrue(result.ok)
             self.assertIsNone(result.reason)
+
+
+class InferenceValidationTest(unittest.TestCase):
+    def test_ultralytics_load_accepts_engine_when_raw_deserialize_fails(self):
+        """Matches GPU PC: pip tensorrt magicTag mismatch, ultralytics YOLO OK."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "yolo.engine"
+            path.write_bytes(b"ultralytics-engine-bytes")
+            trt = FakeTensorRtModule(engine=None)
+            loaded = []
+
+            def yolo_loader(model_path):
+                loaded.append(model_path)
+                return object()
+
+            result = validate_engine_for_inference(
+                path,
+                yolo_loader=yolo_loader,
+                trt_module=trt,
+            )
+            self.assertTrue(result.ok)
+            self.assertFalse(result.raw_deserialize_ok)
+            self.assertEqual(result.validation_method, "ultralytics_yolo_load")
+            self.assertIn("ultralytics", (result.details or "").lower())
+            self.assertEqual(loaded, [str(path)])
+
+    def test_inference_validation_fails_when_yolo_load_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "yolo.engine"
+            path.write_bytes(b"engine")
+            trt = FakeTensorRtModule(engine=None)
+
+            def yolo_loader(model_path):
+                raise RuntimeError("cannot open engine")
+
+            result = validate_engine_for_inference(
+                path,
+                yolo_loader=yolo_loader,
+                trt_module=trt,
+            )
+            self.assertFalse(result.ok)
+            self.assertIn("cannot open engine", result.reason or "")
 
 
 class RuntimeResolveAndFallbackTest(unittest.TestCase):
@@ -267,6 +310,37 @@ class YoloPoseDetectorRuntimeTest(unittest.TestCase):
             self.assertEqual(Path(detector.model_path), engine)
             self.assertFalse(detector.fallback_occurred)
             self.assertTrue(detector.engine_validation["ok"])
+
+    def test_production_path_uses_ultralytics_when_raw_trt_probe_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = Path(tmp) / "yolo.engine"
+            engine.write_bytes(b"engine")
+            loaded = []
+
+            class FakeYOLO:
+                def __init__(self, model_path):
+                    loaded.append(str(model_path))
+                    self.model_path = model_path
+
+            with patch(
+                "ai.inference.tensorrt_runtime.deserialize_tensorrt_engine",
+                return_value=EngineValidationResult(
+                    ok=False,
+                    path=str(engine),
+                    reason="magicTag mismatch",
+                    raw_deserialize_ok=False,
+                    validation_method="raw_tensorrt_deserialize",
+                ),
+            ):
+                detector = YoloPoseDetector(str(engine), yolo_cls=FakeYOLO)
+
+            self.assertEqual(detector.runtime, RUNTIME_TENSORRT)
+            self.assertEqual(Path(detector.model_path), engine)
+            self.assertFalse(detector.fallback_occurred)
+            self.assertTrue(detector.engine_validation["ok"])
+            self.assertFalse(detector.engine_validation.get("raw_deserialize_ok"))
+            self.assertEqual(detector.engine_validation.get("validation_method"), "ultralytics_yolo_load")
+            self.assertEqual(loaded, [str(engine)])
 
     def test_both_tensorrt_and_pytorch_fail_preserves_tensorrt_error(self):
         with tempfile.TemporaryDirectory() as tmp:

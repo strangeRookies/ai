@@ -9,9 +9,10 @@ from ai.inference.tensorrt_runtime import (
     EngineValidationResult,
     RuntimeSelection,
     default_pytorch_fallback_path,
-    deserialize_tensorrt_engine,
+    is_tensorrt_engine_path,
     log_selected_runtime,
     resolve_yolo_model_runtime,
+    validate_engine_for_inference,
 )
 
 
@@ -66,72 +67,128 @@ class YoloPoseDetector:
         engine_validator: Callable[[str | Path], EngineValidationResult] | None,
         fallback_model_path: str | Path | None,
     ) -> tuple[RuntimeSelection, Any]:
-        # Resolve path-level validation / fallback first (never hand a failed engine to YOLO).
-        selection = resolve_yolo_model_runtime(
-            model_name,
-            fallback_model_path=fallback_model_path,
-            engine_validator=engine_validator or (lambda path: deserialize_tensorrt_engine(path)),
-        )
-
-        if selection.runtime == RUNTIME_TENSORRT:
+        if not is_tensorrt_engine_path(model_name):
+            selection = resolve_yolo_model_runtime(
+                model_name,
+                fallback_model_path=fallback_model_path,
+                engine_validator=engine_validator,
+            )
             try:
                 model = yolo_loader(selection.model_path)
                 return selection, model
-            except Exception as load_exc:
-                tensorrt_error = f"TensorRT engine load/init failed: {load_exc}"
-                fallback = (
-                    Path(fallback_model_path)
-                    if fallback_model_path is not None
-                    else default_pytorch_fallback_path(selection.model_path)
-                )
-                if not (fallback.exists() and fallback.is_file() and fallback.stat().st_size > 0):
-                    raise RuntimeError(
-                        f"{tensorrt_error}; PyTorch fallback unavailable at {fallback}"
-                    ) from load_exc
-                try:
-                    model = yolo_loader(str(fallback))
-                except Exception as fallback_exc:
-                    raise RuntimeError(
-                        f"TensorRT load failed and PyTorch fallback also failed. "
-                        f"tensorrt_error={tensorrt_error}; pytorch_error={fallback_exc}"
-                    ) from fallback_exc
-                fallback_selection = RuntimeSelection(
-                    runtime=RUNTIME_PYTORCH_FALLBACK,
-                    model_path=str(fallback),
-                    requested_model_path=selection.requested_model_path,
-                    engine_validation=selection.engine_validation
-                    or {"ok": True, "path": selection.model_path, "reason": None},
-                    fallback_occurred=True,
-                    tensorrt_error=tensorrt_error,
-                )
-                # Keep validation record but annotate load failure for operators.
-                if fallback_selection.engine_validation is not None:
-                    engine_validation = dict(fallback_selection.engine_validation)
-                    engine_validation["load_error"] = tensorrt_error
-                    # File/deserialize passed but runtime load failed — inference must not use engine.
-                    engine_validation["ok"] = False
-                    engine_validation["reason"] = tensorrt_error
-                    fallback_selection = RuntimeSelection(
-                        runtime=RUNTIME_PYTORCH_FALLBACK,
-                        model_path=str(fallback),
-                        requested_model_path=selection.requested_model_path,
-                        engine_validation=engine_validation,
-                        fallback_occurred=True,
-                        tensorrt_error=tensorrt_error,
-                    )
-                return fallback_selection, model
+            except Exception as exc:
+                raise RuntimeError(f"Failed to load YOLO model '{selection.model_path}': {exc}") from exc
 
-        # PyTorch direct or already-resolved pytorch_fallback path.
-        try:
-            model = yolo_loader(selection.model_path)
-            return selection, model
-        except Exception as exc:
-            if selection.runtime == RUNTIME_PYTORCH_FALLBACK or selection.tensorrt_error:
+        # --- TensorRT .engine path ---
+        # Custom validator (tests / advanced callers): resolve first, then load.
+        if engine_validator is not None:
+            selection = resolve_yolo_model_runtime(
+                model_name,
+                fallback_model_path=fallback_model_path,
+                engine_validator=engine_validator,
+            )
+            if selection.runtime == RUNTIME_TENSORRT:
+                try:
+                    model = yolo_loader(selection.model_path)
+                    return selection, model
+                except Exception as load_exc:
+                    return self._fallback_after_engine_failure(
+                        model_name=model_name,
+                        yolo_loader=yolo_loader,
+                        fallback_model_path=fallback_model_path,
+                        tensorrt_error=f"TensorRT engine load/init failed: {load_exc}",
+                        prior_validation=selection.engine_validation,
+                        load_exc=load_exc,
+                    )
+            try:
+                model = yolo_loader(selection.model_path)
+                return selection, model
+            except Exception as exc:
                 raise RuntimeError(
                     f"Failed to load YOLO model '{selection.model_path}' after TensorRT failure. "
                     f"tensorrt_error={selection.tensorrt_error}; pytorch_error={exc}"
                 ) from exc
-            raise RuntimeError(f"Failed to load YOLO model '{selection.model_path}': {exc}") from exc
+
+        # Production path: file checks + raw TRT probe + ultralytics authoritative load.
+        # Capture the YOLO(engine) instance so we do not load twice.
+        loaded_model: dict[str, Any] = {}
+
+        def _capturing_loader(path: str) -> Any:
+            model = yolo_loader(path)
+            loaded_model["model"] = model
+            loaded_model["path"] = path
+            return model
+
+        validation = validate_engine_for_inference(
+            model_name,
+            yolo_loader=_capturing_loader,
+            probe_raw_tensorrt=True,
+        )
+        validation_dict = validation.to_dict()
+
+        if validation.ok and "model" in loaded_model:
+            selection = RuntimeSelection(
+                runtime=RUNTIME_TENSORRT,
+                model_path=str(model_name),
+                requested_model_path=str(model_name),
+                engine_validation=validation_dict,
+                fallback_occurred=False,
+                tensorrt_error=None,
+            )
+            return selection, loaded_model["model"]
+
+        return self._fallback_after_engine_failure(
+            model_name=model_name,
+            yolo_loader=yolo_loader,
+            fallback_model_path=fallback_model_path,
+            tensorrt_error=validation.reason or "TensorRT engine validation failed",
+            prior_validation=validation_dict,
+            load_exc=None,
+        )
+
+    def _fallback_after_engine_failure(
+        self,
+        *,
+        model_name: str,
+        yolo_loader: Callable[[str], Any],
+        fallback_model_path: str | Path | None,
+        tensorrt_error: str,
+        prior_validation: dict[str, Any] | None,
+        load_exc: Exception | None,
+    ) -> tuple[RuntimeSelection, Any]:
+        fallback = (
+            Path(fallback_model_path)
+            if fallback_model_path is not None
+            else default_pytorch_fallback_path(model_name)
+        )
+        if not (fallback.exists() and fallback.is_file() and fallback.stat().st_size > 0):
+            raise RuntimeError(
+                f"{tensorrt_error}; PyTorch fallback unavailable at {fallback}"
+            ) from load_exc
+
+        try:
+            model = yolo_loader(str(fallback))
+        except Exception as fallback_exc:
+            raise RuntimeError(
+                f"TensorRT load failed and PyTorch fallback also failed. "
+                f"tensorrt_error={tensorrt_error}; pytorch_error={fallback_exc}"
+            ) from fallback_exc
+
+        engine_validation = dict(prior_validation or {})
+        engine_validation.setdefault("path", str(model_name))
+        engine_validation["ok"] = False
+        engine_validation["reason"] = tensorrt_error
+        engine_validation["load_error"] = tensorrt_error
+
+        selection = RuntimeSelection(
+            runtime=RUNTIME_PYTORCH_FALLBACK,
+            model_path=str(fallback),
+            requested_model_path=str(model_name),
+            engine_validation=engine_validation,
+            fallback_occurred=True,
+            tensorrt_error=tensorrt_error,
+        )
+        return selection, model
 
     def detect(self, frame):
         results = self.model.predict(
