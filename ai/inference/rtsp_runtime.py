@@ -225,6 +225,16 @@ def build_inference_event_payload(
     dropped_frame_count=None,
     snapshot_path=None,
     clip_path=None,
+    event_type_override=None,
+    event_id=None,
+    original_event_id=None,
+    duration_sec=None,
+    memo_text=None,
+    posture_label=None,
+    movement_level=None,
+    lifecycle_state=None,
+    alert_kind=None,
+    track_id_override=None,
 ):
     camera_login_id = getattr(args, "camera_login_id", None) or args.camera_id
     frame = getattr(packet, "frame", None)
@@ -236,7 +246,7 @@ def build_inference_event_payload(
     if captured_at_ms is None:
         captured_at_ms = getattr(packet, "captured_at_ms", None)
     processed_at_ms = getattr(frame_metadata, "processed_at_ms", None)
-    return build_confirmed_event_payload(
+    kwargs = dict(
         stream_id=camera_login_id,
         frame_width=frame_width,
         frame_height=frame_height,
@@ -244,6 +254,7 @@ def build_inference_event_payload(
         sequence=sequence,
         boxes=boxes,
         timestamp_ms=published_at_ms or int(_time.time() * 1000),
+        event_id=event_id,
         frame_id=frame_id,
         captured_at_ms=captured_at_ms,
         processed_at_ms=processed_at_ms,
@@ -252,7 +263,36 @@ def build_inference_event_payload(
         dropped_frame_count=dropped_frame_count,
         snapshot_path=snapshot_path,
         clip_path=clip_path,
+        event_type_override=event_type_override,
+        original_event_id=original_event_id,
+        duration_sec=duration_sec,
+        posture_label=posture_label,
+        movement_level=movement_level,
+        lifecycle_state=lifecycle_state,
+        alert_kind=alert_kind,
+        track_id_override=track_id_override,
     )
+    if memo_text is not None:
+        kwargs["memo_text"] = memo_text
+    return build_confirmed_event_payload(**kwargs)
+
+
+def lifecycle_payload_kwargs(emit_decision) -> dict:
+    """Map AlertEmitDecision → build_inference_event_payload kwargs."""
+    if emit_decision is None:
+        return {}
+    return {
+        "event_type_override": getattr(emit_decision, "event_type", None),
+        "event_id": getattr(emit_decision, "event_id", None),
+        "original_event_id": getattr(emit_decision, "original_event_id", None),
+        "duration_sec": getattr(emit_decision, "duration_sec", None),
+        "memo_text": getattr(emit_decision, "memo_text", None),
+        "posture_label": getattr(emit_decision, "posture_label", None),
+        "movement_level": getattr(emit_decision, "movement_level", None),
+        "lifecycle_state": getattr(emit_decision, "state", None),
+        "alert_kind": getattr(emit_decision, "kind", None),
+        "track_id_override": getattr(emit_decision, "track_id", None),
+    }
 
 
 def sequence_metadata(sequence, args):

@@ -16,12 +16,17 @@ from ai.action.faint_post_processing import (
     faint_probability,
     is_alert_prediction,
 )
+from ai.action.fall_lifecycle_config import (
+    build_faint_post_processor_from_args,
+    resolved_faint_threshold,
+)
 from ai.action.per_track_sequence_buffer import PerTrackCropSequenceBuffers, PerTrackKeypointSequenceBuffers
 from ai.action.lstm_contract import DEFAULT_KEYPOINT_INPUT_SIZE, log_lstm_config
 from ai.evidence import evidence_id
 from ai.inference.rtsp_runtime import (
     build_inference_event_log,
     build_inference_event_payload,
+    lifecycle_payload_kwargs,
     cheap_filter_config_from_args,
     create_classifier,
     create_detection_postprocessor,
@@ -37,7 +42,12 @@ from ai.inference.rtsp_runtime import (
     update_prediction_counts,
     update_tracking_summary,
 )
-from ai.inference.tensorrt_runtime import attach_runtime_summary_fields
+from ai.inference.tensorrt_runtime import (
+    attach_runtime_summary_fields,
+    finalize_runtime_summary_fields,
+    log_periodic_inference_metrics,
+    log_worker_backend_startup,
+)
 from ai.inference.tracking_debug import (
     build_frame_tracking_record,
     log_frame_tracking_debug,
@@ -54,8 +64,10 @@ from scripts.rtsp_inference_args import parse_args
 
 
 def run(args):
+    # Prefer explicit faint_threshold over action_threshold for classifier gating.
+    action_threshold = resolved_faint_threshold(args)
     detector = create_detector(args.detector_mode, args.yolo_model, args.device, getattr(args, "imgsz", 640), conf=getattr(args, "detector_conf", 0.25))
-    classifier, classifier_mode = create_classifier(args.action_model, args.action_device, getattr(args, "action_threshold", DEFAULT_FAINT_THRESHOLD))
+    classifier, classifier_mode = create_classifier(args.action_model, args.action_device, action_threshold)
     camera_login_id = getattr(args, "camera_login_id", None) or args.camera_id
     classifier_input = getattr(args, "classifier_input", "keypoints")
     detection_postprocessor, postprocessing_mode = create_detection_postprocessor(args)
@@ -83,14 +95,18 @@ def run(args):
         if args.action_model and classifier_input == "crops"
         else None
     )
-    post_processor = FaintEventPostProcessor(
-        min_consecutive_faint=getattr(args, "min_consecutive_faint", DEFAULT_MIN_CONSECUTIVE_FAINT),
-        cooldown_seconds=getattr(args, "camera_cooldown_seconds", DEFAULT_CAMERA_COOLDOWN_SECONDS),
+    post_processor = build_faint_post_processor_from_args(args)
+    log_worker_backend_startup(
+        camera_login_id=getattr(args, "camera_login_id", None) or args.camera_id,
+        requested_model=args.yolo_model,
+        detector=detector,
+        device=getattr(args, "device", None),
     )
     publisher = None
     publisher_mode = "preflight" if getattr(args, "preflight_only", False) else None
     topic_settings = mqtt_topic_settings_from_args(args)
     metrics = RuntimeMetrics()
+    metrics.set_warmup_skip(int(getattr(args, "infer_warmup_frames", 20)))
     frame_buffer = FrameMetadataBuffer(maxlen=int(getattr(args, "frame_sync_buffer_size", 60)))
     writer = None
     summary = {
@@ -275,6 +291,14 @@ def run(args):
             summary["bbox_detections"] += len(boxes)
             summary["keypoints_extracted"] += frame_keypoint_count
             summary["latest_frame_keypoints"] = frame_keypoint_count
+            metrics_every = max(0, int(getattr(args, "infer_metrics_every_n", 30)))
+            if metrics_every > 0 and summary["frames_processed"] % metrics_every == 0:
+                log_periodic_inference_metrics(
+                    camera_login_id=camera_login_id,
+                    backend=getattr(detector, "runtime", summary.get("backend")),
+                    metrics=metrics,
+                    frames_processed=summary["frames_processed"],
+                )
 
             keypoint_sequences = keypoint_buffers.add(
                 frame_packet.frame_idx,
@@ -363,9 +387,24 @@ def run(args):
                         tracker_object_id=id(detection_postprocessor),
                     )
                 )
+            from ai.action.posture_estimator import detection_for_track
+
+            post_processor.prune_lost_tracks(
+                args.camera_id,
+                list(predictions_by_track.keys()),
+                frame_packet.timestamp,
+            )
             for track_id, track_prediction in predictions_by_track.items():
                 cooldown_was_active = post_processor.cooldown_active(args.camera_id, frame_packet.timestamp, track_id=track_id)
-                event_emitted = post_processor.should_trigger(args.camera_id, track_prediction, frame_packet.timestamp, track_id=track_id)
+                track_detection = detection_for_track(detections, track_id) or detection_for_track(boxes, track_id)
+                emit_decision = post_processor.evaluate(
+                    args.camera_id,
+                    track_prediction,
+                    frame_packet.timestamp,
+                    track_id=track_id,
+                    detection=track_detection,
+                )
+                event_emitted = bool(emit_decision.emit)
                 sequence = sequences_by_track.get(track_id)
                 if getattr(args, "evaluation_log", None):
                     append_prediction_jsonl(
@@ -416,12 +455,15 @@ def run(args):
                         frame_metadata=frame_metadata,
                         published_at_ms=frame_metadata.published_at_ms if frame_metadata else None,
                         dropped_frame_count=queue.dropped_frame_count,
+                        **lifecycle_payload_kwargs(emit_decision),
                     )
                     event_log = build_inference_event_log(args, frame_packet, track_prediction, boxes, sequence)
                     if getattr(args, "event_log_dir", None):
                         save_inference_event_log(args.event_log_dir, event_log)
                     publisher.publish(payload, topic=topic_settings["event_topic"])
                     summary["events_generated"] += 1
+                    if emit_decision.is_unrecovered:
+                        summary["unrecovered_events_generated"] = int(summary.get("unrecovered_events_generated", 0)) + 1
                     track_key = str(track_id)
                     summary["events_generated_by_track"][track_key] = summary["events_generated_by_track"].get(track_key, 0) + 1
                     if summary["sample_event"] is None:
@@ -472,6 +514,7 @@ def run(args):
             summary["lstm_predictions"],
         )
     )
+    finalize_runtime_summary_fields(summary)
     return summary
 
 
