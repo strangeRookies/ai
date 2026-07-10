@@ -958,6 +958,44 @@ class OverlayWorker:
 
             if reset_decided:
                 tracker, postprocessing_mode = create_detection_postprocessor(self.args)
+                if self.args.classifier_input == "crops":
+                    sequence_buffers[current_cam_id] = PerTrackCropSequenceBuffers(
+                        self.args.sequence_length,
+                        self.args.sequence_stride,
+                        self.args.resize_size,
+                        max_track_age_seconds=self.args.track_max_missing_seconds,
+                    )
+                else:
+                    sequence_buffers[current_cam_id] = PerTrackKeypointSequenceBuffers(
+                        self.args.sequence_length,
+                        self.args.sequence_stride,
+                        max_track_age_seconds=self.args.track_max_missing_seconds,
+                        cheap_filter_config=cheap_filter_config,
+                        missing_track_grace_seconds=getattr(self.args, "tracking_grace_period_seconds", self.args.track_max_missing_seconds),
+                        relink_iou_threshold=getattr(self.args, "tracking_relink_iou_threshold", 0.30),
+                        relink_center_distance_ratio=getattr(self.args, "tracking_relink_center_ratio", 0.70),
+                        relink_max_time_gap_seconds=getattr(self.args, "tracking_relink_max_time_gap_seconds", 2.0),
+                    )
+                post_processor = FaintEventPostProcessor(
+                    min_consecutive_faint=getattr(self.args, "min_consecutive_faint", DEFAULT_MIN_CONSECUTIVE_FAINT),
+                    cooldown_seconds=getattr(self.args, "camera_cooldown_seconds", DEFAULT_CAMERA_COOLDOWN_SECONDS),
+                )
+                exit_post_processor = ExitEventPostProcessor(
+                    min_consecutive=getattr(self.args, "exit_min_consecutive", DEFAULT_EXIT_MIN_CONSECUTIVE),
+                    cooldown_seconds=getattr(self.args, "exit_cooldown_seconds", DEFAULT_EXIT_COOLDOWN_SECONDS),
+                )
+                hazard_post_processor = HazardEventPostProcessor(
+                    min_consecutive=getattr(self.args, "hazard_min_consecutive", DEFAULT_HAZARD_MIN_CONSECUTIVE),
+                    cooldown_seconds=getattr(self.args, "hazard_cooldown_seconds", DEFAULT_HAZARD_COOLDOWN_SECONDS),
+                )
+                display_id_mapper = DisplayIdMapper()
+                overlay_publish_state = OverlayPublishState()
+                summary["video_state_resets"] = summary.get("video_state_resets", 0) + 1
+                summary["last_video_reset_reason"] = reset_reason
+                print(
+                    f"[video-boundary] camera={self.camera_login_id} reset={reset_reason}",
+                    flush=True,
+                )
                 from ai.inference.tracking_debug import log_tracker_reset_decision, build_tracker_reset_record
                 record = build_tracker_reset_record(
                     camera_login_id=self.camera_login_id,
