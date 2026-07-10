@@ -1,8 +1,12 @@
 """TensorRT engine validation and YOLO runtime selection with PyTorch fallback.
 
 When a ``.engine`` path is requested we always force-validate the file and
-attempt TensorRT deserialization before allowing inference. Failed engines are
-never used; the pipeline falls back to a sibling ``.pt`` model when possible.
+confirm the engine is usable for the real inference stack (ultralytics YOLO).
+
+Raw ``tensorrt.Runtime.deserialize_cuda_engine`` is still probed for diagnostics:
+on some GPU stacks (e.g. ultralytics-built engines vs pip ``tensorrt``) raw
+deserialize fails with magicTag mismatch while YOLO can load the engine. In that
+case we accept the engine for inference and record both outcomes.
 """
 
 from __future__ import annotations
@@ -27,9 +31,19 @@ class EngineValidationResult:
     ok: bool
     path: str
     reason: str | None = None
+    raw_deserialize_ok: bool | None = None
+    validation_method: str | None = None
+    details: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {"ok": self.ok, "path": self.path, "reason": self.reason}
+        payload: dict[str, Any] = {"ok": self.ok, "path": self.path, "reason": self.reason}
+        if self.raw_deserialize_ok is not None:
+            payload["raw_deserialize_ok"] = self.raw_deserialize_ok
+        if self.validation_method is not None:
+            payload["validation_method"] = self.validation_method
+        if self.details is not None:
+            payload["details"] = self.details
+        return payload
 
 
 @dataclass(frozen=True)
@@ -68,18 +82,21 @@ def validate_engine_file(path: str | Path) -> EngineValidationResult:
             ok=False,
             path=str(engine_path),
             reason=f"invalid extension for TensorRT engine: {engine_path.suffix!r} (expected .engine)",
+            validation_method="file_checks",
         )
     if not engine_path.exists():
         return EngineValidationResult(
             ok=False,
             path=str(engine_path),
             reason=f"engine file does not exist: {engine_path}",
+            validation_method="file_checks",
         )
     if not engine_path.is_file():
         return EngineValidationResult(
             ok=False,
             path=str(engine_path),
             reason=f"engine path is not a file: {engine_path}",
+            validation_method="file_checks",
         )
     size = engine_path.stat().st_size
     if size <= 0:
@@ -87,8 +104,14 @@ def validate_engine_file(path: str | Path) -> EngineValidationResult:
             ok=False,
             path=str(engine_path),
             reason="engine file is empty (0 bytes)",
+            validation_method="file_checks",
         )
-    return EngineValidationResult(ok=True, path=str(engine_path), reason=None)
+    return EngineValidationResult(
+        ok=True,
+        path=str(engine_path),
+        reason=None,
+        validation_method="file_checks",
+    )
 
 
 def _import_tensorrt() -> Any:
@@ -102,8 +125,10 @@ def deserialize_tensorrt_engine(
     *,
     trt_module: Any | None = None,
 ) -> EngineValidationResult:
-    """Validate the engine file and deserialize it via TensorRT runtime.
+    """Validate the engine file and deserialize it via pip TensorRT runtime.
 
+    This is a strict raw-TRT probe. Prefer :func:`validate_engine_for_inference`
+    when deciding whether the engine may be used with ultralytics YOLO.
     ``trt_module`` may be injected for unit tests so real TensorRT/CUDA is not required.
     """
     file_check = validate_engine_file(path)
@@ -115,8 +140,14 @@ def deserialize_tensorrt_engine(
         trt = trt_module if trt_module is not None else _import_tensorrt()
     except ImportError as exc:
         reason = f"tensorrt import failed: {exc}"
-        logger.warning("[tensorrt] engine validation failed path=%s reason=%s", engine_path, reason)
-        return EngineValidationResult(ok=False, path=str(engine_path), reason=reason)
+        logger.warning("[tensorrt] raw deserialize probe failed path=%s reason=%s", engine_path, reason)
+        return EngineValidationResult(
+            ok=False,
+            path=str(engine_path),
+            reason=reason,
+            raw_deserialize_ok=False,
+            validation_method="raw_tensorrt_deserialize",
+        )
 
     try:
         logger_obj = None
@@ -131,17 +162,113 @@ def deserialize_tensorrt_engine(
                 "TensorRT deserialize_cuda_engine returned None "
                 "(possible CUDA/TensorRT version mismatch or incompatible engine)"
             )
-            logger.warning("[tensorrt] engine validation failed path=%s reason=%s", engine_path, reason)
-            return EngineValidationResult(ok=False, path=str(engine_path), reason=reason)
-        logger.info("[tensorrt] engine validated successfully path=%s size_bytes=%s", engine_path, len(engine_bytes))
-        return EngineValidationResult(ok=True, path=str(engine_path), reason=None)
+            logger.warning("[tensorrt] raw deserialize probe failed path=%s reason=%s", engine_path, reason)
+            return EngineValidationResult(
+                ok=False,
+                path=str(engine_path),
+                reason=reason,
+                raw_deserialize_ok=False,
+                validation_method="raw_tensorrt_deserialize",
+            )
+        logger.info(
+            "[tensorrt] raw deserialize OK path=%s size_bytes=%s",
+            engine_path,
+            len(engine_bytes),
+        )
+        return EngineValidationResult(
+            ok=True,
+            path=str(engine_path),
+            reason=None,
+            raw_deserialize_ok=True,
+            validation_method="raw_tensorrt_deserialize",
+        )
     except Exception as exc:  # noqa: BLE001 - surface any TensorRT/CUDA failure as validation error
         reason = (
             f"TensorRT engine deserialize failed: {exc} "
             "(check CUDA/TensorRT version compatibility)"
         )
-        logger.warning("[tensorrt] engine validation failed path=%s reason=%s", engine_path, reason)
-        return EngineValidationResult(ok=False, path=str(engine_path), reason=reason)
+        logger.warning("[tensorrt] raw deserialize probe failed path=%s reason=%s", engine_path, reason)
+        return EngineValidationResult(
+            ok=False,
+            path=str(engine_path),
+            reason=reason,
+            raw_deserialize_ok=False,
+            validation_method="raw_tensorrt_deserialize",
+        )
+
+
+def validate_engine_for_inference(
+    path: str | Path,
+    *,
+    yolo_loader: Callable[[str], Any] | None = None,
+    trt_module: Any | None = None,
+    probe_raw_tensorrt: bool = True,
+) -> EngineValidationResult:
+    """Force-validate an engine for actual YOLO inference.
+
+    Order:
+    1. file existence / extension / non-zero size (hard fail)
+    2. optional raw pip-TensorRT deserialize probe (diagnostic)
+    3. if ``yolo_loader`` is provided, ultralytics-style load is authoritative
+    4. if no ``yolo_loader``, raw deserialize result is authoritative
+    """
+    file_check = validate_engine_file(path)
+    if not file_check.ok:
+        return file_check
+
+    engine_path = Path(path)
+    raw: EngineValidationResult | None = None
+    if probe_raw_tensorrt:
+        raw = deserialize_tensorrt_engine(engine_path, trt_module=trt_module)
+
+    if yolo_loader is None:
+        if raw is None:
+            return EngineValidationResult(
+                ok=True,
+                path=str(engine_path),
+                reason=None,
+                validation_method="file_checks",
+            )
+        return raw
+
+    try:
+        yolo_loader(str(engine_path))
+    except Exception as exc:  # noqa: BLE001
+        raw_reason = raw.reason if raw is not None and not raw.ok else None
+        reason = f"ultralytics/YOLO engine load failed: {exc}"
+        if raw_reason:
+            reason = f"{reason}; raw_tensorrt={raw_reason}"
+        logger.warning("[tensorrt] engine rejected for inference path=%s reason=%s", engine_path, reason)
+        return EngineValidationResult(
+            ok=False,
+            path=str(engine_path),
+            reason=reason,
+            raw_deserialize_ok=None if raw is None else raw.ok,
+            validation_method="ultralytics_yolo_load",
+        )
+
+    details = None
+    if raw is not None and not raw.ok:
+        details = (
+            f"raw pip-tensorrt deserialize failed ({raw.reason}); "
+            "accepted because ultralytics YOLO load succeeded"
+        )
+        logger.warning(
+            "[tensorrt] raw deserialize failed but ultralytics load OK path=%s details=%s",
+            engine_path,
+            details,
+        )
+    else:
+        logger.info("[tensorrt] engine validated for inference via ultralytics path=%s", engine_path)
+
+    return EngineValidationResult(
+        ok=True,
+        path=str(engine_path),
+        reason=None,
+        raw_deserialize_ok=None if raw is None else raw.ok,
+        validation_method="ultralytics_yolo_load",
+        details=details,
+    )
 
 
 def resolve_yolo_model_runtime(
@@ -156,6 +283,10 @@ def resolve_yolo_model_runtime(
     - always run forced validation
     - on failure, switch to sibling ``.pt`` (or explicit fallback) when present
     - never return a failed engine path for inference
+
+    Default validator is file checks only. Callers that own a YOLO loader should
+    pass :func:`validate_engine_for_inference` (with that loader) or load via
+    :class:`detector.yolo_pose_detector.YoloPoseDetector`.
     """
     requested = Path(model_path)
     requested_str = str(requested)
@@ -177,11 +308,12 @@ def resolve_yolo_model_runtime(
         )
         return selection
 
-    validator = engine_validator or (lambda path: deserialize_tensorrt_engine(path))
+    validator = engine_validator or validate_engine_file
     validation = validator(requested)
     validation_dict = validation.to_dict() if isinstance(validation, EngineValidationResult) else dict(validation)
+    is_ok = validation.ok if isinstance(validation, EngineValidationResult) else bool(validation_dict.get("ok"))
 
-    if validation.ok if isinstance(validation, EngineValidationResult) else bool(validation_dict.get("ok")):
+    if is_ok:
         selection = RuntimeSelection(
             runtime=RUNTIME_TENSORRT,
             model_path=requested_str,
