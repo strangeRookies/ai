@@ -57,7 +57,25 @@ class YoloPoseDetector:
         self.engine_validation = selection.engine_validation
         self.fallback_occurred = selection.fallback_occurred
         self.tensorrt_error = selection.tensorrt_error
+        self.requested_backend = (
+            RUNTIME_TENSORRT if is_tensorrt_engine_path(self.requested_model_path) else "pytorch"
+        )
+        self.actual_backend = selection.runtime
+        self.precision = "fp32"
+        self.engine_path = (
+            self.requested_model_path
+            if is_tensorrt_engine_path(self.requested_model_path)
+            else (self.model_path if is_tensorrt_engine_path(self.model_path) else None)
+        )
         log_selected_runtime(selection)
+        if self.fallback_occurred:
+            # Never silent: surface TensorRT failure cause at detector construction.
+            print(
+                f"[yolo-pose] TensorRT fallback actual_backend={self.actual_backend} "
+                f"requested={self.requested_model_path} model_path={self.model_path} "
+                f"fallback_reason={self.tensorrt_error}",
+                flush=True,
+            )
 
     def _load_with_runtime_selection(
         self,

@@ -81,6 +81,59 @@ def worker_has_exited(worker: CameraWorker) -> bool:
     return any(process.poll() is not None for process in worker.processes)
 
 
+def restart_exited_worker(
+    workers: dict[str, CameraWorker],
+    camera_login_id: str,
+    *,
+    cameras_by_id: dict[str, RegisteredCamera],
+    config: RunnerConfig,
+) -> None:
+    """ffmpeg 또는 overlay 중 하나가 죽으면 둘 다 정리하고 동일 overlay 포트로 전체 워커를 재생성한다."""
+    worker = workers.get(camera_login_id)
+    if worker is None:
+        return
+
+    port = worker.overlay_port
+    cmd_text = safe_command_text(worker.command) if getattr(worker, "command", None) else "unknown"
+    masked_url = redact_url(worker.rtsp_url) if worker.rtsp_url else "unknown"
+    print(
+        f"[registered-cameras][warning] worker exited; restarting camera={camera_login_id} "
+        f"| cameraLoginId={camera_login_id} | streamId={camera_login_id} "
+        f"| rtsp_url={masked_url} | overlay_port={port} "
+        f"| overlay_log={worker.overlay_log_path} | command={cmd_text}",
+        file=sys.stderr,
+        flush=True,
+    )
+    stop_processes(worker.processes)
+    report_overlay_stopped(camera_login_id, worker.rtsp_url, worker.overlay_port, config)
+
+    camera = cameras_by_id.get(camera_login_id)
+    if camera is None:
+        del workers[camera_login_id]
+        print(
+            f"[registered-cameras][warning] cannot restart camera={camera_login_id}: not in active set",
+            file=sys.stderr,
+            flush=True,
+        )
+        return
+
+    new_worker = start_camera_worker(camera, config, port)
+    if new_worker is None:
+        del workers[camera_login_id]
+        print(
+            f"[registered-cameras][warning] restart failed for camera={camera_login_id}",
+            file=sys.stderr,
+            flush=True,
+        )
+        return
+
+    workers[camera_login_id] = new_worker
+    print(
+        f"[registered-cameras] restarted camera={camera_login_id} on overlay_port={port}",
+        flush=True,
+    )
+
+
 def camera_source_signature(camera: RegisteredCamera, config: RunnerConfig) -> str:
     """worker 재시작 여부를 판단하는 카메라+런타임 fingerprint를 만든다.
 
@@ -359,6 +412,8 @@ def run_camera_sync_loop(cameras: list[RegisteredCamera], config: RunnerConfig) 
 
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
+    latest_cameras = list(cameras)
+    cameras_by_id = {camera.camera_login_id: camera for camera in latest_cameras}
     next_refresh_at = time.monotonic() + config.refresh_interval_seconds
     while True:
         time.sleep(2)
@@ -370,18 +425,12 @@ def run_camera_sync_loop(cameras: list[RegisteredCamera], config: RunnerConfig) 
         )
         for camera_login_id, worker in list(workers.items()):
             if worker_has_exited(worker):
-                cmd_text = safe_command_text(worker.command) if getattr(worker, "command", None) else "unknown"
-                masked_url = redact_url(worker.rtsp_url) if worker.rtsp_url else "unknown"
-                print(
-                    f"[registered-cameras][warning] worker exited; stopping camera={camera_login_id} "
-                    f"| cameraLoginId={camera_login_id} | streamId={camera_login_id} "
-                    f"| rtsp_url={masked_url} | overlay_log={worker.overlay_log_path} | command={cmd_text}",
-                    file=sys.stderr,
-                    flush=True,
+                restart_exited_worker(
+                    workers,
+                    camera_login_id,
+                    cameras_by_id=cameras_by_id,
+                    config=config,
                 )
-                stop_processes(worker.processes)
-                report_overlay_stopped(camera_login_id, worker.rtsp_url, worker.overlay_port, config)
-                del workers[camera_login_id]
         if time.monotonic() < next_refresh_at:
             continue
         next_refresh_at = time.monotonic() + config.refresh_interval_seconds
@@ -394,4 +443,5 @@ def run_camera_sync_loop(cameras: list[RegisteredCamera], config: RunnerConfig) 
         except RuntimeError as exc:
             print(f"[registered-cameras][warning] active camera refresh failed: {exc}", file=sys.stderr, flush=True)
             continue
+        cameras_by_id = {camera.camera_login_id: camera for camera in latest_cameras}
         sync_camera_workers(workers, latest_cameras, config)

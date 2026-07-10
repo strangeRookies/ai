@@ -373,10 +373,15 @@ def detector_runtime_summary(
     if engine_validation is not None and not isinstance(engine_validation, Mapping):
         engine_validation = dict(engine_validation) if hasattr(engine_validation, "keys") else engine_validation
     model_path = getattr(detector, "model_path", None) or getattr(detector, "model_name", requested_model)
+    runtime = getattr(detector, "runtime", None)
     return {
-        "runtime": getattr(detector, "runtime", None),
+        "runtime": runtime,
+        "backend": runtime,
         "model_path": model_path,
         "engine_validation": engine_validation,
+        "inference_count": None,
+        "avg_latency_ms": None,
+        "fps": None,
     }
 
 
@@ -388,6 +393,25 @@ def attach_runtime_summary_fields(
 ) -> dict[str, Any]:
     """Add runtime fields to an existing summary without removing prior keys."""
     summary.update(detector_runtime_summary(detector, requested_model=requested_model))
+    return summary
+
+
+def finalize_runtime_summary_fields(summary: dict[str, Any]) -> dict[str, Any]:
+    """Fill backend / path / count / latency / FPS after metrics are available.
+
+    Keeps existing keys and only fills the reporting fields used by TensorRT smoke
+    and run summaries. ``backend`` mirrors ``runtime`` (tensorrt | pytorch | pytorch_fallback).
+    """
+    if summary.get("backend") is None:
+        summary["backend"] = summary.get("runtime")
+    if summary.get("model_path") is None:
+        summary["model_path"] = summary.get("yolo_model")
+    frames = summary.get("frames_processed")
+    summary["inference_count"] = int(frames) if frames is not None else summary.get("inference_count")
+    if summary.get("avg_latency_ms") is None:
+        summary["avg_latency_ms"] = summary.get("avg_yolo_inference_ms")
+    if summary.get("fps") is None:
+        summary["fps"] = summary.get("effective_fps")
     return summary
 
 
@@ -409,3 +433,86 @@ def log_selected_runtime(selection: RuntimeSelection | Mapping[str, Any], *, pre
         f"tensorrt_error={data.get('tensorrt_error')}",
         flush=True,
     )
+
+
+def infer_requested_backend(model_path: str | Path) -> str:
+    return RUNTIME_TENSORRT if is_tensorrt_engine_path(model_path) else RUNTIME_PYTORCH
+
+
+def log_worker_backend_startup(
+    *,
+    camera_login_id: str | None,
+    requested_model: str | Path | None,
+    detector: Any,
+    device: str | None = None,
+    precision: str | None = None,
+    prefix: str = "[worker-backend]",
+) -> dict[str, Any]:
+    """Emit required per-worker TensorRT/backend identity fields at startup."""
+    requested = str(requested_model or getattr(detector, "requested_model_path", "") or "")
+    actual_path = str(getattr(detector, "model_path", None) or getattr(detector, "model_name", requested) or "")
+    actual_backend = getattr(detector, "runtime", None) or (
+        RUNTIME_TENSORRT if is_tensorrt_engine_path(actual_path) else RUNTIME_PYTORCH
+    )
+    requested_backend = infer_requested_backend(requested) if requested else infer_requested_backend(actual_path)
+    fallback = bool(getattr(detector, "fallback_occurred", False) or actual_backend == RUNTIME_PYTORCH_FALLBACK)
+    reason = getattr(detector, "tensorrt_error", None)
+    eng_val = getattr(detector, "engine_validation", None) or {}
+    if fallback and not reason and isinstance(eng_val, Mapping):
+        reason = eng_val.get("reason") or eng_val.get("details")
+    if fallback and not reason:
+        reason = "unspecified_tensorrt_fallback"
+    engine_path = requested if is_tensorrt_engine_path(requested) else (
+        actual_path if is_tensorrt_engine_path(actual_path) else None
+    )
+    record = {
+        "cameraLoginId": camera_login_id,
+        "requested_backend": requested_backend,
+        "actual_backend": actual_backend,
+        "model_path": actual_path,
+        "engine_path": engine_path,
+        "device": device if device is not None else getattr(detector, "device", None),
+        "precision": precision or getattr(detector, "precision", "fp32"),
+        "fallback": fallback,
+        "fallback_reason": reason if fallback else None,
+    }
+    # Always log fallback reason when falling back (never silent).
+    if fallback:
+        logger.warning("%s %s", prefix, record)
+        print(f"{prefix} {record}", flush=True)
+    else:
+        logger.info("%s %s", prefix, record)
+        print(f"{prefix} {record}", flush=True)
+    return record
+
+
+def log_periodic_inference_metrics(
+    *,
+    camera_login_id: str | None,
+    backend: str | None,
+    metrics: Any,
+    frames_processed: int | None = None,
+    prefix: str = "[infer-metrics]",
+) -> dict[str, Any]:
+    """Periodic per-worker inference performance log (avg/p50/p95/fps)."""
+    if hasattr(metrics, "yolo_latency_stats"):
+        stats = metrics.yolo_latency_stats()
+    else:
+        stats = {
+            "frames": frames_processed,
+            "avg_infer_ms": None,
+            "p50_infer_ms": None,
+            "p95_infer_ms": None,
+            "fps": None,
+        }
+    record = {
+        "cameraLoginId": camera_login_id,
+        "backend": backend,
+        "frames": stats.get("frames"),
+        "avg_infer_ms": stats.get("avg_infer_ms"),
+        "p50_infer_ms": stats.get("p50_infer_ms"),
+        "p95_infer_ms": stats.get("p95_infer_ms"),
+        "fps": stats.get("fps"),
+    }
+    print(f"{prefix} {record}", flush=True)
+    return record

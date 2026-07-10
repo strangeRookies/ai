@@ -46,18 +46,27 @@ AI 분석 엔진이 프레임 분석을 거쳐 쓰러짐(Faint) 등의 이상행
 ### C. 상세 필드 정의
 | 필드명 | 타입 | 필수 여부 | 설명 |
 | :--- | :--- | :--- | :--- |
-| `message_type` | String | 필수 | 메시지 유형 식별용 상수 (`"AI_EVENT"`) |
-| `event_type` / `type` | String | 필수 | 이상행동 종류 (`"Faint"` / `"Normal"` 등) |
+| `message_type` | String | 필수 | 메시지 유형 식별용 상수 (`"AI_EVENT"`) 또는 AI 발행 `messageType: "event"` |
+| `event_type` / `type` | String | 필수 | 이상행동 종류: `faint` / `fall` (신규 낙상), **`FAINT_SUSPECTED` / `FALL_UNRECOVERED`** (낙상 후 미회복) |
+| `alertKind` / `alert_kind` | String | 선택 | `new_fall` (신규 확정) 또는 `unrecovered` (미회복/지속 위험) |
 | `camera_id` | String | 필수 | AI 내부 카메라 고유 식별자 |
-| `camera_login_id` | String | 필수 | 백엔드/프론트엔드 매핑용 로그인 식별 ID (미지정시 `camera_id` 사용) |
+| `camera_login_id` / `cameraLoginId` | String | 필수 | 백엔드/프론트엔드 매핑용 로그인 식별 ID |
 | `timestamp` / `detected_at` | String | 필수 | ISO-8601 UTC 포맷 문자열 (`YYYY-MM-DDTHH:mm:ssZ`) 또는 Unix Epoch (초/Float) |
 | `severity` | String | 필수 | 위험도 단계 (`"HIGH"` / `"CRITICAL"` / `"INFO"` 등) |
 | `confidence` / `score` | Double | 필수 | 검출 신뢰도 및 판별 확률값 (0.0 ~ 1.0) |
 | `faint_prob` | Double | 선택 | Faint 클래스의 원시 소프트맥스 확률값 |
 | `bbox` | Array | 선택 | 이상행동 대상자의 바운딩 박스 좌표 `[x_min, y_min, x_max, y_max]` |
-| `track_id` | Int / String | 선택 | 객체 추적 추적 고유 ID |
+| `track_id` / `trackingId` / `trackId` | Int / String | 선택 | 객체 추적 고유 ID |
+| `originalEventId` | String | 선택 | 미회복 알림 시 최초 NEW_FALL `eventId` |
+| `durationSec` | Double | 선택 | 최초 확정 이후 경과 초 (미회복) |
+| `postureLabel` | String | 선택 | `upright_like` / `lying_like` / `unknown` |
+| `movementLevel` | String | 선택 | `still` / `low` / `high` / `unknown` |
+| `state` / `lifecycleState` | String | 선택 | 예: `POST_FALL_LYING`, `RECOVERED` |
+| `memoText` / `message` | String | 선택 | UI 문구 (신규 vs 미회복 구분) |
 | `clip_path` | String | 선택 | 로컬 저장된 이벤트 비디오 클립 경로 |
 | `clip_url` | String | 선택 | 클립 영상을 접근할 수 있는 Web URL |
+
+> 상세 라이프사이클 계약: [FALL_EVENT_LIFECYCLE_MQTT_CONTRACT.md](./FALL_EVENT_LIFECYCLE_MQTT_CONTRACT.md)
 
 ### D. 관련 코드 레퍼런스
 * **발행기 구현 (Python):** [build_inference_event_payload](file:///c:/Users/user/Documents/최종 쉴더스/ai/inference/rtsp_runtime.py#L138-L190)

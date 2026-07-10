@@ -231,6 +231,9 @@ class MqttPayloadsTest(unittest.TestCase):
                 ],
             },
         )
+        # Phase C optional lifecycle fields must stay absent when not provided
+        self.assertNotIn("originalEventId", payload)
+        self.assertNotIn("alertKind", payload)
 
     def test_confirmed_event_payload_includes_backend_dto_aliases(self):
         payload = build_confirmed_event_payload(
