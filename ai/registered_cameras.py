@@ -27,6 +27,7 @@ DEFAULT_VIDEO_POOL: Final = "video_pool"
 
 FAINT_SCENARIO_TYPES: Final = {"FALL_BED", "COLLAPSE", "SYNCOPE"}
 EXIT_SCENARIO_TYPES: Final = {"EXIT"}
+HAZARD_SCENARIO_TYPES: Final = {"HAZARD_ZONE"}
 
 CameraSourceType = Literal["REAL_RTSP", "SIMULATED_RTSP"]
 
@@ -71,6 +72,7 @@ class RegisteredCamera:
     assigned_video_path: str | None
     roi_configs: tuple[dict, ...] = field(default_factory=tuple)
     exit_roi_configs: tuple[dict, ...] = field(default_factory=tuple)
+    hazard_roi_configs: tuple[dict, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True, slots=True)
@@ -223,6 +225,7 @@ def parse_camera(raw: RawCamera) -> RegisteredCamera | None:
     raw_rois = raw.get("roiConfigs") or []
     faint_rois = [r for r in raw_rois if isinstance(r, dict) and r.get("scenarioType") in FAINT_SCENARIO_TYPES]
     exit_rois  = [r for r in raw_rois if isinstance(r, dict) and r.get("scenarioType") in EXIT_SCENARIO_TYPES]
+    hazard_rois = [r for r in raw_rois if isinstance(r, dict) and r.get("scenarioType") in HAZARD_SCENARIO_TYPES]
 
     def _make_roi_tuple(rois):
         return tuple(
@@ -244,6 +247,7 @@ def parse_camera(raw: RawCamera) -> RegisteredCamera | None:
         assigned_video_path=raw.get("assignedVideoPath"),
         roi_configs=_make_roi_tuple(faint_rois),
         exit_roi_configs=_make_roi_tuple(exit_rois),
+        hazard_roi_configs=_make_roi_tuple(hazard_rois),
     )
 
 
@@ -512,6 +516,8 @@ def build_overlay_command(
         command.extend(["--roi-configs", json.dumps(list(camera.roi_configs))])
     if camera.exit_roi_configs:
         command.extend(["--exit-roi-configs", json.dumps(list(camera.exit_roi_configs))])
+    if camera.hazard_roi_configs:
+        command.extend(["--hazard-roi-configs", json.dumps(list(camera.hazard_roi_configs))])
     return command
 
 

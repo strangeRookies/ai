@@ -39,14 +39,14 @@ from ai.inference.rtsp_runtime import (
 from ai.inference.tracking_debug import log_sequence_stage
 from ai.inference.pose_diagnostics import PoseDiagnosticsReporter, config_from_args as pose_diagnostics_config_from_args
 from ai.overlay_http import OverlayState, create_overlay_server
-from ai.roi import apply_roi_mask, combine_roi_masks, find_boxes_in_exit_zone
+from ai.roi import apply_roi_mask, combine_roi_masks, find_boxes_in_exit_zone, find_boxes_in_hazard_zone
 from ai.streams.video_reader import VideoReader
 from ai.visualization.action_overlay import annotate_boxes_with_action, annotate_boxes_with_track_actions, draw_metrics_panel, faint_probability
 from ai.visualization.action_overlay import format_action_overlay_text, initial_overlay_summary, update_overlay_runtime
 from ai.visualization.draw import draw_overlay
 from scripts.run_rtsp_inference import DEFAULT_ACTION_MODEL, DEFAULT_CAMERA_COOLDOWN_SECONDS, DEFAULT_FAINT_THRESHOLD, DEFAULT_MIN_CONSECUTIVE_FAINT
 from scripts.run_rtsp_inference import FaintEventPostProcessor, create_classifier, create_detector
-from ai.action.faint_post_processing import ExitEventPostProcessor, DEFAULT_EXIT_MIN_CONSECUTIVE, DEFAULT_EXIT_COOLDOWN_SECONDS
+from ai.action.faint_post_processing import ExitEventPostProcessor, DEFAULT_EXIT_MIN_CONSECUTIVE, DEFAULT_EXIT_COOLDOWN_SECONDS, HazardEventPostProcessor, DEFAULT_HAZARD_MIN_CONSECUTIVE, DEFAULT_HAZARD_COOLDOWN_SECONDS
 from stream.rtsp_reader import redact_url
 from tracking.display_id_mapper import DisplayIdMapper
 from ai.publishers.event_publisher import create_event_publisher, mqtt_topic_settings_from_args
@@ -180,6 +180,8 @@ def process_frame(
     roi_mask=None,
     exit_roi_mask=None,
     exit_post_processor=None,
+    hazard_roi_mask=None,
+    hazard_post_processor=None,
     track_selector=None,
     sync_sink=None,
     pose_reporter=None,
@@ -210,6 +212,8 @@ def process_frame(
             roi_mask=roi_mask,
             exit_roi_mask=exit_roi_mask,
             exit_post_processor=exit_post_processor,
+            hazard_roi_mask=hazard_roi_mask,
+            hazard_post_processor=hazard_post_processor,
             track_selector=track_selector,
             sync_sink=sync_sink,
             pose_reporter=pose_reporter,
@@ -240,6 +244,8 @@ def _process_frame_impl(
     roi_mask=None,
     exit_roi_mask=None,
     exit_post_processor=None,
+    hazard_roi_mask=None,
+    hazard_post_processor=None,
     track_selector=None,
     sync_sink=None,
     pose_reporter=None,
@@ -384,6 +390,28 @@ def _process_frame_impl(
                 if publisher is not None:
                     publisher.publish(exit_payload, topic=topic_settings_exit["event_topic"])
                 print(f"[exit-event] {stream_id} track_id={track_id}", flush=True)
+
+    # HAZARD 위험구역 감지: 트래킹된 박스 center가 위험구역(HAZARD ROI) 안에 있으면 알림
+    if hazard_roi_mask is not None and hazard_post_processor is not None:
+        all_track_ids = {int(float(str(b["track_id"]))) for b in boxes if b.get("track_id") is not None}
+        in_hazard_zone = find_boxes_in_hazard_zone(boxes, hazard_roi_mask)
+        for track_id in all_track_ids - in_hazard_zone:
+            hazard_post_processor.reset_track(args.camera_id, track_id)
+        for track_id in in_hazard_zone:
+            if hazard_post_processor.should_trigger(args.camera_id, track_id, frame_packet.timestamp):
+                hazard_boxes = [b for b in boxes if b.get("track_id") is not None and int(float(str(b["track_id"]))) == track_id]
+                hazard_payload = build_inference_event_payload(
+                    args, frame_packet,
+                    {"label": "hazard", "score": 1.0, "probabilities": {"hazard": 1.0}},
+                    hazard_boxes, None,
+                    frame_metadata=frame_metadata,
+                    published_at_ms=None,
+                    dropped_frame_count=dropped_frame_count,
+                )
+                topic_settings_hazard = mqtt_topic_settings_from_args(args)
+                if publisher is not None:
+                    publisher.publish(hazard_payload, topic=topic_settings_hazard["event_topic"])
+                print(f"[hazard-event] {stream_id} track_id={track_id}", flush=True)
 
     # Update display ID mapping so operator labels stay compact (1, 2, 3…)
     if display_id_mapper is not None:
@@ -857,6 +885,14 @@ class OverlayWorker:
             cooldown_seconds=getattr(self.args, "exit_cooldown_seconds", DEFAULT_EXIT_COOLDOWN_SECONDS),
         )
 
+        hazard_roi_configs = getattr(self.args, "hazard_roi_configs_parsed", [])
+        cached_hazard_mask = None
+        cached_hazard_frame_shape = None
+        hazard_post_processor = HazardEventPostProcessor(
+            min_consecutive=getattr(self.args, "hazard_min_consecutive", DEFAULT_HAZARD_MIN_CONSECUTIVE),
+            cooldown_seconds=getattr(self.args, "hazard_cooldown_seconds", DEFAULT_HAZARD_COOLDOWN_SECONDS),
+        )
+
         sequence_buffers = {}
         for cid in camera_ids:
             if self.args.classifier_input == "crops":
@@ -973,6 +1009,16 @@ class OverlayWorker:
                         flush=True,
                     )
 
+            if hazard_roi_configs:
+                h, w = frame_packet.frame.shape[:2]
+                if cached_hazard_mask is None or cached_hazard_frame_shape != (h, w):
+                    cached_hazard_mask = combine_roi_masks(hazard_roi_configs, h, w)
+                    cached_hazard_frame_shape = (h, w)
+                    print(
+                        f"[ai-overlay][hazard-roi] mask built: {len(hazard_roi_configs)} region(s) frame={w}x{h}",
+                        flush=True,
+                    )
+
             inference_start = time.perf_counter()
             overlay = process_frame(
                 frame_packet, detector, classifier, sequence_buffers[current_cam_id], summary, self.args,
@@ -985,6 +1031,8 @@ class OverlayWorker:
                 roi_mask=cached_roi_mask,
                 exit_roi_mask=cached_exit_mask,
                 exit_post_processor=exit_post_processor,
+                hazard_roi_mask=cached_hazard_mask,
+                hazard_post_processor=hazard_post_processor,
                 track_selector=track_selector,
                 sync_sink=self.sync_sink,
                 pose_reporter=pose_reporter,
@@ -1064,6 +1112,9 @@ class OverlayWorker:
                 if exit_roi_configs:
                     from ai.visualization.draw import draw_roi_polygon
                     draw_roi_polygon(overlay, exit_roi_configs, color=(0, 165, 255))
+                if hazard_roi_configs:
+                    from ai.visualization.draw import draw_roi_polygon
+                    draw_roi_polygon(overlay, hazard_roi_configs, color=(0, 0, 255)) # Red in BGR
                 self.state.update_frame(overlay, summary)
             if self.args.max_frames > 0 and summary["frames_processed"] >= self.args.max_frames:
                 break
@@ -1189,6 +1240,13 @@ def main():
     )
     parser.add_argument("--exit-min-consecutive", type=int, default=DEFAULT_EXIT_MIN_CONSECUTIVE)
     parser.add_argument("--exit-cooldown-seconds", type=float, default=DEFAULT_EXIT_COOLDOWN_SECONDS)
+    parser.add_argument(
+        "--hazard-roi-configs",
+        default=None,
+        help="JSON array of HAZARD scenario ROI config objects",
+    )
+    parser.add_argument("--hazard-min-consecutive", type=int, default=DEFAULT_HAZARD_MIN_CONSECUTIVE)
+    parser.add_argument("--hazard-cooldown-seconds", type=float, default=DEFAULT_HAZARD_COOLDOWN_SECONDS)
     
     # MQTT Options
     parser.add_argument("--publisher", choices=["mqtt", "console"], help="Event publisher mode (default: from env or console if dry-run)")
@@ -1249,6 +1307,16 @@ def main():
                 print(f"[ai-overlay][exit-roi] loaded {len(parsed)} EXIT ROI config(s)", flush=True)
         except json.JSONDecodeError:
             print("[ai-overlay][exit-roi] warning: failed to parse --exit-roi-configs JSON", flush=True)
+
+    args.hazard_roi_configs_parsed = []
+    if args.hazard_roi_configs:
+        try:
+            parsed = json.loads(args.hazard_roi_configs)
+            if isinstance(parsed, list):
+                args.hazard_roi_configs_parsed = parsed
+                print(f"[ai-overlay][hazard-roi] loaded {len(parsed)} HAZARD ROI config(s)", flush=True)
+        except json.JSONDecodeError:
+            print("[ai-overlay][hazard-roi] warning: failed to parse --hazard-roi-configs JSON", flush=True)
 
     # Register worker to prevent duplicate starts for same cameraLoginId
     from ai.worker_registry import register_worker, unregister_worker

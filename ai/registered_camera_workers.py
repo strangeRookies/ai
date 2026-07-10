@@ -92,6 +92,7 @@ def camera_source_signature(camera: RegisteredCamera, config: RunnerConfig) -> s
     import json as _json
     roi_suffix = _json.dumps(list(camera.roi_configs), sort_keys=True)
     exit_roi_suffix = _json.dumps(list(camera.exit_roi_configs), sort_keys=True)
+    hazard_roi_suffix = _json.dumps(list(camera.hazard_roi_configs), sort_keys=True)
     runtime_suffix = _json.dumps(
         {
             "bbox_smoothing_alpha": config.bbox_smoothing_alpha,
@@ -143,11 +144,11 @@ def camera_source_signature(camera: RegisteredCamera, config: RunnerConfig) -> s
     )
     match camera.source_type:
         case "REAL_RTSP":
-            return f"REAL_RTSP:{camera.rtsp_url or ''}|roi:{roi_suffix}|exit_roi:{exit_roi_suffix}|runtime:{runtime_suffix}"
+            return f"REAL_RTSP:{camera.rtsp_url or ''}|roi:{roi_suffix}|exit_roi:{exit_roi_suffix}|hazard_roi:{hazard_roi_suffix}|runtime:{runtime_suffix}"
         case "SIMULATED_RTSP":
             return (
                 f"SIMULATED_RTSP:{camera_rtsp_url(config.rtsp_base_url, camera.camera_login_id)}:"
-                f"{camera.assigned_video_path or ''}|roi:{roi_suffix}|exit_roi:{exit_roi_suffix}|runtime:{runtime_suffix}"
+                f"{camera.assigned_video_path or ''}|roi:{roi_suffix}|exit_roi:{exit_roi_suffix}|hazard_roi:{hazard_roi_suffix}|runtime:{runtime_suffix}"
             )
 
 
