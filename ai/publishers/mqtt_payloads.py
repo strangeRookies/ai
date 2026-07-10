@@ -123,6 +123,8 @@ def build_confirmed_event_payload(
     event_type = _event_type(prediction)
     confidence = _prediction_confidence(prediction)
     tracking_id = _tracking_id(sequence) if sequence is not None else None
+    if tracking_id is None:
+        tracking_id = _first_box_tracking_id(boxes)
     bbox = _sequence_bbox(sequence) if sequence is not None else None
     dto_bbox = _sequence_bbox_list(sequence) if sequence is not None else None
     if bbox is None:
@@ -310,6 +312,15 @@ def _first_box_bbox(boxes: Sequence[JsonMap]) -> dict[str, JsonValue] | None:
     if not boxes:
         return None
     return _box_bbox(boxes[0])
+
+
+def _first_box_tracking_id(boxes: Sequence[JsonMap]) -> int | None:
+    if not boxes:
+        return None
+    value = boxes[0].get("track_id")
+    if value is None:
+        return None
+    return int(float(str(value)))
 
 
 def _first_box_bbox_list(boxes: Sequence[JsonMap]) -> list[JsonValue] | None:
