@@ -159,7 +159,13 @@ class RtspInferenceTest(unittest.TestCase):
         self.assertTrue(is_alert_prediction({"label": "Faint", "score": 0.6}))
 
     def test_faint_post_processor_requires_consecutive_predictions_and_cooldown(self):
-        processor = FaintEventPostProcessor(min_consecutive_faint=2, cooldown_seconds=5)
+        # Phase B default requires upright→lying; disable for legacy consecutive/cooldown unit test.
+        processor = FaintEventPostProcessor(
+            min_consecutive_faint=2,
+            cooldown_seconds=5,
+            require_upright_to_lying=False,
+            use_posture_estimator=False,
+        )
 
         self.assertFalse(processor.should_trigger("cam_01", {"label": "Faint"}, 1.0))
         self.assertTrue(processor.should_trigger("cam_01", {"label": "Faint"}, 2.0))
@@ -169,7 +175,12 @@ class RtspInferenceTest(unittest.TestCase):
         self.assertTrue(processor.should_trigger("cam_01", {"label": "Faint"}, 10.0))
 
     def test_faint_post_processor_debounces_events_per_camera_across_tracks(self):
-        processor = FaintEventPostProcessor(min_consecutive_faint=2, cooldown_seconds=5)
+        processor = FaintEventPostProcessor(
+            min_consecutive_faint=2,
+            cooldown_seconds=5,
+            require_upright_to_lying=False,
+            use_posture_estimator=False,
+        )
 
         self.assertFalse(processor.should_trigger("cam_01", {"label": "Faint"}, 1.0, track_id=1))
         self.assertTrue(processor.should_trigger("cam_01", {"label": "Faint"}, 2.0, track_id=1))

@@ -28,7 +28,15 @@ from ai.inference.rtsp_runtime import (
     ensure_mock_keypoints,
     log_pose_tracking_config,
 )
-from ai.inference.rtsp_runtime import log_classifier_contract, maybe_log_debug, normalize_detections, update_detections_with_postprocessor, update_prediction_counts, update_tracking_summary
+from ai.inference.rtsp_runtime import (
+    log_classifier_contract,
+    maybe_log_debug,
+    normalize_detections,
+    update_detections_with_postprocessor,
+    update_prediction_counts,
+    update_tracking_summary,
+    lifecycle_payload_kwargs,
+)
 from ai.inference.rtsp_runtime import (
     log_detection_stage,
     log_tracking_stage,
@@ -46,6 +54,9 @@ from ai.visualization.action_overlay import format_action_overlay_text, initial_
 from ai.visualization.draw import draw_overlay
 from scripts.run_rtsp_inference import DEFAULT_ACTION_MODEL, DEFAULT_CAMERA_COOLDOWN_SECONDS, DEFAULT_FAINT_THRESHOLD, DEFAULT_MIN_CONSECUTIVE_FAINT
 from scripts.run_rtsp_inference import FaintEventPostProcessor, create_classifier, create_detector
+from ai.action.fall_lifecycle_config import build_faint_post_processor_from_args, resolved_faint_threshold
+from ai.inference.tensorrt_runtime import log_periodic_inference_metrics, log_worker_backend_startup
+from ai.runtime_metrics import RuntimeMetrics
 from ai.action.faint_post_processing import ExitEventPostProcessor, DEFAULT_EXIT_MIN_CONSECUTIVE, DEFAULT_EXIT_COOLDOWN_SECONDS, HazardEventPostProcessor, DEFAULT_HAZARD_MIN_CONSECUTIVE, DEFAULT_HAZARD_COOLDOWN_SECONDS
 from stream.rtsp_reader import redact_url
 from tracking.display_id_mapper import DisplayIdMapper
@@ -504,10 +515,22 @@ def _process_frame_impl(
         tensor_shape=getattr(classifier, "last_tensor_shape", None),
         sequence_length=getattr(args, "sequence_length", None),
     )
+    from ai.action.posture_estimator import detection_for_track
+
+    emit_decisions_by_track = {}
     for track_id, track_prediction in predictions_by_track.items():
         event_triggered = False
         if post_processor is not None:
-            event_triggered = post_processor.should_trigger(args.camera_id, track_prediction, frame_packet.timestamp, track_id=track_id)
+            track_detection = detection_for_track(detections, track_id) or detection_for_track(boxes, track_id)
+            emit_decision = post_processor.evaluate(
+                args.camera_id,
+                track_prediction,
+                frame_packet.timestamp,
+                track_id=track_id,
+                detection=track_detection,
+            )
+            emit_decisions_by_track[track_id] = emit_decision
+            event_triggered = bool(emit_decision.emit)
             consecutive_by_track[track_id] = post_processor.consecutive_count(args.camera_id, track_id=track_id)
         elif track_prediction and track_prediction.get("label") != "Normal":
             event_triggered = True
@@ -591,6 +614,7 @@ def _process_frame_impl(
     for track_id in triggered_track_ids:
         track_prediction = predictions_by_track[track_id]
         sequence = sequences_by_track[track_id]
+        emit_decision = emit_decisions_by_track.get(track_id)
         payload = build_inference_event_payload(
             args,
             frame_packet,
@@ -600,9 +624,12 @@ def _process_frame_impl(
             frame_metadata=frame_metadata,
             published_at_ms=published_at_ms,
             dropped_frame_count=dropped_frame_count,
+            **lifecycle_payload_kwargs(emit_decision),
         )
         log_lstm_event(args, stream_id, sequence, track_prediction)
         summary["events_generated"] += 1
+        if emit_decision is not None and emit_decision.is_unrecovered:
+            summary["unrecovered_events_generated"] = int(summary.get("unrecovered_events_generated", 0)) + 1
         if summary["sample_event"] is None:
             summary["sample_event"] = payload
         if args.print_events:
@@ -828,10 +855,19 @@ class OverlayWorker:
                 close()
 
     def _run(self):
+        action_threshold = resolved_faint_threshold(self.args)
         detector = create_detector(self.args.detector_mode, self.args.yolo_model, self.args.device, self.args.imgsz, conf=self.args.detector_conf)
-        classifier, _classifier_mode = create_classifier(self.args.action_model, self.args.action_device, self.args.action_threshold)
+        classifier, _classifier_mode = create_classifier(self.args.action_model, self.args.action_device, action_threshold)
         publisher, publisher_mode = create_event_publisher(self.args)
         print(f"[ai-overlay-inference] initialized event publisher: {publisher_mode}", flush=True)
+        log_worker_backend_startup(
+            camera_login_id=self.camera_login_id,
+            requested_model=self.args.yolo_model,
+            detector=detector,
+            device=getattr(self.args, "device", None),
+        )
+        yolo_metrics = RuntimeMetrics()
+        yolo_metrics.set_warmup_skip(int(getattr(self.args, "infer_warmup_frames", 20)))
         
         # S3 업로더 및 MQTT 발행 연동 스레드 시작
         self.clip_worker = ClipWriterWorker(
@@ -854,10 +890,7 @@ class OverlayWorker:
         log_classifier_contract("[lstm-checkpoint]", self.camera_login_id, classifier)
 
         summary = initial_summary()
-        post_processor = FaintEventPostProcessor(
-            min_consecutive_faint=self.args.min_consecutive_faint,
-            cooldown_seconds=self.args.camera_cooldown_seconds,
-        )
+        post_processor = build_faint_post_processor_from_args(self.args)
         tracker, postprocessing_mode = create_detection_postprocessor(self.args)
         log_pose_tracking_config(self.args, tracker)
         cheap_filter_config = cheap_filter_config_from_args(self.args)
@@ -976,10 +1009,7 @@ class OverlayWorker:
                         relink_center_distance_ratio=getattr(self.args, "tracking_relink_center_ratio", 0.70),
                         relink_max_time_gap_seconds=getattr(self.args, "tracking_relink_max_time_gap_seconds", 2.0),
                     )
-                post_processor = FaintEventPostProcessor(
-                    min_consecutive_faint=getattr(self.args, "min_consecutive_faint", DEFAULT_MIN_CONSECUTIVE_FAINT),
-                    cooldown_seconds=getattr(self.args, "camera_cooldown_seconds", DEFAULT_CAMERA_COOLDOWN_SECONDS),
-                )
+                post_processor = build_faint_post_processor_from_args(self.args)
                 exit_post_processor = ExitEventPostProcessor(
                     min_consecutive=getattr(self.args, "exit_min_consecutive", DEFAULT_EXIT_MIN_CONSECUTIVE),
                     cooldown_seconds=getattr(self.args, "exit_cooldown_seconds", DEFAULT_EXIT_COOLDOWN_SECONDS),
@@ -1129,6 +1159,15 @@ class OverlayWorker:
                 last_heartbeat_time = now
 
             inference_ms = (time.perf_counter() - inference_start) * 1000.0
+            yolo_metrics.add_yolo_ms(inference_ms)
+            metrics_every = max(0, int(getattr(self.args, "infer_metrics_every_n", 30)))
+            if metrics_every > 0 and summary.get("frames_processed", 0) % metrics_every == 0 and summary.get("frames_processed", 0) > 0:
+                log_periodic_inference_metrics(
+                    camera_login_id=self.camera_login_id,
+                    backend=getattr(detector, "runtime", None),
+                    metrics=yolo_metrics,
+                    frames_processed=summary.get("frames_processed"),
+                )
             every_n = max(0, int(getattr(self.args, "debug_every_n", 30)))
             if every_n > 0 and frame_packet.frame_id % every_n == 0:
                 mjpeg_summary = self.state.status()["summary"]
@@ -1206,8 +1245,26 @@ def main():
     parser.add_argument("--action-model", default=DEFAULT_ACTION_MODEL)
     parser.add_argument("--action-device", default="auto")
     parser.add_argument("--action-threshold", type=float, default=DEFAULT_FAINT_THRESHOLD)
+    parser.add_argument("--faint-threshold", type=float, default=float(os.getenv("FAINT_THRESHOLD", str(DEFAULT_FAINT_THRESHOLD))))
+    parser.add_argument("--fall-threshold", type=float, default=float(os.getenv("FALL_THRESHOLD", str(DEFAULT_FAINT_THRESHOLD))))
     parser.add_argument("--min-consecutive-faint", type=int, default=DEFAULT_MIN_CONSECUTIVE_FAINT)
+    parser.add_argument("--consecutive-required", type=int, default=int(os.getenv("CONSECUTIVE_REQUIRED", str(DEFAULT_MIN_CONSECUTIVE_FAINT))))
     parser.add_argument("--camera-cooldown-seconds", type=float, default=DEFAULT_CAMERA_COOLDOWN_SECONDS)
+    parser.add_argument("--cooldown-sec", type=float, default=float(os.getenv("COOLDOWN_SEC", str(DEFAULT_CAMERA_COOLDOWN_SECONDS))))
+    parser.add_argument("--use-fall-state-machine", action=argparse.BooleanOptionalAction, default=os.getenv("USE_FALL_STATE_MACHINE", "true").lower() in {"1", "true", "yes", "on"})
+    parser.add_argument("--normal-recover-required", type=int, default=int(os.getenv("NORMAL_RECOVER_REQUIRED", "4")))
+    parser.add_argument("--persistent-delay-sec", type=float, default=float(os.getenv("PERSISTENT_DELAY_SEC", "10")))
+    parser.add_argument("--persistent-repeat-sec", type=float, default=float(os.getenv("PERSISTENT_REPEAT_SEC", "30")))
+    parser.add_argument("--track-lost-grace-sec", type=float, default=float(os.getenv("TRACK_LOST_GRACE_SEC", "3")))
+    parser.add_argument("--require-upright-to-lying", action=argparse.BooleanOptionalAction, default=os.getenv("REQUIRE_UPRIGHT_TO_LYING", "false").lower() in {"1", "true", "yes", "on"})
+    parser.add_argument("--lying-aspect-ratio", type=float, default=float(os.getenv("LYING_ASPECT_RATIO", "1.2")))
+    parser.add_argument("--upright-aspect-ratio", type=float, default=float(os.getenv("UPRIGHT_ASPECT_RATIO", "1.3")))
+    parser.add_argument("--min-keypoint-conf", type=float, default=float(os.getenv("MIN_KEYPOINT_CONF", "0.3")))
+    parser.add_argument("--lying-frames-required", type=int, default=int(os.getenv("LYING_FRAMES_REQUIRED", "2")))
+    parser.add_argument("--upright-frames-required", type=int, default=int(os.getenv("UPRIGHT_FRAMES_REQUIRED", "2")))
+    parser.add_argument("--movement-low-threshold", type=float, default=float(os.getenv("MOVEMENT_LOW_THRESHOLD", "12.0")))
+    parser.add_argument("--infer-metrics-every-n", type=int, default=int(os.getenv("INFER_METRICS_EVERY_N", "30")))
+    parser.add_argument("--infer-warmup-frames", type=int, default=int(os.getenv("INFER_WARMUP_FRAMES", "20")))
     parser.add_argument("--classifier-input", choices=["keypoints", "crops"], default="keypoints")
     parser.add_argument("--sequence-length", type=int, default=DEFAULT_LSTM_SEQUENCE_LENGTH)
     parser.add_argument("--sequence-stride", type=int, default=DEFAULT_LSTM_SEQUENCE_STRIDE)

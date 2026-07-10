@@ -118,11 +118,24 @@ def build_confirmed_event_payload(
     dropped_frame_count: int | None = None,
     snapshot_path: str | None = None,
     clip_path: str | None = None,
+    event_type_override: str | None = None,
+    original_event_id: str | None = None,
+    duration_sec: float | None = None,
+    posture_label: str | None = None,
+    movement_level: str | None = None,
+    lifecycle_state: str | None = None,
+    alert_kind: str | None = None,
+    track_id_override: int | str | None = None,
 ) -> dict[str, JsonValue]:
     emitted_at = timestamp_ms if timestamp_ms is not None else published_at_ms or current_timestamp_ms()
-    event_type = _event_type(prediction)
+    event_type = event_type_override or _event_type(prediction)
     confidence = _prediction_confidence(prediction)
     tracking_id = _tracking_id(sequence) if sequence is not None else None
+    if tracking_id is None and track_id_override is not None:
+        try:
+            tracking_id = int(float(str(track_id_override)))
+        except (TypeError, ValueError):
+            tracking_id = None
     bbox = _sequence_bbox(sequence) if sequence is not None else None
     dto_bbox = _sequence_bbox_list(sequence) if sequence is not None else None
     if bbox is None:
@@ -141,6 +154,18 @@ def build_confirmed_event_payload(
     _add_track_identity_fields(event, sequence)
     if frame_id is not None:
         event["frameId"] = int(frame_id)
+    if original_event_id is not None:
+        event["originalEventId"] = original_event_id
+    if duration_sec is not None:
+        event["durationSec"] = float(duration_sec)
+    if posture_label is not None:
+        event["postureLabel"] = posture_label
+    if movement_level is not None:
+        event["movementLevel"] = movement_level
+    if lifecycle_state is not None:
+        event["state"] = lifecycle_state
+    if alert_kind is not None:
+        event["alertKind"] = alert_kind
 
     payload: dict[str, JsonValue] = {
         "schemaVersion": SCHEMA_VERSION,
@@ -165,6 +190,24 @@ def build_confirmed_event_payload(
         "bbox": dto_bbox,
         "events": [event],
     }
+    if original_event_id is not None:
+        payload["originalEventId"] = original_event_id
+        payload["original_event_id"] = original_event_id
+    if duration_sec is not None:
+        payload["durationSec"] = float(duration_sec)
+        payload["duration_sec"] = float(duration_sec)
+    if posture_label is not None:
+        payload["postureLabel"] = posture_label
+        payload["posture_label"] = posture_label
+    if movement_level is not None:
+        payload["movementLevel"] = movement_level
+        payload["movement_level"] = movement_level
+    if lifecycle_state is not None:
+        payload["state"] = lifecycle_state
+        payload["lifecycleState"] = lifecycle_state
+    if alert_kind is not None:
+        payload["alertKind"] = alert_kind
+        payload["alert_kind"] = alert_kind
     _add_frame_sync_fields(payload, frame_id, captured_at_ms, processed_at_ms, published_at_ms)
     add_evidence_fields(
         payload,
@@ -381,9 +424,17 @@ def _event_type(prediction: JsonMap) -> str:
             return "faint"
         case "fall" | "fall_detected":
             return "fall"
+        case "faint_suspected":
+            return "FAINT_SUSPECTED"
+        case "fall_unrecovered":
+            return "FALL_UNRECOVERED"
         case "normal":
             return "normal"
         case _:
+            # Preserve explicit uppercase lifecycle types (FAINT_SUSPECTED, …)
+            raw = str(prediction.get("label") or DEFAULT_EVENT_TYPE).strip()
+            if raw in {"FAINT_SUSPECTED", "FALL_UNRECOVERED", "FALL_PERSISTENT", "FAINT_PERSISTENT"}:
+                return raw
             return label or DEFAULT_EVENT_TYPE
 
 

@@ -401,8 +401,12 @@ class RuntimeSummaryFieldsTest(unittest.TestCase):
         )
         attach_runtime_summary_fields(base, detector, requested_model="yolo26n-pose.engine")
         self.assertEqual(base["runtime"], RUNTIME_TENSORRT)
+        self.assertEqual(base["backend"], RUNTIME_TENSORRT)
         self.assertEqual(base["model_path"], "yolo26n-pose.engine")
         self.assertTrue(base["engine_validation"]["ok"])
+        self.assertIn("inference_count", base)
+        self.assertIn("avg_latency_ms", base)
+        self.assertIn("fps", base)
         # existing keys preserved
         self.assertEqual(base["camera_id"], "cam_01")
         self.assertEqual(base["yolo_model"], "yolo26n-pose.engine")
