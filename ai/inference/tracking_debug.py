@@ -115,6 +115,7 @@ def _safe_diagnostics(postprocessor) -> Mapping[str, object]:
 
 
 def _detector_backend(model_path: str) -> str:
+    """Heuristic backend label from model path (actual runtime may fall back to PyTorch)."""
     return "tensorrt" if model_path.lower().endswith(".engine") else "torch"
 
 

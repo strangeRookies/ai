@@ -1,18 +1,137 @@
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any, Callable
+
+from ai.inference.tensorrt_runtime import (
+    RUNTIME_PYTORCH_FALLBACK,
+    RUNTIME_TENSORRT,
+    EngineValidationResult,
+    RuntimeSelection,
+    default_pytorch_fallback_path,
+    deserialize_tensorrt_engine,
+    log_selected_runtime,
+    resolve_yolo_model_runtime,
+)
+
+
 class YoloPoseDetector:
-    def __init__(self, model_name, device="auto", imgsz=640, conf=0.25):
-        self.model_name = model_name
+    def __init__(
+        self,
+        model_name,
+        device="auto",
+        imgsz=640,
+        conf=0.25,
+        *,
+        yolo_cls: Callable[[str], Any] | None = None,
+        engine_validator: Callable[[str | Path], EngineValidationResult] | None = None,
+        fallback_model_path: str | Path | None = None,
+    ):
         self.device = None if device == "auto" else device
         self.imgsz = imgsz
         self.conf = conf
-        try:
-            from ultralytics import YOLO
-        except ImportError as exc:
-            raise RuntimeError(f"ultralytics is not installed: {exc}") from exc
+        self.fallback_occurred = False
+        self.engine_validation = None
+        self.tensorrt_error = None
+        self.requested_model_path = str(model_name)
 
+        yolo_loader = yolo_cls
+        if yolo_loader is None:
+            try:
+                from ultralytics import YOLO as ultralytics_yolo
+            except ImportError as exc:
+                raise RuntimeError(f"ultralytics is not installed: {exc}") from exc
+            yolo_loader = ultralytics_yolo
+
+        selection, model = self._load_with_runtime_selection(
+            model_name=str(model_name),
+            yolo_loader=yolo_loader,
+            engine_validator=engine_validator,
+            fallback_model_path=fallback_model_path,
+        )
+        self.model = model
+        self.runtime = selection.runtime
+        self.model_path = selection.model_path
+        self.model_name = selection.model_path
+        self.engine_validation = selection.engine_validation
+        self.fallback_occurred = selection.fallback_occurred
+        self.tensorrt_error = selection.tensorrt_error
+        log_selected_runtime(selection)
+
+    def _load_with_runtime_selection(
+        self,
+        *,
+        model_name: str,
+        yolo_loader: Callable[[str], Any],
+        engine_validator: Callable[[str | Path], EngineValidationResult] | None,
+        fallback_model_path: str | Path | None,
+    ) -> tuple[RuntimeSelection, Any]:
+        # Resolve path-level validation / fallback first (never hand a failed engine to YOLO).
+        selection = resolve_yolo_model_runtime(
+            model_name,
+            fallback_model_path=fallback_model_path,
+            engine_validator=engine_validator or (lambda path: deserialize_tensorrt_engine(path)),
+        )
+
+        if selection.runtime == RUNTIME_TENSORRT:
+            try:
+                model = yolo_loader(selection.model_path)
+                return selection, model
+            except Exception as load_exc:
+                tensorrt_error = f"TensorRT engine load/init failed: {load_exc}"
+                fallback = (
+                    Path(fallback_model_path)
+                    if fallback_model_path is not None
+                    else default_pytorch_fallback_path(selection.model_path)
+                )
+                if not (fallback.exists() and fallback.is_file() and fallback.stat().st_size > 0):
+                    raise RuntimeError(
+                        f"{tensorrt_error}; PyTorch fallback unavailable at {fallback}"
+                    ) from load_exc
+                try:
+                    model = yolo_loader(str(fallback))
+                except Exception as fallback_exc:
+                    raise RuntimeError(
+                        f"TensorRT load failed and PyTorch fallback also failed. "
+                        f"tensorrt_error={tensorrt_error}; pytorch_error={fallback_exc}"
+                    ) from fallback_exc
+                fallback_selection = RuntimeSelection(
+                    runtime=RUNTIME_PYTORCH_FALLBACK,
+                    model_path=str(fallback),
+                    requested_model_path=selection.requested_model_path,
+                    engine_validation=selection.engine_validation
+                    or {"ok": True, "path": selection.model_path, "reason": None},
+                    fallback_occurred=True,
+                    tensorrt_error=tensorrt_error,
+                )
+                # Keep validation record but annotate load failure for operators.
+                if fallback_selection.engine_validation is not None:
+                    engine_validation = dict(fallback_selection.engine_validation)
+                    engine_validation["load_error"] = tensorrt_error
+                    # File/deserialize passed but runtime load failed — inference must not use engine.
+                    engine_validation["ok"] = False
+                    engine_validation["reason"] = tensorrt_error
+                    fallback_selection = RuntimeSelection(
+                        runtime=RUNTIME_PYTORCH_FALLBACK,
+                        model_path=str(fallback),
+                        requested_model_path=selection.requested_model_path,
+                        engine_validation=engine_validation,
+                        fallback_occurred=True,
+                        tensorrt_error=tensorrt_error,
+                    )
+                return fallback_selection, model
+
+        # PyTorch direct or already-resolved pytorch_fallback path.
         try:
-            self.model = YOLO(model_name)
+            model = yolo_loader(selection.model_path)
+            return selection, model
         except Exception as exc:
-            raise RuntimeError(f"Failed to load YOLO model '{model_name}': {exc}") from exc
+            if selection.runtime == RUNTIME_PYTORCH_FALLBACK or selection.tensorrt_error:
+                raise RuntimeError(
+                    f"Failed to load YOLO model '{selection.model_path}' after TensorRT failure. "
+                    f"tensorrt_error={selection.tensorrt_error}; pytorch_error={exc}"
+                ) from exc
+            raise RuntimeError(f"Failed to load YOLO model '{selection.model_path}': {exc}") from exc
 
     def detect(self, frame):
         results = self.model.predict(

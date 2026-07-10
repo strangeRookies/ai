@@ -47,10 +47,16 @@ def normalize_detections(detections):
     return boxes
 
 
-def create_detector(mode, model, device, imgsz=640, conf=0.25):
+def create_detector(mode, model, device, imgsz=640, conf=0.25, *, fallback_model_path=None):
     if mode == "mock":
         return MockDetector(model_name="mock-pose-detector")
-    return YoloPoseDetector(model, device=device, imgsz=imgsz, conf=conf)
+    return YoloPoseDetector(
+        model,
+        device=device,
+        imgsz=imgsz,
+        conf=conf,
+        fallback_model_path=fallback_model_path,
+    )
 
 
 def create_classifier(action_model=DEFAULT_ACTION_MODEL, device="auto", action_threshold=DEFAULT_FAINT_THRESHOLD):
