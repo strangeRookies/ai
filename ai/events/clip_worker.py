@@ -1,6 +1,8 @@
 import os
 import queue
 import re
+import shutil
+import subprocess
 import sys
 import threading
 from datetime import datetime, timezone
@@ -8,6 +10,56 @@ from pathlib import Path
 
 from ai.events.event_clip import EventClipTask
 from ai.storage.uploader import upload_clip
+
+# 브라우저 재생 호환을 위해 우선 시도할 ffmpeg 인코더 순서 (GPU면 nvenc가 더 빠름)
+_FFMPEG_ENCODER_CANDIDATES = ("h264_nvenc", "libx264")
+
+
+def _ffmpeg_bin():
+    return os.environ.get("FFMPEG_BIN", "ffmpeg")
+
+
+def _encode_with_ffmpeg(frames, fps, width, height, output_path):
+    ffmpeg_bin = _ffmpeg_bin()
+    if shutil.which(ffmpeg_bin) is None:
+        print(f"[clip-worker] ffmpeg binary not found ({ffmpeg_bin}); skipping ffmpeg encode", file=sys.stderr)
+        return None
+
+    raw_input = b"".join(frame.tobytes() for frame in frames)
+
+    for encoder in _FFMPEG_ENCODER_CANDIDATES:
+        cmd = [
+            ffmpeg_bin, "-y",
+            "-f", "rawvideo",
+            "-pix_fmt", "bgr24",
+            "-s", f"{width}x{height}",
+            "-r", str(float(fps or 30.0)),
+            "-i", "-",
+            "-an",
+            "-c:v", encoder,
+            "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart",
+            str(output_path),
+        ]
+        try:
+            proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            # communicate()는 stdin에 쓰는 동안 stdout/stderr도 동시에 비워줘서
+            # ffmpeg 로그로 파이프가 꽉 차 서로 블로킹되는 데드락을 피함
+            _, stderr = proc.communicate(input=raw_input)
+        except Exception as exc:
+            print(f"[clip-worker] ffmpeg encoder={encoder} failed to run: {exc}", file=sys.stderr)
+            continue
+
+        if proc.returncode == 0 and output_path.exists() and output_path.stat().st_size > 0:
+            return output_path
+
+        tail = (stderr or b"").decode("utf-8", errors="replace").strip().splitlines()[-5:]
+        print(
+            f"[clip-worker] ffmpeg encoder={encoder} failed (rc={proc.returncode}): {' | '.join(tail)}",
+            file=sys.stderr,
+        )
+
+    return None
 
 
 def enqueue_event_clip(task_queue, task):
@@ -82,8 +134,18 @@ def save_clip_to_mp4(task):
                 frame[y1_px:y2_px, x1_px:x2_px] = blurred_roi
 
     # 2. 비디오 라이팅 수행
+    # 프레임 크기를 첫 프레임 기준으로 통일 (ffmpeg/cv2 둘 다 고정 해상도 필요)
+    for idx in range(len(frames)):
+        if frames[idx].shape[:2] != (height, width):
+            frames[idx] = cv2.resize(frames[idx], (width, height))
+
+    # 브라우저 재생 가능한 H.264로 인코딩 시도 (ffmpeg 서브프로세스, opencv-python엔 라이선스상 H.264 인코더가 없는 경우가 흔함)
+    if _encode_with_ffmpeg(frames, task.fps, width, height, output_path):
+        return output_path
+
+    # ffmpeg 사용 불가 시 최종 폴백: 예전 cv2.VideoWriter 방식 (mp4v로 떨어지면 브라우저 재생은 안 될 수 있음)
+    print(f"[clip-worker] ffmpeg encode failed for {output_path}; falling back to cv2.VideoWriter (may not be browser-playable)", file=sys.stderr)
     writer = None
-     # 사용할 코덱(avc1, H264 등)을 탐색하며 VideoWriter 인스턴스를 생성
     for codec in ("avc1", "H264", "mp4v"):
         fourcc = cv2.VideoWriter_fourcc(*codec)
         candidate = cv2.VideoWriter(str(output_path), fourcc, float(task.fps or 30.0), (width, height))
@@ -97,8 +159,6 @@ def save_clip_to_mp4(task):
 
     try:
         for frame in frames:
-            if frame.shape[:2] != (height, width):
-                frame = cv2.resize(frame, (width, height))
             writer.write(frame) # <-- 실제로 로컬 파일로 인코딩하여 기록하는 부분
     finally:
         writer.release() # 작업이 끝나면 해제(저장 완료)
