@@ -126,7 +126,8 @@ class IncidentVlmPipelineTest(unittest.TestCase):
         self.assertIsNone(job.structured_result)
         self.assertEqual(pipe.vlm_calls, 0)
 
-    def test_final_only_max_one_call_across_incidents(self):
+    def test_final_only_is_per_incident_not_global(self):
+        """FINAL_ONLY = max one final analysis per incidentId; other incidents still run."""
         pipe = IncidentVlmPipeline(policy=VlmJobPolicy.FINAL_ONLY)
         inc1 = _incident(
             incident_id="inc-a",
@@ -143,10 +144,49 @@ class IncidentVlmPipelineTest(unittest.TestCase):
             ],
         )
         j1 = pipe.process(inc1)
+        j1_again = pipe.process(inc1)
         j2 = pipe.process(inc2)
         self.assertEqual(j1.status, "SUCCESS")
-        self.assertEqual(j2.status, "SKIPPED")
-        self.assertEqual(pipe.vlm_calls, 1)
+        self.assertIs(j1, j1_again)
+        self.assertEqual(j2.status, "SUCCESS")
+        self.assertEqual(pipe.vlm_calls, 2)
+
+    def test_passthrough_deid_is_not_claimed_deidentified(self):
+        pipe = IncidentVlmPipeline(policy=VlmJobPolicy.FINAL_ONLY)
+        inc = _incident(
+            events=[
+                IncidentEvent(IncidentEventType.NEW_FALL, 10.0, "e1"),
+                IncidentEvent(IncidentEventType.RECOVERED, 12.0, "e2"),
+            ]
+        )
+        job = pipe.process(inc)
+        self.assertEqual(job.status, "SUCCESS")
+        self.assertFalse(job.deidentified)
+        self.assertEqual(job.deidentification_mode, "PASSTHROUGH")
+        self.assertFalse(job.safe_for_external_provider)
+        self.assertFalse(job.structured_result.get("deidentified"))
+
+    def test_passthrough_blocks_when_external_provider_flag_set(self):
+        import os
+
+        prev = os.environ.get("VLM_EXTERNAL_PROVIDER")
+        os.environ["VLM_EXTERNAL_PROVIDER"] = "true"
+        try:
+            pipe = IncidentVlmPipeline(policy=VlmJobPolicy.FINAL_ONLY)
+            inc = _incident(
+                events=[
+                    IncidentEvent(IncidentEventType.NEW_FALL, 10.0, "e1"),
+                    IncidentEvent(IncidentEventType.RECOVERED, 12.0, "e2"),
+                ]
+            )
+            job = pipe.process(inc)
+            self.assertEqual(job.status, "BLOCKED_DEID")
+            self.assertIn("PASSTHROUGH", job.error or "")
+        finally:
+            if prev is None:
+                os.environ.pop("VLM_EXTERNAL_PROVIDER", None)
+            else:
+                os.environ["VLM_EXTERNAL_PROVIDER"] = prev
 
     def test_ineligible_without_terminal(self):
         pipe = IncidentVlmPipeline(policy=VlmJobPolicy.FINAL_ONLY)
@@ -170,7 +210,7 @@ class IncidentVlmPipelineTest(unittest.TestCase):
         self.assertEqual(job.status, "SUCCESS")
         validate_incident_v1(job.structured_result)
         self.assertIn("incident:", job.search_document)
-        self.assertTrue(job.deidentified)
+        self.assertFalse(job.deidentified)
         self.assertGreater(len(job.keyframe_timestamps_sec), 0)
         # offsets contract present
         self.assertEqual(DEFAULT_KEYFRAME_OFFSETS_SEC[0], -2.0)

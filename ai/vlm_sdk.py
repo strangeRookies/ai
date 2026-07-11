@@ -13,6 +13,8 @@ class VlmAnalyzeRequest:
     input_url: str
     metadata: dict[str, str]
     output_urls: tuple[str, ...]
+    # Extracted keyframe JPEGs only — never full video bytes for providers.
+    keyframe_jpegs: tuple[bytes, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,8 +60,10 @@ class MockVlmProvider:
 
 class GeminiVlmProvider:
     """
-    Placeholder for multimodal Gemini direct SDK calls.
-    Real media download + generateContent wiring is deferred until GPU/API keys are available.
+    INTEGRATION_PENDING: multimodal Gemini direct SDK calls.
+
+    Callers must pass extracted keyframe JPEGs (request.keyframe_jpegs), not full video bytes.
+    Live generateContent is intentionally not invoked in this scaffold (zero network cost).
     """
 
     def __init__(self, api_key: str) -> None:
@@ -68,10 +72,15 @@ class GeminiVlmProvider:
     def analyze(self, request: VlmAnalyzeRequest) -> VlmAnalyzeResult:
         if not self._api_key:
             raise RuntimeError("GEMINI_API_KEY is required for VLM_PROVIDER=gemini")
+        if not request.keyframe_jpegs:
+            raise RuntimeError(
+                "Gemini VLM requires keyframe_jpegs (frames+metadata contract); "
+                "do not send full video bytes. INTEGRATION_PENDING for live generateContent."
+            )
         # Intentionally not calling network in scaffold; keep contract stable for callers.
         raise RuntimeError(
-            "Gemini multimodal VLM is scaffolded only. "
-            "Wire generateContent with media from input_url when keys/GPU path are ready."
+            "Gemini multimodal VLM is INTEGRATION_PENDING (scaffold only). "
+            "Wire generateContent with request.keyframe_jpegs when keys/GPU path are ready."
         )
 
 
@@ -85,5 +94,8 @@ def resolve_vlm_provider(
     if mock_mode or name in {"", "mock"}:
         return MockVlmProvider()
     if name == "gemini":
+        if not key:
+            # Disabled without key — prefer mock rather than hard-failing resolve
+            return MockVlmProvider()
         return GeminiVlmProvider(api_key=key)
     raise ValueError(f"unsupported VLM_PROVIDER: {name}")

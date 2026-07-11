@@ -63,6 +63,8 @@ class VlmJob:
     keyframe_timestamps_sec: list[float] = field(default_factory=list)
     keyframe_metadata: list[dict[str, Any]] = field(default_factory=list)
     deidentified: bool = False
+    deidentification_mode: str = "PASSTHROUGH"
+    safe_for_external_provider: bool = False
     structured_result: dict[str, Any] | None = None
     search_document: str | None = None
     error: str | None = None
@@ -75,8 +77,20 @@ class DeidentificationGate(Protocol):
 
 
 class PassThroughDeid:
+    """No real de-identification — must never claim deidentified=true."""
+
+    mode = "PASSTHROUGH"
+
     def deidentify(self, keyframes: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        return [dict(item, deidentified=True) for item in keyframes]
+        return [
+            dict(
+                item,
+                deidentified=False,
+                deidentificationMode="PASSTHROUGH",
+                safeForExternalProvider=False,
+            )
+            for item in keyframes
+        ]
 
 
 class FailingDeid:
@@ -214,7 +228,9 @@ class IncidentVlmPipeline:
         self._jobs_by_incident: dict[str, VlmJob] = {}
         self._open_incidents: dict[str, Incident] = {}
         self._terminal_status: dict[str, IncidentTerminalStatus] = {}
+        # Total VLM analyze invocations (diagnostic). FINAL_ONLY is enforced per incidentId.
         self.vlm_calls = 0
+        self._final_calls_by_incident: dict[str, int] = {}
 
     def get_job(self, incident_id: str) -> VlmJob | None:
         return self._jobs_by_incident.get(incident_id)
@@ -307,13 +323,17 @@ class IncidentVlmPipeline:
             )
             return job
 
-        if self.policy == VlmJobPolicy.FINAL_ONLY and self.vlm_calls >= 1:
+        # FINAL_ONLY = at most one final analysis *per incidentId* (not global process quota).
+        if (
+            self.policy == VlmJobPolicy.FINAL_ONLY
+            and self._final_calls_by_incident.get(incident.incident_id, 0) >= 1
+        ):
             job = VlmJob(
                 job_id=f"job-skip-{incident.incident_id}",
                 incident_id=incident.incident_id,
                 camera_login_id=incident.camera_login_id,
                 status="SKIPPED",
-                error="FINAL_ONLY already consumed or not eligible",
+                error="FINAL_ONLY already consumed for this incident",
             )
             return job
 
@@ -326,27 +346,65 @@ class IncidentVlmPipeline:
         job.keyframe_timestamps_sec = stamps
         job.keyframe_metadata = mock_keyframe_metadata(stamps, fps=incident.fps, incident_id=incident.incident_id)
 
+        deid_mode = getattr(self.deid, "mode", "PASSTHROUGH")
         try:
             deid_frames = self.deid.deidentify(job.keyframe_metadata)
-            job.deidentified = True
+            # Honest flags: PassThroughDeid never sets deidentified true
+            any_true = any(bool(frame.get("deidentified")) for frame in deid_frames)
+            job.deidentified = any_true
+            job.deidentification_mode = str(
+                deid_frames[0].get("deidentificationMode", deid_mode) if deid_frames else deid_mode
+            )
+            job.safe_for_external_provider = any(
+                bool(frame.get("safeForExternalProvider")) for frame in deid_frames
+            )
         except Exception as exc:
             job.status = "BLOCKED_DEID"
             job.error = str(exc)
             job.deidentified = False
+            job.safe_for_external_provider = False
             return job
 
-        # de-id failure already returned; only call VLM when deidentified
-        if self.policy == VlmJobPolicy.FINAL_ONLY and self.vlm_calls >= 1:
+        # Block external provider when passthrough / not safe (mock path allowed by default).
+        if (
+            os_env_block_passthrough_external()
+            and not job.safe_for_external_provider
+            and str(job.deidentification_mode).upper() in {"PASSTHROUGH", "NONE", ""}
+        ):
+            job.status = "BLOCKED_DEID"
+            job.error = "PASSTHROUGH de-id is not safe for external provider"
+            job.deidentified = False
+            return job
+
+        if (
+            self.policy == VlmJobPolicy.FINAL_ONLY
+            and self._final_calls_by_incident.get(incident.incident_id, 0) >= 1
+        ):
             job.status = "SKIPPED"
-            job.error = "FINAL_ONLY max one VLM call"
+            job.error = "FINAL_ONLY max one VLM call for this incident"
             return job
 
         result = self.vlm.analyze(incident, deid_frames)
+        result = {
+            **result,
+            "deidentificationMode": job.deidentification_mode,
+            "deidentified": job.deidentified,
+            "safeForExternalProvider": job.safe_for_external_provider,
+        }
         job.vlm_call_count += 1
         self.vlm_calls += 1
+        self._final_calls_by_incident[incident.incident_id] = (
+            self._final_calls_by_incident.get(incident.incident_id, 0) + 1
+        )
         validate_incident_v1(result)
         job.structured_result = result
         job.search_document = build_search_document(incident, result)
         job.status = "SUCCESS"
         self._open_incidents.pop(incident.incident_id, None)
         return job
+
+
+def os_env_block_passthrough_external() -> bool:
+    import os
+
+    return os.getenv("VLM_EXTERNAL_PROVIDER", "").lower() in {"1", "true", "yes", "on"}

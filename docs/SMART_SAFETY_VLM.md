@@ -42,11 +42,23 @@ scripts/process_embed.py
 - Mock: 결정적 SHA-256 해시 벡터 768-d  
 - Real 골격: `ai/embedding_sdk.py` → Gemini text-embedding REST 직접 호출  
 
+## Hardening notes
+
+- **Removed** `upload_placeholder_keyframes` (clip first-byte fake JPEG).
+- **Added** real OpenCV keyframe extract (`ai/vlm/keyframe_extract.py`, max 6 frames).
+- Provider contract: **frames + metadata only** (`VlmAnalyzeRequest.keyframe_jpegs`). Gemini = `INTEGRATION_PENDING`.
+- `FINAL_ONLY` = per-incident max one final analysis.
+- PassThroughDeid → `deidentified=false`, `safeForExternalProvider=false`.
+
 ## 환경 변수
 
 | 변수 | 기본 | 의미 |
 |------|------|------|
 | `VLM_MOCK_MODE` | `true` | VLM mock 결과 |
+| `VLM_MAX_FRAMES` | `6` | keyframe cap |
+| `VLM_FIXTURE_MP4` | fixtures/vlm/sample.mp4 | offline mock clip |
+| `VLM_ALLOW_PASSTHROUGH_EXTERNAL` | unset | allow external provider with passthrough (dev only) |
+| `VLM_EXTERNAL_PROVIDER` | unset | incident pipeline blocks passthrough when true |
 | `EMBEDDING_PROVIDER` | `mock` | `mock` \| `gemini` |
 | `GEMINI_API_KEY` | 빈 값 | real embedding/VLM |
 | `VLM_PROVIDER` | `mock` | `mock` \| `gemini` |
