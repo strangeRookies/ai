@@ -35,7 +35,7 @@ class EventClipTest(unittest.TestCase):
         self.assertTrue(clip_buffer.trigger_event("Fall", "cam_01", now=100.0))
         source_frames[-1][:] = 255
 
-        pre_frames = clip_buffer._active_event["pre_frames"]
+        pre_frames = clip_buffer._active_events["cam_01"][0]["pre_frames"]
         self.assertEqual(len(pre_frames), 3)
         self.assertEqual(int(pre_frames[-1][0, 0, 0]), 2)
 
@@ -45,9 +45,10 @@ class EventClipTest(unittest.TestCase):
             clip_buffer.add_frame(dummy_frame(index))
         clip_buffer.trigger_event("Fall", "cam_01", now=100.0)
 
-        self.assertIsNone(clip_buffer.add_frame(dummy_frame(3)))
-        task = clip_buffer.add_frame(dummy_frame(4))
-        self.assertIsNotNone(task)
+        self.assertEqual(clip_buffer.add_frame(dummy_frame(3)), [])
+        tasks = clip_buffer.add_frame(dummy_frame(4))
+        self.assertEqual(len(tasks), 1)
+        task = tasks[0]
         self.assertEqual(len(task.frames), 5)
 
         task_queue = queue.Queue(maxsize=1)
@@ -66,10 +67,64 @@ class EventClipTest(unittest.TestCase):
                 now=100.0,
             )
         )
-        task = clip_buffer.add_frame(dummy_frame(2))
+        tasks = clip_buffer.add_frame(dummy_frame(2))
+        task = tasks[0]
 
         self.assertEqual(task.metadata["evidenceId"], "cam_01-7-2000")
         self.assertEqual(task.metadata["traceId"], "cam_01-7-2000")
+
+    def test_overlapping_events_on_same_camera_both_tracked_independently(self):
+        clip_buffer = EventClipBuffer(pre_event_frame_count=2, post_event_frame_count=2, cooldown_seconds=10, max_concurrent_events=4)
+        for index in range(2):
+            clip_buffer.add_frame(dummy_frame(index))
+
+        self.assertTrue(clip_buffer.trigger_event("Fall", "cam_01", metadata={"evidenceId": "evt-A"}, now=100.0))
+        self.assertTrue(clip_buffer.trigger_event("Faint", "cam_01", metadata={"evidenceId": "evt-B"}, now=100.1))
+
+        tasks = []
+        for index in range(2):
+            tasks.extend(clip_buffer.add_frame(dummy_frame(10 + index)))
+
+        self.assertEqual(len(tasks), 2)
+        ids = sorted(task.metadata["evidenceId"] for task in tasks)
+        self.assertEqual(ids, ["evt-A", "evt-B"])
+
+    def test_fifth_trigger_rejected_when_four_already_active(self):
+        clip_buffer = EventClipBuffer(pre_event_frame_count=2, post_event_frame_count=2, cooldown_seconds=10, max_concurrent_events=4)
+        for index in range(2):
+            clip_buffer.add_frame(dummy_frame(index))
+
+        event_types = ["Fall", "Faint", "Collapse", "Hazard"]
+        for offset, event_type in enumerate(event_types):
+            self.assertTrue(clip_buffer.trigger_event(event_type, "cam_01", metadata={"evidenceId": event_type}, now=100.0 + offset * 0.1))
+
+        self.assertFalse(clip_buffer.trigger_event("Exit", "cam_01", metadata={"evidenceId": "5th"}, now=100.5))
+        self.assertEqual(len(clip_buffer._active_events["cam_01"]), 4)
+
+    def test_slot_frees_up_after_completion_for_new_trigger(self):
+        clip_buffer = EventClipBuffer(pre_event_frame_count=1, post_event_frame_count=1, cooldown_seconds=10, max_concurrent_events=1)
+        clip_buffer.add_frame(dummy_frame(0))
+        self.assertTrue(clip_buffer.trigger_event("Fall", "cam_01", metadata={"evidenceId": "first"}, now=100.0))
+        self.assertFalse(clip_buffer.trigger_event("Faint", "cam_01", metadata={"evidenceId": "blocked"}, now=100.1))
+
+        tasks = clip_buffer.add_frame(dummy_frame(1))
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(clip_buffer._active_events, {})
+
+        self.assertTrue(clip_buffer.trigger_event("Faint", "cam_01", metadata={"evidenceId": "after-free"}, now=110.0))
+
+    def test_different_cameras_are_independent(self):
+        clip_buffer = EventClipBuffer(pre_event_frame_count=1, post_event_frame_count=1, cooldown_seconds=10, max_concurrent_events=4)
+        clip_buffer.add_frame(dummy_frame(0))
+
+        event_types = ["t1", "t2", "t3", "t4"]
+        for offset, event_type in enumerate(event_types):
+            self.assertTrue(clip_buffer.trigger_event(event_type, "cam_01", metadata={"evidenceId": event_type}, now=100.0 + offset * 0.1))
+
+        # cam_01 is now full, but a different camera must be unaffected
+        self.assertTrue(clip_buffer.trigger_event("Fall", "cam_02", metadata={"evidenceId": "cam2-1"}, now=100.2))
+        # and cam_01 itself should still correctly reject its own 5th trigger
+        self.assertFalse(clip_buffer.trigger_event("t5", "cam_01", metadata={"evidenceId": "cam1-5th"}, now=100.3))
 
     def test_worker_creates_mp4_file(self):
         with tempfile.TemporaryDirectory() as temp_dir:
