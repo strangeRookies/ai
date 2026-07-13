@@ -57,6 +57,7 @@ from ai.inference.tracking_debug import (
 from ai.evaluation.prediction_log import append_prediction_jsonl, build_prediction_log_row
 import threading
 from ai.frame_sync import FrameMetadataBuffer, FramePacket, CameraFrameQueue
+from ai.publishers.async_delivery import AsyncMqttDelivery
 from ai.publishers.event_publisher import create_event_publisher, mqtt_topic_settings_from_args
 from ai.runtime_metrics import RuntimeMetrics
 from ai.streams.video_reader import VideoReader
@@ -168,6 +169,9 @@ def run(args):
         "generated_sequences": 0,
         "lstm_predictions": 0,
         "events_generated": 0,
+        "events_publish_attempted": 0,
+        "events_publish_succeeded": 0,
+        "events_publish_failed": 0,
         "sample_event": None,
         "alert_delivery_result": publisher_mode,
     }
@@ -193,7 +197,8 @@ def run(args):
         log_classifier_contract("[lstm-checkpoint]", camera_login_id, classifier)
         return summary
 
-    publisher, publisher_mode = create_event_publisher(args)
+    publisher, publisher_mode = create_event_publisher(args, role="inference")
+    publisher = AsyncMqttDelivery(publisher)
     summary["alert_delivery_result"] = publisher_mode
     print(
         "[rtsp-inference] sequence config: "
@@ -551,8 +556,18 @@ def run(args):
                     event_log = build_inference_event_log(args, frame_packet, track_prediction, boxes, sequence)
                     if getattr(args, "event_log_dir", None):
                         save_inference_event_log(args.event_log_dir, event_log)
-                    publisher.publish(payload, topic=topic_settings["event_topic"])
                     summary["events_generated"] += 1
+                    if publisher is not None:
+                        summary["events_publish_attempted"] += 1
+                        try:
+                            published = publisher.publish(payload, topic=topic_settings["event_topic"], qos=1)
+                            if published is True:
+                                summary["events_publish_succeeded"] += 1
+                            else:
+                                summary["events_publish_failed"] += 1
+                        except (OSError, RuntimeError, ValueError) as exc:
+                            summary["events_publish_failed"] += 1
+                            print(f"[rtsp-inference][error] failed to publish event: {exc}", file=sys.stderr, flush=True)
                     if emit_decision.is_unrecovered:
                         summary["unrecovered_events_generated"] = int(summary.get("unrecovered_events_generated", 0)) + 1
                     track_key = str(track_id)

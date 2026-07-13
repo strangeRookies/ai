@@ -3,6 +3,8 @@ import os
 import sys
 import time
 
+from ai.publishers.mqtt_identity import build_mqtt_client_id
+
 
 def _env_int(name, default):
     value = os.getenv(name, str(default))
@@ -13,12 +15,12 @@ def _env_int(name, default):
 
 
 class EventPublisher:
-    def publish(self, payload, topic=None):
+    def publish(self, payload, topic=None, qos=0):
         raise NotImplementedError
 
 
 class ConsoleEventPublisher(EventPublisher):
-    def publish(self, payload, topic=None):
+    def publish(self, payload, topic=None, qos=0):
         topic_text = topic or "console"
         print(f"[event][topic={topic_text}] {json.dumps(payload, ensure_ascii=False)}", flush=True)
 
@@ -43,8 +45,16 @@ class MqttEventPublisher(EventPublisher):
             client_id=client_id,
             protocol=mqtt.MQTTv311,
         )
+        self.client.on_connect = self._on_connect
+        self.client.on_disconnect = self._on_disconnect
         if username:
             self.client.username_pw_set(username=username, password=password or None)
+
+    def _on_connect(self, _client, _userdata, _flags, reason_code, _properties=None):
+        self.connected = int(reason_code) == 0
+
+    def _on_disconnect(self, _client, _userdata, _disconnect_flags=None, _reason_code=None, _properties=None):
+        self.connected = False
 
     def connect(self):
         if self.client is None:
@@ -52,8 +62,7 @@ class MqttEventPublisher(EventPublisher):
         try:
             self.client.connect(self.host, self.port, keepalive=60)
             self.client.loop_start()
-            self.connected = True
-            print(f"[mqtt] connected: mqtt://{self.host}:{self.port}, topic={self.topic}, client_id={self.client_id}")
+            print(f"[mqtt] connection requested: mqtt://{self.host}:{self.port}, topic={self.topic}, client_id={self.client_id}")
             return True
         except (OSError, RuntimeError, ValueError) as exc:
             self.connected = False
@@ -63,16 +72,15 @@ class MqttEventPublisher(EventPublisher):
             )
             return False
 
-    def publish(self, payload, topic=None):
+    def publish(self, payload, topic=None, qos=0):
         target_topic = topic or self.topic
         if not self.connected or self.client is None:
-            if self.client is None or not self.connect():
-                print(
-                    f"[mqtt] publish skipped because MQTT client is not connected: "
-                    f"{_payload_context(payload, target_topic, connected=False, rc='n/a')}",
-                    file=sys.stderr,
-                )
-                return False
+            print(
+                f"[mqtt] publish skipped because MQTT client is not connected: "
+                f"{_payload_context(payload, target_topic, connected=False, rc='n/a')}",
+                file=sys.stderr,
+            )
+            return False
         try:
             publish_started_at_ms = _current_timestamp_ms()
             _stamp_event_publish_attempt(payload, publish_started_at_ms)
@@ -80,7 +88,7 @@ class MqttEventPublisher(EventPublisher):
                 f"[mqtt] publishing: {_payload_context(payload, target_topic, connected=self.connected, rc='pending')}",
                 flush=True,
             )
-            result = self.client.publish(target_topic, json.dumps(payload, ensure_ascii=False), qos=0)
+            result = self.client.publish(target_topic, json.dumps(payload, ensure_ascii=False), qos=int(qos))
             publish_returned_at_ms = _current_timestamp_ms()
             if result.rc != self.mqtt.MQTT_ERR_SUCCESS:
                 self.connected = False
@@ -125,7 +133,7 @@ def mqtt_settings_from_env():
     }
 
 
-def create_event_publisher(args):
+def create_event_publisher(args, *, role="inference"):
     publisher_mode = getattr(args, "publisher", None) or ("console" if getattr(args, "dry_run", False) else "mqtt")
     if publisher_mode == "console":
         return ConsoleEventPublisher(), "console"
@@ -136,7 +144,11 @@ def create_event_publisher(args):
         topic=getattr(args, "mqtt_event_topic", None)
         or getattr(args, "mqtt_topic", None)
         or settings["event_topic"],
-        client_id=getattr(args, "mqtt_client_id", None) or settings["client_id"],
+        client_id=build_mqtt_client_id(
+            getattr(args, "mqtt_client_id", None) or settings["client_id"],
+            getattr(args, "camera_login_id", None) or getattr(args, "camera_id", "unknown-camera"),
+            role,
+        ),
         username=getattr(args, "mqtt_username", None) or settings["username"],
         password=getattr(args, "mqtt_password", None) or settings["password"],
     )
