@@ -26,7 +26,7 @@ _SENT_EVENTS_LOCK = threading.Lock()
 
 
 def snapshot_assist_enabled() -> bool:
-    return os.getenv("VLM_SNAPSHOT_ASSIST_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
+    return os.getenv("VLM_SNAPSHOT_ASSIST_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
 
 
 def snapshot_assist_url() -> str:
