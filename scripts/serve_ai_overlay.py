@@ -144,6 +144,15 @@ def _track_id(value):
     return int(float(str(value)))
 
 
+def _record_publish_outcome(summary, prefix, result=None, *, attempted=False):
+    if attempted:
+        summary[f"{prefix}_attempted"] = int(summary.get(f"{prefix}_attempted", 0)) + 1
+    if result is True:
+        summary[f"{prefix}_succeeded"] = int(summary.get(f"{prefix}_succeeded", 0)) + 1
+    elif attempted:
+        summary[f"{prefix}_failed"] = int(summary.get(f"{prefix}_failed", 0)) + 1
+
+
 def mjpeg_server_enabled(args: argparse.Namespace) -> bool:
     """MJPEG 서버를 켜야 하는지 판단. mjpeg_enabled 또는 mjpeg_debug 중 하나라도 켜지면 서버를 시작한다."""
     return bool(getattr(args, "mjpeg_enabled", False) or getattr(args, "mjpeg_debug", False))
@@ -960,8 +969,10 @@ def _process_frame_impl(
             )
     if publisher is not None:
         try:
-            publisher.publish(overlay_payload, topic=topic_settings["camera_topic"])
+            overlay_publish_result = publisher.publish(overlay_payload, topic=topic_settings["camera_topic"])
+            _record_publish_outcome(summary, "overlay_publish", overlay_publish_result, attempted=True)
         except Exception as exc:
+            _record_publish_outcome(summary, "overlay_publish", attempted=True)
             print(f"[ai-worker][error] failed to publish overlay payload for camera={stream_id}: {exc}", file=sys.stderr, flush=True)
     for track_id in triggered_track_ids:
         track_prediction = predictions_by_track[track_id]
@@ -988,7 +999,8 @@ def _process_frame_impl(
             print(f"[ai-overlay-event] {json.dumps(payload, ensure_ascii=False)}", flush=True)
         if publisher is not None:
             try:
-                publisher.publish(payload, topic=topic_settings["event_topic"])
+                event_publish_result = publisher.publish(payload, topic=topic_settings["event_topic"], qos=1)
+                _record_publish_outcome(summary, "events_publish", event_publish_result, attempted=True)
                 # Single VLM snapshot assist hook (never blocks alert loop)
                 try:
                     from ai.snapshot_assist_upload import encode_frame_jpeg, submit_snapshot_async
@@ -1002,6 +1014,7 @@ def _process_frame_impl(
                 except Exception as snap_exc:
                     print(f"[snapshot-assist][warn] non-fatal upload schedule failed: {snap_exc}", flush=True)
             except Exception as exc:
+                _record_publish_outcome(summary, "events_publish", attempted=True)
                 print(f"[ai-worker][error] failed to publish event payload for camera={stream_id}: {exc}", file=sys.stderr, flush=True)
         # 낙상 감지 시 10초 스냅샷 버퍼 트리거 작동
         if state is not None and getattr(state, "clip_buffer", None) is not None:
@@ -1147,7 +1160,7 @@ class OverlayWorker:
         status_publisher = None
         reconnect_count = 0
         try:
-            publisher, publisher_mode = create_event_publisher(self.args)
+            publisher, publisher_mode = create_event_publisher(self.args, role="status")
             status_publisher = CameraStatusPublisher(
                 mqtt_publisher=publisher,
                 camera_login_id=self.camera_login_id,
@@ -1234,7 +1247,7 @@ class OverlayWorker:
         action_threshold = resolved_faint_threshold(self.args)
         detector = create_detector(self.args.detector_mode, self.args.yolo_model, self.args.device, self.args.imgsz, conf=self.args.detector_conf)
         classifier, _classifier_mode = create_classifier(self.args.action_model, self.args.action_device, action_threshold)
-        publisher, publisher_mode = create_event_publisher(self.args)
+        publisher, publisher_mode = create_event_publisher(self.args, role="inference")
         print(f"[ai-overlay-inference] initialized event publisher: {publisher_mode}", flush=True)
         log_worker_backend_startup(
             camera_login_id=self.camera_login_id,
