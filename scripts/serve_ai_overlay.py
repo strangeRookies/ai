@@ -1008,7 +1008,9 @@ def _process_frame_impl(
             target_bbox = []
             for b in boxes:
                 if b.get("track_id") is not None and int(b["track_id"]) == track_id:
-                    target_bbox = b.get("bbox", b.get("box", []))
+                    x1, y1, x2, y2 = b.get("x1"), b.get("y1"), b.get("x2"), b.get("y2")
+                    if None not in (x1, y1, x2, y2):
+                        target_bbox = [x1, y1, x2, y2]
                     break
             
             task_metadata = {
@@ -1018,12 +1020,15 @@ def _process_frame_impl(
                 "bbox": target_bbox
             }
             
-            state.clip_buffer.trigger_event(
+            clip_triggered = state.clip_buffer.trigger_event(
                 event_type=payload.get("type", "fall_detected"),
                 camera_id=stream_id,
                 metadata=task_metadata,
             )
-            print(f"[ai-overlay-event] triggered snapshot recording for camera={stream_id} eventId={payload.get('eventId')}", flush=True)
+            if clip_triggered:
+                print(f"[ai-overlay-event] triggered snapshot recording for camera={stream_id} eventId={payload.get('eventId')}", flush=True)
+            else:
+                print(f"[ai-overlay-event] skipped snapshot recording (already recording or in cooldown) for camera={stream_id} eventId={payload.get('eventId')}", flush=True)
     maybe_log_debug(frame_packet, boxes, summary, prediction, args, prefix="[ai-overlay-debug]")
 
     update_overlay_runtime(summary)
