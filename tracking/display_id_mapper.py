@@ -86,6 +86,23 @@ class DisplayIdMapper:
         self._free_ids.clear()
         self._next_display_id = 1
 
+    def transfer_raw_id(self, old_raw_id: int, new_raw_id: int) -> bool:
+        """Move display mapping from one raw track id to another (recovery migrate)."""
+        old_id, new_id = int(old_raw_id), int(new_raw_id)
+        if old_id == new_id:
+            return False
+        if old_id not in self._raw_to_display:
+            return False
+        display_id = self._raw_to_display.pop(old_id)
+        if new_id in self._raw_to_display:
+            freed = self._raw_to_display.pop(new_id)
+            self._display_to_raw.pop(freed, None)
+            self._free_ids.append(freed)
+            self._free_ids.sort()
+        self._raw_to_display[new_id] = display_id
+        self._display_to_raw[display_id] = new_id
+        return True
+
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------

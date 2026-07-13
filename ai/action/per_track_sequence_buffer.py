@@ -149,6 +149,41 @@ class PerTrackKeypointSequenceBuffers:
     def sequence_diagnostics(self):
         return dict(self.last_sequence_diagnostics)
 
+    def migrate_track_id(self, old_track_id, new_track_id) -> bool:
+        """Move buffer/state from old_track_id to new_track_id (incident recovery)."""
+        old_id, new_id = int(old_track_id), int(new_track_id)
+        if old_id == new_id:
+            return False
+        if old_id not in self._buffers and old_id not in self._last_seen_at:
+            return False
+        if new_id in self._buffers:
+            # Destination already has data: drop source to avoid dual ownership.
+            self._buffers.pop(old_id, None)
+            self._last_seen_at.pop(old_id, None)
+            self._last_detection_by_track.pop(old_id, None)
+            self.last_sequence_diagnostics.pop(old_id, None)
+            self.sequences_generated_by_track.pop(old_id, None)
+            return True
+        if old_id in self._buffers:
+            self._buffers[new_id] = self._buffers.pop(old_id)
+        if old_id in self._last_seen_at:
+            self._last_seen_at[new_id] = self._last_seen_at.pop(old_id)
+        if old_id in self._last_detection_by_track:
+            det = dict(self._last_detection_by_track.pop(old_id))
+            det["track_id"] = new_id
+            self._last_detection_by_track[new_id] = det
+        if old_id in self.last_sequence_diagnostics:
+            diag = dict(self.last_sequence_diagnostics.pop(old_id))
+            diag["track_id"] = new_id
+            diag["migrated_from"] = old_id
+            self.last_sequence_diagnostics[new_id] = diag
+        if old_id in self.sequences_generated_by_track:
+            self.sequences_generated_by_track[new_id] = (
+                self.sequences_generated_by_track.get(new_id, 0)
+                + self.sequences_generated_by_track.pop(old_id)
+            )
+        return True
+
     def _diagnostic(self, track_id, reason, buffer_length, detection):
         return {
             "track_id": track_id,
@@ -279,6 +314,33 @@ class PerTrackCropSequenceBuffers:
 
     def sequence_diagnostics(self):
         return dict(self.last_sequence_diagnostics)
+
+    def migrate_track_id(self, old_track_id, new_track_id) -> bool:
+        old_id, new_id = int(old_track_id), int(new_track_id)
+        if old_id == new_id:
+            return False
+        if old_id not in self._buffers and old_id not in self._last_seen_at:
+            return False
+        if new_id in self._buffers:
+            self._buffers.pop(old_id, None)
+            self._last_seen_at.pop(old_id, None)
+            self.last_sequence_diagnostics.pop(old_id, None)
+            self.sequences_generated_by_track.pop(old_id, None)
+            return True
+        if old_id in self._buffers:
+            self._buffers[new_id] = self._buffers.pop(old_id)
+        if old_id in self._last_seen_at:
+            self._last_seen_at[new_id] = self._last_seen_at.pop(old_id)
+        if old_id in self.last_sequence_diagnostics:
+            diag = dict(self.last_sequence_diagnostics.pop(old_id))
+            diag["track_id"] = new_id
+            self.last_sequence_diagnostics[new_id] = diag
+        if old_id in self.sequences_generated_by_track:
+            self.sequences_generated_by_track[new_id] = (
+                self.sequences_generated_by_track.get(new_id, 0)
+                + self.sequences_generated_by_track.pop(old_id)
+            )
+        return True
 
     def _diagnostic(self, track_id, reason, buffer_length):
         return {

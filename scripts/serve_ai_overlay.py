@@ -68,6 +68,12 @@ from tracking.display_id_mapper import DisplayIdMapper
 from ai.publishers.event_publisher import create_event_publisher, mqtt_topic_settings_from_args
 from ai.publishers.camera_status_publisher import CameraStatusPublisher
 from ai.publishers.mqtt_payloads import build_overlay_payload, current_timestamp_ms, frame_size_from_shape, build_frame_sync_payload
+from ai.postprocess.incident_recovery import (
+    IncidentRecoveryManager,
+    make_detect_roi_fn_from_yolo_pose,
+)
+from ai.postprocess.track_state_migration import finalize_recovery_detections
+from ai.action.fall_event_state import FallState
 
 
 def initial_summary():
@@ -88,6 +94,17 @@ class OverlayPublishState:
     def __init__(self):
         self.signals_by_track = {}
         self.last_timestamp_ms = 0
+
+    def migrate_track(self, old_track_id, new_track_id) -> bool:
+        """Move cached overlay signals across recovery track-id migration."""
+        old_id, new_id = int(old_track_id), int(new_track_id)
+        if old_id == new_id or old_id not in self.signals_by_track:
+            return False
+        if new_id not in self.signals_by_track:
+            self.signals_by_track[new_id] = self.signals_by_track.pop(old_id)
+        else:
+            self.signals_by_track.pop(old_id, None)
+        return True
 
     def apply_latest_signals(self, boxes):
         active_track_ids = {_track_id(box.get("track_id")) for box in boxes if box.get("track_id") is not None}
@@ -331,6 +348,81 @@ def env_optional_str(*names: str) -> str | None:
     return None
 
 
+def _maybe_register_incident_recovery(
+    *,
+    incident_recovery,
+    camera_login_id,
+    track_id,
+    emit_decision,
+    post_processor,
+    track_detection,
+    timestamp,
+    frame_id,
+):
+    """Register ROI recovery context when Fall/Faint suspected lifecycle is entered.
+
+    Trigger on internal FALL_CANDIDATE / FALL_CONFIRMED / POST_FALL_LYING (and emit
+    new_fall/unrecovered as backup). Does not require MQTT publish success.
+    """
+    if incident_recovery is None or track_id is None:
+        return
+    bb = None
+    if track_detection is not None:
+        bb = track_detection.get("bbox") or track_detection.get("smoothed_bbox")
+        if bb is None and all(k in (track_detection or {}) for k in ("x1", "y1", "x2", "y2")):
+            bb = [
+                track_detection["x1"],
+                track_detection["y1"],
+                track_detection["x2"],
+                track_detection["y2"],
+            ]
+    if not bb or len(bb) < 4:
+        return
+
+    lifecycle_state = None
+    incident_id = None
+    if emit_decision is not None:
+        if getattr(emit_decision, "lifecycle", None) is not None:
+            st = emit_decision.lifecycle.state
+            lifecycle_state = st.value if hasattr(st, "value") else str(st)
+        incident_id = getattr(emit_decision, "event_id", None) or getattr(emit_decision, "original_event_id", None)
+        if getattr(emit_decision, "state", None):
+            lifecycle_state = lifecycle_state or emit_decision.state
+
+    if lifecycle_state is None and post_processor is not None:
+        sm = getattr(post_processor, "_state_machine", None)
+        if sm is not None and hasattr(sm, "get_state"):
+            try:
+                st = sm.get_state(camera_login_id, track_id)
+                lifecycle_state = st.value if hasattr(st, "value") else str(st)
+            except Exception:
+                lifecycle_state = None
+
+    suspected_states = {
+        FallState.FALL_CANDIDATE.value,
+        FallState.FALL_CONFIRMED.value,
+        FallState.POST_FALL_LYING.value,
+        "FALL_SUSPECTED",
+        "FAINT_SUSPECTED",
+    }
+    should_register = False
+    if lifecycle_state in suspected_states:
+        should_register = True
+    if emit_decision is not None and (emit_decision.is_new_fall or emit_decision.is_unrecovered):
+        should_register = True
+    if not should_register:
+        return
+
+    incident_recovery.note_fall_faint_suspected(
+        camera_login_id=camera_login_id,
+        track_id=int(track_id),
+        bbox=bb,
+        timestamp=float(timestamp),
+        frame_id=int(frame_id),
+        incident_id=incident_id,
+    )
+
+
 def process_frame(
     frame_packet,
     detector,
@@ -354,6 +446,8 @@ def process_frame(
     track_selector=None,
     sync_sink=None,
     pose_reporter=None,
+    incident_recovery=None,
+    recovery_detect_fn=None,
 ):
     """프레임 처리 중 예외가 나면 stage 정보를 붙여 worker log에 남긴다.
 
@@ -386,6 +480,8 @@ def process_frame(
             track_selector=track_selector,
             sync_sink=sync_sink,
             pose_reporter=pose_reporter,
+            incident_recovery=incident_recovery,
+            recovery_detect_fn=recovery_detect_fn,
         )
     except Exception as exc:
         stage = getattr(exc, "stage", "yolo_inference")
@@ -418,6 +514,8 @@ def _process_frame_impl(
     track_selector=None,
     sync_sink=None,
     pose_reporter=None,
+    incident_recovery=None,
+    recovery_detect_fn=None,
 ):
     """RTSP frame 하나를 YOLO Pose -> tracking -> LSTM -> MQTT payload로 처리한다.
 
@@ -425,6 +523,7 @@ def _process_frame_impl(
     1. frame metadata를 기록해 frameId/timestampMs를 payload와 diagnostics에 맞춘다.
     2. ROI mask 적용 후 YOLO Pose raw detections를 얻고, mock 모드면 keypoint를 보강한다.
     3. ByteTrack/Simple tracker가 detection에 track_id를 붙인다.
+    3b. Fall/Faint ROI recovery (전역 conf 변경 없이 crop-only) + track state 이관.
     4. per-track sequence buffer가 충분히 찬 track만 LSTM classifier로 보낸다.
     5. bbox/keypoint/tracking/LSTM 결과를 overlay payload와 진단 로그로 발행한다.
     """
@@ -456,6 +555,37 @@ def _process_frame_impl(
     _pre_track_detections = detections
     if tracker is not None:
         detections = update_detections_with_postprocessor(tracker, detections, frame_packet.frame, frame_packet.timestamp)
+
+    # Stage 2b: Fall/Faint ROI recovery after tracking (no global conf/imgsz change).
+    if incident_recovery is not None:
+        frame_shape = getattr(frame_packet.frame, "shape", None)
+        if frame_shape is not None and len(frame_shape) >= 2:
+            detections = incident_recovery.on_tracked_frame(
+                camera_login_id=stream_id,
+                tracked=detections,
+                timestamp=float(frame_packet.timestamp),
+                frame_id=int(_log_frame_id),
+                frame_shape=(int(frame_shape[0]), int(frame_shape[1])),
+                frame_bgr=frame_packet.frame,
+                detect_roi_fn=recovery_detect_fn,
+            )
+            detections, recovery_migrations = finalize_recovery_detections(
+                detections,
+                camera_login_id=stream_id,
+                incident_recovery=incident_recovery,
+                tracker=tracker,
+                now=float(frame_packet.timestamp),
+                sequence_buffer=sequence_buffer,
+                post_processor=post_processor,
+                display_id_mapper=display_id_mapper,
+                overlay_publish_state=overlay_publish_state,
+            )
+            if recovery_migrations:
+                summary["incident_recovery_migrations"] = int(summary.get("incident_recovery_migrations", 0)) + len(
+                    recovery_migrations
+                )
+                summary["last_incident_recovery_migration"] = recovery_migrations[-1]
+            summary["incident_recovery"] = incident_recovery.diagnostics(stream_id)
 
     # Stage 2: tracking association 로그. raw detection은 있는데 active track이 0이면
     # detector가 아니라 tracker threshold/association 문제로 분류할 수 있다.
@@ -741,6 +871,19 @@ def _process_frame_impl(
             emit_decisions_by_track[track_id] = emit_decision
             event_triggered = bool(emit_decision.emit)
             consecutive_by_track[track_id] = post_processor.consecutive_count(args.camera_id, track_id=track_id)
+            # Register recovery context on internal FALL/FAINT suspected entry
+            # (not only MQTT NEW_FALL / UNRECOVERED emit).
+            if incident_recovery is not None:
+                _maybe_register_incident_recovery(
+                    incident_recovery=incident_recovery,
+                    camera_login_id=stream_id,
+                    track_id=track_id,
+                    emit_decision=emit_decision,
+                    post_processor=post_processor,
+                    track_detection=track_detection,
+                    timestamp=float(frame_packet.timestamp),
+                    frame_id=int(_log_frame_id),
+                )
         elif track_prediction and track_prediction.get("label") != "Normal":
             event_triggered = True
             consecutive_by_track[track_id] = 1
@@ -1131,6 +1274,13 @@ class OverlayWorker:
         print(f"[ai-overlay-inference] tracking postprocessor: {postprocessing_mode}", flush=True)
         display_id_mapper = DisplayIdMapper()
         overlay_publish_state = OverlayPublishState()
+        incident_recovery = IncidentRecoveryManager()
+        recovery_detect_fn = None
+        if getattr(self.args, "detector_mode", "real") != "mock" and hasattr(detector, "model"):
+            try:
+                recovery_detect_fn = make_detect_roi_fn_from_yolo_pose(detector)
+            except Exception:
+                recovery_detect_fn = None
         from ai.inference.track_selection import TrackSelector
         track_selector = TrackSelector(
             selected_track_id=getattr(self.args, "selected_track_id", None),
@@ -1253,6 +1403,8 @@ class OverlayWorker:
                 )
                 display_id_mapper = DisplayIdMapper()
                 overlay_publish_state = OverlayPublishState()
+                # EOF / reconnect / video boundary: clear recovery + migration context.
+                incident_recovery.reset_camera(self.camera_login_id)
                 summary["video_state_resets"] = summary.get("video_state_resets", 0) + 1
                 summary["last_video_reset_reason"] = reset_reason
                 print(
@@ -1337,6 +1489,8 @@ class OverlayWorker:
                 track_selector=track_selector,
                 sync_sink=self.sync_sink,
                 pose_reporter=pose_reporter,
+                incident_recovery=incident_recovery,
+                recovery_detect_fn=recovery_detect_fn,
             )
             # Analysis path counts: process_frame always runs detector+tracker for this frame.
             self.fps_audit.note_analysis()
@@ -1458,6 +1612,12 @@ class OverlayWorker:
             if self.args.max_frames > 0 and summary["frames_processed"] >= self.args.max_frames:
                 break
 
+        # EOF / worker stop: clear recovery + migration context.
+        try:
+            incident_recovery.reset_camera(self.camera_login_id)
+        except Exception:
+            incident_recovery.reset_all()
+        summary["incident_recovery"] = incident_recovery.diagnostics(self.camera_login_id)
         pose_reporter.log_final_summary()
         close = getattr(publisher, "close", None) if publisher is not None else None
         if close:
