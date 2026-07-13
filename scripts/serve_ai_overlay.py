@@ -1276,7 +1276,7 @@ class OverlayWorker:
         overlay_publish_state = OverlayPublishState()
         incident_recovery = IncidentRecoveryManager()
         recovery_detect_fn = None
-        if getattr(self.args, "detector_mode", "real") != "mock" and hasattr(detector, "model"):
+        if getattr(self.args, "detector_mode", "real") != "mock" and callable(getattr(detector, "detect", None)):
             try:
                 recovery_detect_fn = make_detect_roi_fn_from_yolo_pose(detector)
             except Exception:

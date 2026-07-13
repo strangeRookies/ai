@@ -105,7 +105,7 @@ def run(args):
     post_processor = build_faint_post_processor_from_args(args)
     incident_recovery = IncidentRecoveryManager()
     recovery_detect_fn = None
-    if getattr(args, "detector_mode", "real") != "mock" and hasattr(detector, "model"):
+    if getattr(args, "detector_mode", "real") != "mock" and callable(getattr(detector, "detect", None)):
         try:
             recovery_detect_fn = make_detect_roi_fn_from_yolo_pose(detector)
         except Exception:

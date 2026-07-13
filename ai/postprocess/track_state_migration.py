@@ -15,9 +15,8 @@ def _move_dict_key(mapping: dict, old_key: Any, new_key: Any) -> bool:
     if old_key not in mapping:
         return False
     if new_key in mapping:
-        # Prefer keeping destination if already populated; drop source.
-        mapping.pop(old_key, None)
-        return True
+        # Preserve both sides until a compatible merge policy is available.
+        return False
     mapping[new_key] = mapping.pop(old_key)
     return True
 
@@ -181,6 +180,8 @@ def finalize_recovery_detections(
             now=now,
             recovered_from_track_id=from_id_int,
         )
+        if assigned.get("recovery_rejected") or assigned.get("track_id") is None:
+            continue
         new_id = int(assigned["track_id"])
         item.update(assigned)
 

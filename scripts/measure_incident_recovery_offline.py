@@ -110,7 +110,8 @@ def main() -> int:
         "incident_continuity": continuity_ok,
         "incident_id": incident_id,
         "diagnostics": diag,
-        "wrong_relink": diag.get("wrong_relink", 0),
+        "wrong_relink": diag.get("wrong_relink"),
+        "wrong_relink_evaluation_status": diag.get("wrong_relink_evaluation_status", "not_evaluated"),
         "note": "synthetic offline measure; not a real CCTV clip",
     }
     print(json.dumps(report, indent=2))
@@ -118,7 +119,7 @@ def main() -> int:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
     # soft success criterion for synthetic
-    ok = continuity_ok and diag.get("recovery_successes", 0) >= 1 and diag.get("wrong_relink", 0) == 0
+    ok = continuity_ok and diag.get("recovery_successes", 0) >= 1 and diag.get("wrong_relink_evaluation_status") == "not_evaluated"
     return 0 if ok else 1
 
 

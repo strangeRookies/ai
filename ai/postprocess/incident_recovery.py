@@ -64,7 +64,7 @@ class RecoveryStats:
     recovery_successes: int = 0
     recovery_rejects: int = 0
     timeouts: int = 0
-    wrong_relink: int = 0  # reserved; multi-candidate refuse is not counted as wrong
+    wrong_relink: int | None = None
     total_recovery_latency_ms: float = 0.0
     recovery_latency_samples: int = 0
 
@@ -85,6 +85,7 @@ class RecoveryStats:
             "recovery_rejects": self.recovery_rejects,
             "timeouts": self.timeouts,
             "wrong_relink": self.wrong_relink,
+            "wrong_relink_evaluation_status": "not_evaluated",
             "mean_recovery_latency_ms": self.mean_recovery_latency_ms,
         }
 
@@ -197,14 +198,11 @@ class IncidentRecoveryManager:
         self._incidents: dict[str, dict[str, IncidentRecord]] = {}
         # camera_login_id -> track_id -> incident_id
         self._track_incident: dict[str, dict[int, str]] = {}
-        # Fallback mint when tracker cannot allocate (e.g. ByteTrack path).
-        self._next_synthetic_track_id: int = 900_000
         self.stats = RecoveryStats()
 
     def reset_all(self) -> None:
         self._incidents.clear()
         self._track_incident.clear()
-        self._next_synthetic_track_id = 900_000
 
     def reset_camera(self, camera_login_id: str) -> None:
         cam = str(camera_login_id)
@@ -249,6 +247,15 @@ class IncidentRecoveryManager:
         rec.last_reject_reason = None
         return rec
 
+    def _reject_recovery_candidate(self, camera_login_id, record, item, reason):
+        self.stats.recovery_rejects += 1
+        if record is not None:
+            record.last_reject_reason = reason
+        rejected = dict(item)
+        rejected["recovery_rejected"] = True
+        rejected["recovery_reject_reason"] = reason
+        return rejected
+
     def assign_recovery_track(
         self,
         *,
@@ -270,39 +277,39 @@ class IncidentRecoveryManager:
         if incident_id:
             rec = (self._incidents.get(cam) or {}).get(str(incident_id))
 
-        # Continuation: already recovery-linked → reuse active (not the original lost id).
+        # Continuation: the tracker must still own the active id.
         if rec is not None and rec.recovery_linked and rec.active_track_id is not None:
             tid = int(rec.active_track_id)
+            ensure_track = getattr(tracker, "ensure_track", None)
+            if not callable(ensure_track):
+                return self._reject_recovery_candidate(cam, rec, item, "tracker_registration_unavailable")
             item["track_id"] = tid
             item["recovery_track_continued"] = True
-            if tracker is not None and hasattr(tracker, "ensure_track"):
-                try:
-                    tracker.ensure_track(tid, item, now=now)
-                except Exception:
-                    pass
+            try:
+                refreshed = ensure_track(tid, item, now=now)
+            except (RuntimeError, TypeError, ValueError):
+                return self._reject_recovery_candidate(cam, rec, item, "tracker_refresh_failed")
+            if not isinstance(refreshed, dict) or refreshed.get("track_id") is None:
+                return self._reject_recovery_candidate(cam, rec, item, "tracker_refresh_failed")
             self._track_incident.setdefault(cam, {})[tid] = rec.incident_id
             return item
 
-        # First recovery link: mint a NEW track id (do not force source_track_id).
         from_id = recovered_from_track_id
         if from_id is None and rec is not None:
             from_id = rec.active_track_id if rec.active_track_id is not None else rec.source_track_id
 
-        minted = None
-        if tracker is not None and hasattr(tracker, "register_recovery_detection"):
-            try:
-                minted = tracker.register_recovery_detection(item, now=now)
-            except Exception:
-                minted = None
-        if minted is not None and minted.get("track_id") is not None:
-            item = dict(minted)
-            new_id = int(item["track_id"])
-        else:
-            new_id = int(self._next_synthetic_track_id)
-            self._next_synthetic_track_id += 1
-            item["track_id"] = new_id
-            item["recovery_track_synthetic"] = True
+        register = getattr(tracker, "register_recovery_detection", None)
+        if not callable(register):
+            return self._reject_recovery_candidate(cam, rec, item, "tracker_registration_unavailable")
+        try:
+            minted = register(item, now=now)
+        except (RuntimeError, TypeError, ValueError):
+            return self._reject_recovery_candidate(cam, rec, item, "tracker_registration_failed")
+        if not isinstance(minted, dict) or minted.get("track_id") is None:
+            return self._reject_recovery_candidate(cam, rec, item, "tracker_registration_failed")
 
+        item = dict(minted)
+        new_id = int(item["track_id"])
         if rec is not None:
             self.complete_relink(
                 camera_login_id=cam,
@@ -597,52 +604,12 @@ def _bbox_iou(a: Sequence[float], b: Sequence[float]) -> float:
 
 
 def make_detect_roi_fn_from_yolo_pose(detector) -> DetectRoiFn:
-    """Build ROI detect callable from YoloPoseDetector (or object with .model.predict)."""
+    """Build ROI detection through the detector's backend-aware public API."""
 
     def _fn(crop, conf: float, imgsz: int) -> list[dict]:
-        model = getattr(detector, "model", None)
-        if model is None:
+        detect = getattr(detector, "detect", None)
+        if not callable(detect):
             return []
-        device = getattr(detector, "device", None)
-        results = model.predict(
-            crop,
-            device=device,
-            imgsz=int(imgsz),
-            conf=float(conf),
-            verbose=False,
-        )
-        out: list[dict] = []
-        for result in results:
-            boxes = getattr(result, "boxes", None)
-            if boxes is None or boxes.xyxy is None:
-                continue
-            xyxy = boxes.xyxy.detach().float().cpu().tolist()
-            confs = boxes.conf.detach().float().cpu().tolist() if boxes.conf is not None else []
-            keypoint_conf = None
-            keypoint_xy = None
-            keypoints_obj = getattr(result, "keypoints", None)
-            if keypoints_obj is not None and getattr(keypoints_obj, "conf", None) is not None:
-                keypoint_conf = keypoints_obj.conf.detach().float().cpu()
-                keypoint_xy = keypoints_obj.xy.detach().float().cpu() if keypoints_obj.xy is not None else None
-            for idx, bbox in enumerate(xyxy):
-                kps = None
-                if keypoint_xy is not None and keypoint_conf is not None and idx < keypoint_xy.shape[0]:
-                    kps = []
-                    for k in range(min(keypoint_xy.shape[1], keypoint_conf.shape[1])):
-                        kps.append(
-                            {
-                                "x": round(float(keypoint_xy[idx][k][0]), 2),
-                                "y": round(float(keypoint_xy[idx][k][1]), 2),
-                                "confidence": round(float(keypoint_conf[idx][k]), 4),
-                            }
-                        )
-                out.append(
-                    {
-                        "bbox": [float(v) for v in bbox[:4]],
-                        "confidence": float(confs[idx]) if idx < len(confs) else 0.0,
-                        "keypoints": kps,
-                    }
-                )
-        return out
+        return list(detect(crop, conf=float(conf), imgsz=int(imgsz)))
 
     return _fn

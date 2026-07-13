@@ -4,6 +4,7 @@ from ai.action.cheap_filter import CheapFilterConfig, evaluate_sequence_candidat
 from ai.action.keypoint_sequence_buffer import KeypointSequenceBuffer
 from ai.action.sequence_buffer import CropSequenceBuffer
 from tracking.simple_tracker import bbox_iou, center_distance_ratio
+from ai.action.sequence_buffer_migration import merge_sequence_buffers
 
 
 def _avg_keypoint_confidence(detection):
@@ -55,6 +56,7 @@ class PerTrackKeypointSequenceBuffers:
         self.sequences_skipped_by_filter = 0
         self.cheap_filter_reasons = {}
         self.last_sequence_diagnostics = {}
+        self.migration_conflicts = []
         self.relink_success_count = 0
         self.relink_failure_count = 0
         self.buffer_retained_count = 0
@@ -156,13 +158,16 @@ class PerTrackKeypointSequenceBuffers:
             return False
         if old_id not in self._buffers and old_id not in self._last_seen_at:
             return False
-        if new_id in self._buffers:
-            # Destination already has data: drop source to avoid dual ownership.
+        if new_id in self._buffers and old_id in self._buffers:
+            if not merge_sequence_buffers(self._buffers[old_id], self._buffers[new_id], new_id):
+                self.migration_conflicts.append({"source_track_id": old_id, "destination_track_id": new_id, "reason": "incompatible_buffer"})
+                return False
             self._buffers.pop(old_id, None)
+            self._last_seen_at[new_id] = max(self._last_seen_at.get(old_id, 0.0), self._last_seen_at.get(new_id, 0.0))
             self._last_seen_at.pop(old_id, None)
             self._last_detection_by_track.pop(old_id, None)
             self.last_sequence_diagnostics.pop(old_id, None)
-            self.sequences_generated_by_track.pop(old_id, None)
+            self.sequences_generated_by_track[new_id] = self.sequences_generated_by_track.get(new_id, 0) + self.sequences_generated_by_track.pop(old_id, 0)
             return True
         if old_id in self._buffers:
             self._buffers[new_id] = self._buffers.pop(old_id)
@@ -276,6 +281,7 @@ class PerTrackCropSequenceBuffers:
         self._last_seen_at = {}
         self.sequences_generated_by_track = {}
         self.last_sequence_diagnostics = {}
+        self.migration_conflicts = []
 
     def add(self, frame_idx, frame, boxes, now=None, frame_id=None, captured_at_ms=None):
         now = time.time() if now is None else float(now)
@@ -321,11 +327,15 @@ class PerTrackCropSequenceBuffers:
             return False
         if old_id not in self._buffers and old_id not in self._last_seen_at:
             return False
-        if new_id in self._buffers:
+        if new_id in self._buffers and old_id in self._buffers:
+            if not merge_sequence_buffers(self._buffers[old_id], self._buffers[new_id], new_id):
+                self.migration_conflicts.append({"source_track_id": old_id, "destination_track_id": new_id, "reason": "incompatible_buffer"})
+                return False
             self._buffers.pop(old_id, None)
+            self._last_seen_at[new_id] = max(self._last_seen_at.get(old_id, 0.0), self._last_seen_at.get(new_id, 0.0))
             self._last_seen_at.pop(old_id, None)
             self.last_sequence_diagnostics.pop(old_id, None)
-            self.sequences_generated_by_track.pop(old_id, None)
+            self.sequences_generated_by_track[new_id] = self.sequences_generated_by_track.get(new_id, 0) + self.sequences_generated_by_track.pop(old_id, 0)
             return True
         if old_id in self._buffers:
             self._buffers[new_id] = self._buffers.pop(old_id)

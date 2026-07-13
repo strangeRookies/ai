@@ -251,7 +251,8 @@ def main() -> int:
     recovery.reset_camera(args.camera_login_id)
     open_after_reset = len(recovery.open_incidents(args.camera_login_id))
 
-    wrong_relink = int(diag.get("wrong_relink") or 0)
+    wrong_relink = diag.get("wrong_relink")
+    wrong_relink_evaluation_status = diag.get("wrong_relink_evaluation_status", "not_evaluated")
     recovery_successes = int(diag.get("recovery_successes") or 0)
 
     report = {
@@ -277,13 +278,14 @@ def main() -> int:
         "linked_track_ids": sorted(set(linked_track_ids)),
         "forced_source_id": forced_source,
         "wrong_relink": wrong_relink,
+        "wrong_relink_evaluation_status": wrong_relink_evaluation_status,
         "recovery_successes": recovery_successes,
         "mean_recovery_latency_ms": diag.get("mean_recovery_latency_ms"),
         "diagnostics": diag,
         "open_incidents_after_eof_reset": open_after_reset,
         "pass_criteria": {
             "recovery_success_ge_1": recovery_successes >= 1,
-            "wrong_relink_eq_0": wrong_relink == 0,
+            "wrong_relink_not_evaluated": wrong_relink_evaluation_status == "not_evaluated",
             "incident_continuity": continuity_ok,
             "no_forced_source_id": not forced_source,
             "eof_reset_clears_context": open_after_reset == 0,
