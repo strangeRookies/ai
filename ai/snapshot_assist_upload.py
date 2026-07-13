@@ -17,6 +17,52 @@ logger = logging.getLogger(__name__)
 
 # Bounded queue (maxsize=50) and lock for daemon uploader thread.
 _UPLOAD_QUEUE: queue.Queue[tuple[str, str, bytes, float]] = queue.Queue(maxsize=50)
+_FRAME_QUEUE: queue.Queue[tuple[str, str, Any, int]] = queue.Queue(maxsize=50)
+_FRAME_WORKER_STARTED = False
+_FRAME_WORKER_THREAD: threading.Thread | None = None
+_FRAME_STOP = threading.Event()
+
+
+def _frame_worker_loop() -> None:
+    while not _FRAME_STOP.is_set():
+        try:
+            event_id, camera_login_id, frame, quality = _FRAME_QUEUE.get(timeout=0.05)
+        except queue.Empty:
+            continue
+        try:
+            jpeg = encode_frame_jpeg(frame, quality=quality)
+            if jpeg:
+                submit_snapshot_async(event_id=event_id, camera_login_id=camera_login_id, jpeg_bytes=jpeg)
+        finally:
+            _FRAME_QUEUE.task_done()
+
+
+def submit_frame_snapshot_async(event_id: str, camera_login_id: str, frame: Any, quality: int = 85) -> bool:
+    global _FRAME_WORKER_STARTED, _FRAME_WORKER_THREAD
+    if not snapshot_assist_enabled() or frame is None:
+        return False
+    try:
+        frame_copy = frame.copy()
+        _FRAME_QUEUE.put_nowait((event_id, camera_login_id, frame_copy, quality))
+    except queue.Full:
+        logger.warning("snapshot assist frame queue full eventId=%s", event_id)
+        return False
+    if not _FRAME_WORKER_STARTED:
+        _FRAME_STOP.clear()
+        _FRAME_WORKER_STARTED = True
+        _FRAME_WORKER_THREAD = threading.Thread(target=_frame_worker_loop, name="snapshot-assist-encoder", daemon=True)
+        _FRAME_WORKER_THREAD.start()
+    return True
+
+
+def stop_snapshot_assist_worker(timeout: float = 2.0) -> None:
+    global _FRAME_WORKER_STARTED
+    _FRAME_STOP.set()
+    if _FRAME_WORKER_THREAD is not None:
+        _FRAME_WORKER_THREAD.join(timeout=timeout)
+    _FRAME_WORKER_STARTED = False
+
+
 _WORKER_STARTED = False
 _QUEUE_LOCK = threading.Lock()
 
