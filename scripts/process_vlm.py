@@ -5,9 +5,16 @@ import json
 import os
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import NewType
 from urllib.error import URLError
 from urllib.request import Request, urlopen
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from ai.vlm_sdk import VlmAnalyzeRequest, resolve_vlm_provider  # noqa: E402
 
 MetadataJson = NewType("MetadataJson", str)
 
@@ -48,7 +55,9 @@ class VlmProcessError(RuntimeError):
 
 
 def parse_args(argv: list[str]) -> ProcessVlmArgs:
-    parser = argparse.ArgumentParser(description="Process a clip or snapshot with VLM-RAG contract output.")
+    parser = argparse.ArgumentParser(
+        description="Process a clip or snapshot with VLM-RAG contract output (direct SDK, no LangChain)."
+    )
     parser.add_argument("--input-url", required=True)
     parser.add_argument("--output-urls", required=True)
     parser.add_argument("--metadata", required=True)
@@ -64,11 +73,23 @@ def parse_args(argv: list[str]) -> ProcessVlmArgs:
 
 def process(args: ProcessVlmArgs) -> VlmResult:
     metadata = parse_metadata(args.metadata)
-    if args.mock_mode:
-        return mock_result(metadata)
-    clip_bytes = download_input(args.input_url)
-    upload_placeholder_keyframes(args.output_urls, clip_bytes)
-    return mock_result(metadata)
+    if not args.mock_mode:
+        clip_bytes = download_input(args.input_url)
+        upload_placeholder_keyframes(args.output_urls, clip_bytes)
+    provider = resolve_vlm_provider()
+    analyzed = provider.analyze(
+        VlmAnalyzeRequest(
+            input_url=args.input_url,
+            metadata=metadata,
+            output_urls=args.output_urls,
+        )
+    )
+    return VlmResult(
+        visual_event_type=analyzed.visual_event_type,
+        people_count=analyzed.people_count,
+        korean_search_keywords=analyzed.korean_search_keywords,
+        detailed_description_ko=analyzed.detailed_description_ko,
+    )
 
 
 def parse_metadata(raw: MetadataJson) -> dict[str, str]:
@@ -79,20 +100,6 @@ def parse_metadata(raw: MetadataJson) -> dict[str, str]:
     if not isinstance(value, dict):
         raise VlmProcessError("metadata must be a JSON object")
     return {str(key): str(item) for key, item in value.items()}
-
-
-def mock_result(metadata: dict[str, str]) -> VlmResult:
-    scenario = metadata.get("scenario_type", "SAFETY_EVENT")
-    description = (
-        f"{scenario} 이벤트 영상에서 작업자 또는 사람이 감시 구역 바닥 근처에 있는 장면입니다. "
-        "복도나 출입 구역으로 보이는 환경에서 안전모, 조끼, 바닥, 쓰러짐 여부를 검색할 수 있습니다."
-    )
-    return VlmResult(
-        visual_event_type="person_lying_on_floor",
-        people_count=1,
-        korean_search_keywords=("바닥", "쓰러짐", "안전모", "조끼", "복도", scenario),
-        detailed_description_ko=description,
-    )
 
 
 def download_input(input_url: str) -> bytes:
