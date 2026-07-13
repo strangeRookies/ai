@@ -1,0 +1,26 @@
+{
+  "jobId": "job-incident-demo-001",
+  "incidentId": "incident-demo-001",
+  "originalEventId": "orig-fall-recovered",
+  "cameraLoginId": "cam_02",
+  "locationName": "출입문 D",
+  "events": [
+    {
+      "eventId": "incident-demo-001-new_fall",
+      "eventType": "NEW_FALL",
+      "timestamp": "2026-07-10T12:30:00"
+    },
+    {
+      "eventId": "incident-demo-001-recovered",
+      "eventType": "RECOVERED",
+      "timestamp": "2026-07-10T12:30:18"
+    }
+  ],
+  "mockKeyframes": [
+    {"frameIndex": 2, "timestampSec": 2.0},
+    {"frameIndex": 3, "timestampSec": 3.0},
+    {"frameIndex": 4, "timestampSec": 4.0},
+    {"frameIndex": 6, "timestampSec": 6.0},
+    {"frameIndex": 7, "timestampSec": 7.0}
+  ]
+}

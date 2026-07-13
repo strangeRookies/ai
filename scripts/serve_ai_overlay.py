@@ -638,6 +638,18 @@ def _process_frame_impl(
         if publisher is not None:
             try:
                 publisher.publish(payload, topic=topic_settings["event_topic"])
+                # Single VLM snapshot assist hook (never blocks alert loop)
+                try:
+                    from ai.snapshot_assist_upload import encode_frame_jpeg, submit_snapshot_async
+                    jpeg = encode_frame_jpeg(getattr(frame_packet, "frame", None))
+                    if jpeg:
+                        submit_snapshot_async(
+                            event_id=str(payload.get("eventId") or ""),
+                            camera_login_id=str(stream_id),
+                            jpeg_bytes=jpeg,
+                        )
+                except Exception as snap_exc:
+                    print(f"[snapshot-assist][warn] non-fatal upload schedule failed: {snap_exc}", flush=True)
             except Exception as exc:
                 print(f"[ai-worker][error] failed to publish event payload for camera={stream_id}: {exc}", file=sys.stderr, flush=True)
         # 낙상 감지 시 10초 스냅샷 버퍼 트리거 작동

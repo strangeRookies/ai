@@ -40,6 +40,7 @@ temp/
 runs/
 *.log
 *.jsonl
+!fixtures/**/*.jsonl
 
 # Generated benchmark/model outputs
 benchmark/results/*
