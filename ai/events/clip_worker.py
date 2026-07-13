@@ -223,7 +223,7 @@ class ClipWriterWorker:
                             self.publisher.publish_event(event_payload)
                         else:
                             self.publisher.publish(event_payload, topic=topic)
-                        print(f"[clip-worker] published final event with clip_url: url={s3_url} to topic={topic}", file=sys.stderr)
+                        print(f"[clip-worker] published final event with clip_url: eventId={event_payload['eventId']} url={s3_url} to topic={topic}", file=sys.stderr)
                 except Exception as exc:
                     print(f"[clip-worker] upload failed; local file retained: {exc}", file=sys.stderr)
             except Exception as exc:
