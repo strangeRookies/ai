@@ -1028,7 +1028,7 @@ def _process_frame_impl(
             if clip_triggered:
                 print(f"[ai-overlay-event] triggered snapshot recording for camera={stream_id} eventId={payload.get('eventId')}", flush=True)
             else:
-                print(f"[ai-overlay-event] skipped snapshot recording (already recording or in cooldown) for camera={stream_id} eventId={payload.get('eventId')}", flush=True)
+                print(f"[ai-overlay-event] triggered snapshot recording SKIPPED (max concurrent events reached or in cooldown) for camera={stream_id} eventId={payload.get('eventId')}", flush=True)
     maybe_log_debug(frame_packet, boxes, summary, prediction, args, prefix="[ai-overlay-debug]")
 
     update_overlay_runtime(summary)
@@ -1444,8 +1444,7 @@ class OverlayWorker:
 
             # 매 프레임마다 스냅샷 클립 버퍼에 기록
             if self.state.clip_buffer is not None:
-                clip_task = self.state.clip_buffer.add_frame(frame_packet.frame)
-                if clip_task is not None:
+                for clip_task in self.state.clip_buffer.add_frame(frame_packet.frame):
                     enqueue_event_clip(self.state.clip_queue, clip_task)
             if roi_configs:
                 h, w = frame_packet.frame.shape[:2]

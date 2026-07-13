@@ -37,58 +37,75 @@ class EventClipBuffer:
         cooldown_seconds=10.0,
         fps=30.0,
         output_dir="clips",
+        max_concurrent_events=4,
     ):
         self.pre_event_frame_count = max(1, int(pre_event_frame_count))
         self.post_event_frame_count = max(1, int(post_event_frame_count))
         self.cooldown_seconds = max(0.0, float(cooldown_seconds))
         self.fps = float(fps or 30.0)
         self.output_dir = output_dir
+        self.max_concurrent_events = max(1, int(max_concurrent_events))
         #원형 큐 초기화(생성)
         self.pre_event_buffer = CircularFrameBuffer(self.pre_event_frame_count)
         self._last_event_at: dict[tuple[str, str], float] = {}
-        self._active_event: dict[str, Any] | None = None
+        # camera_id -> 그 카메라에서 현재 동시에 pre/post 프레임을 모으고 있는 이벤트 목록
+        # (카메라당 최대 max_concurrent_events개까지 독립적으로 진행 가능)
+        self._active_events: dict[str, list[dict]] = {}
 
     def add_frame(self, frame):
         self.pre_event_buffer.append(frame) # <-- 평상시 실시간 프레임을 원형 큐에 추가하는 부분
-        if self._active_event is None:
-            return None
+        completed_tasks: list[EventClipTask] = []
+        if not self._active_events:
+            return completed_tasks
 
-        self._active_event["post_frames"].append(self._copy_frame(frame))
-        # 감지 이후 프레임 수(예: 150프레임 = 5초)가 충족되었는지 검사
-        if len(self._active_event["post_frames"]) < self.post_event_frame_count:
-            return None
+        for camera_id, events in list(self._active_events.items()):
+            still_active = []
+            for event in events:
+                event["post_frames"].append(self._copy_frame(frame))
+                # 감지 이후 프레임 수(예: 150프레임 = 5초)가 충족되었는지 검사
+                if len(event["post_frames"]) < self.post_event_frame_count:
+                    still_active.append(event)
+                    continue
+                # 이전 5초(pre)와 이후 5초(post) 프레임을 합쳐서 인코딩 태스크 생성
+                completed_tasks.append(
+                    EventClipTask(
+                        event_type=event["event_type"],
+                        camera_id=event["camera_id"],
+                        frames=event["pre_frames"] + event["post_frames"], # <-- 합쳐지는 부분
+                        fps=self.fps,
+                        output_dir=self.output_dir,
+                        metadata=event["metadata"],
+                        created_at=event["created_at"],
+                    )
+                )
+            if still_active:
+                self._active_events[camera_id] = still_active
+            else:
+                del self._active_events[camera_id]
 
-        event = self._active_event
-        self._active_event = None
-        # 이전 5초(pre)와 이후 5초(post) 프레임을 합쳐서 인코딩 태스크 생성
-        return EventClipTask(
-            event_type=event["event_type"],
-            camera_id=event["camera_id"],
-            frames=event["pre_frames"] + event["post_frames"], # <-- 합쳐지는 부분
-            fps=self.fps,
-            output_dir=self.output_dir,
-            metadata=event["metadata"],
-            created_at=event["created_at"],
-        )
+        return completed_tasks
 
     def trigger_event(self, event_type, camera_id, metadata=None, now=None):
         now = time.time() if now is None else float(now)
-        key = (str(camera_id), str(event_type))
-        if self._active_event is not None:
+        camera_key = str(camera_id)
+        key = (camera_key, str(event_type))
+        active_for_camera = self._active_events.get(camera_key, [])
+        if len(active_for_camera) >= self.max_concurrent_events:
             return False
         if now - self._last_event_at.get(key, 0.0) < self.cooldown_seconds:
             return False
 
         self._last_event_at[key] = now
         pre_frames = [self._copy_frame(frame) for frame in self.pre_event_buffer.snapshot()]
-        self._active_event = {
+        new_event = {
             "event_type": str(event_type),
-            "camera_id": str(camera_id),
+            "camera_id": camera_key,
             "metadata": dict(metadata or {}),
             "pre_frames": pre_frames,
             "post_frames": [],
             "created_at": now,
         }
+        self._active_events.setdefault(camera_key, []).append(new_event)
         return True
 
     @staticmethod

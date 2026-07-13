@@ -184,9 +184,10 @@ def main():
     inference_latency_ms = None
     try:
         for frame in frames:
-            clip_task = clip_buffer.add_frame(frame) if clip_buffer else None
-            if clip_task and clip_queue:
-                enqueue_event_clip(clip_queue, clip_task)
+            clip_tasks = clip_buffer.add_frame(frame) if clip_buffer else []
+            if clip_queue:
+                for clip_task in clip_tasks:
+                    enqueue_event_clip(clip_queue, clip_task)
 
             inference_started_at = time.perf_counter()
             detections = detector.detect(frame)
