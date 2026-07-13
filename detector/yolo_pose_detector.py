@@ -208,12 +208,12 @@ class YoloPoseDetector:
         )
         return selection, model
 
-    def detect(self, frame):
+    def detect(self, frame, *, conf=None, imgsz=None):
         results = self.model.predict(
             frame,
             device=self.device,
-            imgsz=self.imgsz,
-            conf=self.conf,
+            imgsz=self.imgsz if imgsz is None else int(imgsz),
+            conf=self.conf if conf is None else float(conf),
             verbose=False,
         )
         detections = []
