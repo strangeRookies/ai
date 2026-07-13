@@ -61,6 +61,12 @@ from ai.publishers.event_publisher import create_event_publisher, mqtt_topic_set
 from ai.runtime_metrics import RuntimeMetrics
 from ai.streams.video_reader import VideoReader
 from ai.visualization.draw import draw_overlay
+from ai.postprocess.incident_recovery import (
+    IncidentRecoveryManager,
+    make_detect_roi_fn_from_yolo_pose,
+)
+from ai.postprocess.track_state_migration import finalize_recovery_detections
+from ai.action.fall_event_state import FallState
 from scripts.rtsp_inference_args import parse_args
 
 
@@ -97,6 +103,13 @@ def run(args):
         else None
     )
     post_processor = build_faint_post_processor_from_args(args)
+    incident_recovery = IncidentRecoveryManager()
+    recovery_detect_fn = None
+    if getattr(args, "detector_mode", "real") != "mock" and hasattr(detector, "model"):
+        try:
+            recovery_detect_fn = make_detect_roi_fn_from_yolo_pose(detector)
+        except Exception:
+            recovery_detect_fn = None
     log_worker_backend_startup(
         camera_login_id=getattr(args, "camera_login_id", None) or args.camera_id,
         requested_model=args.yolo_model,
@@ -284,6 +297,37 @@ def run(args):
                 frame_packet.frame,
                 frame_packet.timestamp,
             )
+            # Fall/Faint ROI recovery (does not change global detector conf).
+            frame_shape = getattr(frame_packet.frame, "shape", None)
+            if frame_shape is not None and len(frame_shape) >= 2:
+                detections = incident_recovery.on_tracked_frame(
+                    camera_login_id=camera_login_id,
+                    tracked=detections,
+                    timestamp=float(frame_packet.timestamp),
+                    frame_id=int(
+                        frame_metadata.frame_id
+                        if frame_metadata is not None
+                        else getattr(frame_packet, "frame_id", summary["frames_processed"])
+                    ),
+                    frame_shape=(int(frame_shape[0]), int(frame_shape[1])),
+                    frame_bgr=frame_packet.frame,
+                    detect_roi_fn=recovery_detect_fn,
+                )
+                active_seq_buf = crop_buffers if crop_buffers is not None else keypoint_buffers
+                detections, recovery_migrations = finalize_recovery_detections(
+                    detections,
+                    camera_login_id=camera_login_id,
+                    incident_recovery=incident_recovery,
+                    tracker=detection_postprocessor,
+                    now=float(frame_packet.timestamp),
+                    sequence_buffer=active_seq_buf,
+                    post_processor=post_processor,
+                )
+                if recovery_migrations:
+                    summary["incident_recovery_migrations"] = int(
+                        summary.get("incident_recovery_migrations", 0)
+                    ) + len(recovery_migrations)
+                    summary["last_incident_recovery_migration"] = recovery_migrations[-1]
             boxes = normalize_detections(detections)
             frame_keypoint_count = sum(1 for item in detections if item.get("keypoints"))
             tracker_diagnostics = detection_postprocessor.diagnostics()
@@ -427,6 +471,46 @@ def run(args):
                             ground_truth=getattr(args, "ground_truth", None),
                         ),
                     )
+                # Register on internal FALL/FAINT suspected lifecycle entry (not only MQTT emit).
+                bb = None
+                if track_detection is not None:
+                    bb = track_detection.get("bbox") or track_detection.get("smoothed_bbox")
+                lifecycle_state = None
+                if getattr(emit_decision, "lifecycle", None) is not None:
+                    st = emit_decision.lifecycle.state
+                    lifecycle_state = st.value if hasattr(st, "value") else str(st)
+                lifecycle_state = lifecycle_state or getattr(emit_decision, "state", None)
+                if lifecycle_state is None and getattr(post_processor, "_state_machine", None) is not None:
+                    try:
+                        st = post_processor._state_machine.get_state(args.camera_id, track_id)
+                        lifecycle_state = st.value if hasattr(st, "value") else str(st)
+                    except Exception:
+                        lifecycle_state = None
+                suspected = {
+                    FallState.FALL_CANDIDATE.value,
+                    FallState.FALL_CONFIRMED.value,
+                    FallState.POST_FALL_LYING.value,
+                    "FALL_SUSPECTED",
+                    "FAINT_SUSPECTED",
+                }
+                should_register = (
+                    lifecycle_state in suspected
+                    or emit_decision.is_new_fall
+                    or emit_decision.is_unrecovered
+                )
+                if should_register and bb and len(bb) >= 4:
+                    incident_recovery.note_fall_faint_suspected(
+                        camera_login_id=camera_login_id,
+                        track_id=int(track_id),
+                        bbox=bb,
+                        timestamp=float(frame_packet.timestamp),
+                        frame_id=int(
+                            frame_metadata.frame_id
+                            if frame_metadata is not None
+                            else getattr(frame_packet, "frame_id", 0)
+                        ),
+                        incident_id=emit_decision.event_id or emit_decision.original_event_id,
+                    )
                 if event_emitted:
                     sequence = sequences_by_track.get(track_id)
                     if frame_metadata is not None:
@@ -506,6 +590,11 @@ def run(args):
     finally:
         stop_event.set()
         reader_thread.join(timeout=3)
+        # EOF / worker end: clear recovery context (video boundary safety).
+        try:
+            incident_recovery.reset_camera(camera_login_id)
+        except Exception:
+            incident_recovery.reset_all()
         close = getattr(publisher, "close", None) if publisher is not None else None
         if close:
             close()
@@ -521,6 +610,7 @@ def run(args):
             summary["lstm_predictions"],
         )
     )
+    summary["incident_recovery"] = incident_recovery.diagnostics(camera_login_id)
     finalize_runtime_summary_fields(summary)
     return summary
 

@@ -246,6 +246,37 @@ class SimpleTrackAssigner:
         self._next_track_id += 1
         return track_id
 
+    def register_recovery_detection(self, detection, now=None):
+        """Mint a NEW track for ROI recovery without reusing a lost source track_id."""
+        now = time.time() if now is None else float(now)
+        det = dict(detection)
+        track_id = self._allocate_track_id()
+        det["track_id"] = track_id
+        self._update_track(track_id, det, now)
+        self._copy_track_fields(det, self._tracks[track_id])
+        self.last_events = list(self.last_events or []) + [
+            {
+                "event": "new_track",
+                "reason": "incident_recovery",
+                "trackId": int(track_id),
+                "previousTrackId": det.get("recovered_from_track_id"),
+                "bbox": det.get("bbox"),
+            }
+        ]
+        return det
+
+    def ensure_track(self, track_id, detection, now=None):
+        """Create or refresh an existing track_id entry (recovery continuation)."""
+        now = time.time() if now is None else float(now)
+        tid = int(track_id)
+        det = dict(detection)
+        det["track_id"] = tid
+        self._update_track(tid, det, now)
+        self._copy_track_fields(det, self._tracks[tid])
+        if tid >= self._next_track_id:
+            self._next_track_id = tid + 1
+        return det
+
     def _diagnostic_candidates(self, det_bbox, track_ids, now=None):
         """IoU/center diagnostics for listed track ids against a detection bbox."""
         rows = []

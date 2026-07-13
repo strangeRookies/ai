@@ -373,6 +373,46 @@ class FaintEventPostProcessor:
             return False
         return float(timestamp) - float(last_event_time) < self.cooldown_seconds
 
+    def migrate_track(self, camera_id, old_track_id, new_track_id) -> bool:
+        """Move Fall/Faint lifecycle maps from old_track_id to new_track_id (recovery)."""
+        if old_track_id is None or new_track_id is None:
+            return False
+        if str(old_track_id) == str(new_track_id):
+            return False
+        old_key = event_state_key(camera_id, old_track_id)
+        new_key = event_state_key(camera_id, new_track_id)
+        moved = False
+        if old_key in self._consecutive_by_camera:
+            if new_key not in self._consecutive_by_camera:
+                self._consecutive_by_camera[new_key] = self._consecutive_by_camera.pop(old_key)
+            else:
+                self._consecutive_by_camera.pop(old_key, None)
+            moved = True
+        if old_key in self._last_seen_ts:
+            if new_key not in self._last_seen_ts:
+                self._last_seen_ts[new_key] = self._last_seen_ts.pop(old_key)
+            else:
+                self._last_seen_ts.pop(old_key, None)
+            moved = True
+        if self._state_machine is not None:
+            moved = self._state_machine.migrate_track(camera_id, old_track_id, new_track_id) or moved
+        if self._posture_estimator is not None:
+            hist = getattr(self._posture_estimator, "_history", None)
+            cy = getattr(self._posture_estimator, "_center_y", None)
+            if isinstance(hist, dict) and old_key in hist:
+                if new_key not in hist:
+                    hist[new_key] = hist.pop(old_key)
+                else:
+                    hist.pop(old_key, None)
+                moved = True
+            if isinstance(cy, dict) and old_key in cy:
+                if new_key not in cy:
+                    cy[new_key] = cy.pop(old_key)
+                else:
+                    cy.pop(old_key, None)
+                moved = True
+        return moved
+
 
 def event_cooldown_key(camera_id):
     return str(camera_id)

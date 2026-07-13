@@ -142,6 +142,22 @@ class FallEventStateMachine:
     def reset_track(self, camera_id: str, track_id: Any | None = None) -> None:
         self._tracks.pop(track_state_key(camera_id, track_id), None)
 
+    def migrate_track(self, camera_id: str, old_track_id: Any, new_track_id: Any) -> bool:
+        """Move lifecycle state from old_track_id to new_track_id (incident recovery)."""
+        if old_track_id is None or new_track_id is None:
+            return False
+        if str(old_track_id) == str(new_track_id):
+            return False
+        old_key = track_state_key(camera_id, old_track_id)
+        new_key = track_state_key(camera_id, new_track_id)
+        if old_key not in self._tracks:
+            return False
+        if new_key in self._tracks:
+            self._tracks.pop(old_key, None)
+            return True
+        self._tracks[new_key] = self._tracks.pop(old_key)
+        return True
+
     def revert_confirm_to_candidate(self, camera_id: str, track_id: Any | None = None) -> None:
         """If NEW_FALL was decided but camera cooldown blocked publish, roll back."""
         st = self._tracks.get(track_state_key(camera_id, track_id))
