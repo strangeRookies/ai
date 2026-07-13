@@ -44,7 +44,12 @@ from ai.inference.rtsp_runtime import (
     log_payload_stage,
     update_quantitative_summary,
 )
-from ai.inference.tracking_debug import log_sequence_stage, log_track_lifecycle_events
+from ai.inference.tracking_debug import (
+    log_compact_tracking_debug,
+    log_sequence_stage,
+    log_track_lifecycle_events,
+)
+from ai.inference.fps_audit import FpsAuditWindow, log_fps_audit
 from ai.inference.pose_diagnostics import PoseDiagnosticsReporter, config_from_args as pose_diagnostics_config_from_args
 from ai.overlay_http import OverlayState, create_overlay_server
 from ai.roi import apply_roi_mask, combine_roi_masks, find_boxes_in_exit_zone, find_boxes_in_hazard_zone
@@ -136,6 +141,146 @@ def mjpeg_overlay_enabled(args: argparse.Namespace) -> bool:
     return bool(getattr(args, "mjpeg_enable_overlay", True))
 
 
+# Per-worker canary metric window (process-local; one overlay process = one camera).
+_CANARY_METRICS: dict = {
+    "window_started": None,
+    "new_tracks": 0,
+    "lost_tracks": 0,
+    "multi_det_extra": 0,
+    "near_dup_suppress": 0,
+    "duplicate_frames": 0,
+    "max_active_tracks": 0,
+    "frames": 0,
+    "person_present_frames": 0,
+    "dominant_hist": {},
+}
+
+
+def _bbox_iou_simple(a, b) -> float:
+    if not a or not b or len(a) < 4 or len(b) < 4:
+        return 0.0
+    ax1, ay1, ax2, ay2 = [float(v) for v in a[:4]]
+    bx1, by1, bx2, by2 = [float(v) for v in b[:4]]
+    ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+    ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+    inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
+    ua = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
+    ub = max(0.0, bx2 - bx1) * max(0.0, by2 - by1)
+    union = ua + ub - inter
+    return inter / union if union > 0 else 0.0
+
+
+def _emit_canary_tracking_signals(camera_login_id, frame_id, detections, tracker_diag, args) -> None:
+    """Log near-dup suppress events and periodic [tracking-canary] windows when canary is on.
+
+    Also emits lightweight windows when TRACKING_CANARY_METRICS=true for baseline collection.
+    """
+    canary_on = (os.getenv("TRACKING_CANARY") or "").lower() in {"1", "true", "yes", "on"}
+    metrics_on = canary_on or (os.getenv("TRACKING_CANARY_METRICS") or "").lower() in {"1", "true", "yes", "on"}
+    if not metrics_on:
+        return
+    now = time.time()
+    state = _CANARY_METRICS
+    if state["window_started"] is None:
+        state["window_started"] = now
+    diag = dict(tracker_diag or {})
+    events = list(diag.get("lifecycle_events") or [])
+    state["new_tracks"] += int(diag.get("new_tracks") or 0)
+    state["lost_tracks"] += int(diag.get("lost_tracks") or 0)
+    state["frames"] += 1
+    active = int(diag.get("active_tracks") or 0)
+    state["max_active_tracks"] = max(int(state["max_active_tracks"]), active)
+    tracked = [d for d in (detections or []) if d.get("track_id") is not None]
+    if tracked:
+        state["person_present_frames"] += 1
+        # dominant id hist
+        best = max(tracked, key=lambda d: float(d.get("confidence") or 0.0))
+        tid = int(best["track_id"])
+        hist = state["dominant_hist"]
+        hist[tid] = int(hist.get(tid, 0)) + 1
+    # duplicate active boxes
+    boxes = [t.get("bbox") for t in tracked if t.get("bbox")]
+    for i in range(len(boxes)):
+        for j in range(i + 1, len(boxes)):
+            if _bbox_iou_simple(boxes[i], boxes[j]) >= 0.7:
+                state["duplicate_frames"] += 1
+                break
+        else:
+            continue
+        break
+    for ev in events:
+        if ev.get("event") == "new_track" and (ev.get("switchReason") == "MULTI_DET_EXTRA"):
+            state["multi_det_extra"] += 1
+        if ev.get("event") == "filter" and ev.get("reason") == "near_duplicate_suppress":
+            state["near_dup_suppress"] += 1
+            meta = ev.get("suppressMeta") or {}
+            best = meta.get("best") or {}
+            print(
+                f"[near-dup-suppress]\n"
+                f"cameraLoginId={camera_login_id}\n"
+                f"frameId={frame_id}\n"
+                f"claimedTrackId={best.get('trackId')}\n"
+                f"iou={best.get('iou')}\n"
+                f"normalizedCenterDistance={best.get('centerRatio')}\n"
+                f"bboxAreaRatio={best.get('areaRatio')}\n"
+                f"keypointDistance={best.get('keypointDist')}\n"
+                f"reason=NEAR_DUPLICATE_OF_CLAIMED_DETECTION",
+                flush=True,
+            )
+    window_sec = float(os.getenv("TRACKING_CANARY_WINDOW_SEC") or 60)
+    elapsed = now - float(state["window_started"])
+    if elapsed < window_sec:
+        return
+    minutes = max(elapsed / 60.0, 1e-9)
+    hist = state["dominant_hist"] or {}
+    dominant_frames = max(hist.values()) if hist else 0
+    person_frames = int(state["person_present_frames"] or 0)
+    retention = (dominant_frames / person_frames) if person_frames else 0.0
+    # rough ghost: missing tracks with missing_frames > fps
+    ghost_count = 0
+    max_ghost = 0.0
+    tracks = diag.get("tracks") or {}
+    fps = float(getattr(args, "frame_rate", 30) or 30)
+    for _tid, tr in tracks.items() if isinstance(tracks, dict) else []:
+        miss = int((tr or {}).get("missing_frames") or 0)
+        if miss > 0:
+            sec = miss / max(fps, 1e-6)
+            if sec > 1.0:
+                ghost_count += 1
+                max_ghost = max(max_ghost, sec)
+    print(
+        f"[tracking-canary]\n"
+        f"cameraLoginId={camera_login_id}\n"
+        f"windowSec={round(elapsed, 1)}\n"
+        f"analysisFps={round(state['frames'] / max(elapsed, 1e-9), 3)}\n"
+        f"newTracks={state['new_tracks']}\n"
+        f"newTracksPerMin={round(state['new_tracks'] / minutes, 4)}\n"
+        f"lostTracks={state['lost_tracks']}\n"
+        f"lostTracksPerMin={round(state['lost_tracks'] / minutes, 4)}\n"
+        f"multiDetExtra={state['multi_det_extra']}\n"
+        f"duplicateFrames={state['duplicate_frames']}\n"
+        f"ghostTrackCount={ghost_count}\n"
+        f"maxGhostDurationSec={round(max_ghost, 3)}\n"
+        f"maxActiveTracks={state['max_active_tracks']}\n"
+        f"suppressedDetections={state['near_dup_suppress']}\n"
+        f"idRetentionProxy={round(retention, 4)}\n"
+        f"workerPid={os.getpid()}\n"
+        f"canary={str(canary_on).lower()}",
+        flush=True,
+    )
+    # reset window
+    state["window_started"] = now
+    state["new_tracks"] = 0
+    state["lost_tracks"] = 0
+    state["multi_det_extra"] = 0
+    state["near_dup_suppress"] = 0
+    state["duplicate_frames"] = 0
+    state["max_active_tracks"] = 0
+    state["frames"] = 0
+    state["person_present_frames"] = 0
+    state["dominant_hist"] = {}
+
+
 def log_worker_startup_contract(args: argparse.Namespace) -> None:
     camera_login_id = getattr(args, "camera_login_id", None) or getattr(args, "camera_id", "")
     print(
@@ -147,6 +292,19 @@ def log_worker_startup_contract(args: argparse.Namespace) -> None:
         f"classifier_input={getattr(args, 'classifier_input', None)} "
         f"selected_track_mode={getattr(args, 'selected_track_mode', None)} "
         f"selected_track_id={getattr(args, 'selected_track_id', None)}",
+        flush=True,
+    )
+    near_dup = (os.getenv("NEAR_DUP_SUPPRESS_MODE") or "hybrid_kp").strip().lower()
+    new_track_thresh = os.getenv("SIMPLE_TRACK_NEW_TRACK_THRESH") or "0.30"
+    canary = (os.getenv("TRACKING_CANARY") or "false").strip().lower() in {"1", "true", "yes", "on"}
+    config_source = "canary-override" if canary else "production-default"
+    print(
+        f"[tracking-config]\n"
+        f"cameraLoginId={camera_login_id}\n"
+        f"nearDupSuppressMode={near_dup}\n"
+        f"newTrackThresh={new_track_thresh}\n"
+        f"canary={str(canary).lower()}\n"
+        f"configSource={config_source}",
         flush=True,
     )
     if getattr(args, "selected_track_mode", "strict") == "strict" and getattr(args, "selected_track_id", None) is None:
@@ -304,6 +462,18 @@ def _process_frame_impl(
     _tracker_diag = tracker.diagnostics() if tracker is not None else {}
     log_tracking_stage(stream_id, _log_frame_id, _pre_track_detections, detections, _tracker_diag)
     log_track_lifecycle_events(stream_id, _log_frame_id, _tracker_diag)
+    _emit_canary_tracking_signals(stream_id, _log_frame_id, detections, _tracker_diag, args)
+    log_compact_tracking_debug(
+        stream_id,
+        _log_frame_id,
+        _log_ts,
+        _pre_track_detections,
+        detections,
+        _tracker_diag,
+        worker_pid=os.getpid(),
+        stream_run_id=str(getattr(args, "stream_run_id", "") or ""),
+        every_n=15,
+    )
     if os.getenv("TRACKING_DEBUG", "false").lower() in {"1", "true", "yes", "on"}:
         frame_id = frame_metadata.frame_id if frame_metadata is not None else getattr(frame_packet, "frame_idx", 0)
         det_cnt = len(detections)
@@ -381,15 +551,53 @@ def _process_frame_impl(
     if tracker is not None:
         update_tracking_summary(summary, tracker.diagnostics())
 
-    # EXIT 이탈 감지: 트래킹된 박스 center가 안전구역(EXIT ROI) 밖에 있으면 알림
+    # EXIT 이탈 감지: EXIT ROI = 안전 구역. 안전 구역에 들어갔다가 밖으로 나간 track만 알림.
+    # ROI 안에 한 번도 없었던 사람을 계속 EXIT로 표시하지 않는다.
     if exit_roi_mask is not None and exit_post_processor is not None:
         all_track_ids = {int(float(str(b["track_id"]))) for b in boxes if b.get("track_id") is not None}
         in_safe_zone = find_boxes_in_exit_zone(boxes, exit_roi_mask)
-        for track_id in in_safe_zone:
-            exit_post_processor.reset_track(args.camera_id, track_id)
-        for track_id in all_track_ids - in_safe_zone:
-            if exit_post_processor.should_trigger(args.camera_id, track_id, frame_packet.timestamp):
-                exit_boxes = [b for b in boxes if b.get("track_id") is not None and int(float(str(b["track_id"]))) == track_id]
+        overlay_frame_id = frame_metadata.frame_id if frame_metadata is not None else getattr(frame_packet, "frame_idx", None)
+        for track_id in all_track_ids:
+            inside = track_id in in_safe_zone
+            debug_before = {}
+            if hasattr(exit_post_processor, "debug_state"):
+                debug_before = exit_post_processor.debug_state(args.camera_id, track_id)
+            should_fire = False
+            if hasattr(exit_post_processor, "observe"):
+                should_fire = exit_post_processor.observe(
+                    args.camera_id,
+                    track_id,
+                    inside_safe_zone=inside,
+                    timestamp=frame_packet.timestamp,
+                )
+            elif inside:
+                exit_post_processor.reset_track(args.camera_id, track_id)
+            else:
+                should_fire = exit_post_processor.should_trigger(
+                    args.camera_id, track_id, frame_packet.timestamp
+                )
+            exit_boxes = [
+                b for b in boxes
+                if b.get("track_id") is not None and int(float(str(b["track_id"]))) == track_id
+            ]
+            bbox_center = None
+            if exit_boxes:
+                box = exit_boxes[0]
+                bbox_center = [
+                    round((float(box.get("x1", 0)) + float(box.get("x2", 0))) / 2, 1),
+                    round((float(box.get("y1", 0)) + float(box.get("y2", 0))) / 2, 1),
+                ]
+            if os.getenv("EXIT_DEBUG", "false").lower() in {"1", "true", "yes", "on"} or should_fire:
+                print(
+                    f"[exit-debug] cameraLoginId={stream_id} eventTrackId={track_id} "
+                    f"overlayTrackId={track_id} eventFrameId={overlay_frame_id} "
+                    f"overlayFrameId={overlay_frame_id} insideRoi={inside} "
+                    f"previousInsideRoi={debug_before.get('wasInside')} "
+                    f"exitStateAgeFrames={debug_before.get('outsideAgeFrames')} "
+                    f"bboxCenter={bbox_center} fire={should_fire}",
+                    flush=True,
+                )
+            if should_fire:
                 exit_payload = build_inference_event_payload(
                     args, frame_packet,
                     {"label": "exit", "score": 1.0, "probabilities": {"exit": 1.0}},
@@ -401,7 +609,7 @@ def _process_frame_impl(
                 topic_settings_exit = mqtt_topic_settings_from_args(args)
                 if publisher is not None:
                     publisher.publish(exit_payload, topic=topic_settings_exit["event_topic"])
-                print(f"[exit-event] {stream_id} track_id={track_id}", flush=True)
+                print(f"[exit-event] {stream_id} track_id={track_id} frameId={overlay_frame_id}", flush=True)
 
     # HAZARD 위험구역 감지: 트래킹된 박스 center가 위험구역(HAZARD ROI) 안에 있으면 알림
     if hazard_roi_mask is not None and hazard_post_processor is not None:
@@ -761,6 +969,14 @@ class OverlayWorker:
         self.camera_login_id = getattr(self.args, "camera_login_id", self.args.camera_id) or self.args.camera_id
         self.queue = CameraFrameQueue(self.camera_login_id, maxsize=getattr(self.args, "frame_queue_maxsize", 3))
         self.frame_buffer = FrameMetadataBuffer(maxlen=self.args.frame_sync_buffer_size)
+        self.fps_audit = FpsAuditWindow(
+            camera_login_id=self.camera_login_id,
+            stream_run_id=str(getattr(self.args, "stream_run_id", "") or ""),
+            window_sec=10.0,
+            tracker_config_frame_rate=float(getattr(self.args, "frame_rate", 30) or 30),
+            mjpeg_target_fps=float(getattr(self.args, "mjpeg_fps", 8) or 8),
+        )
+        self._resolution_audited = False
 
         # 10초 스냅샷 비디오 클립 버퍼 및 큐 초기화 (state에 공유하여 process_frame에서도 접근 가능케 함)
         self.state.clip_queue = queue.Queue(maxsize=10)
@@ -824,7 +1040,11 @@ class OverlayWorker:
                                 timestamp=packet.timestamp,
                                 fps=getattr(packet, "fps", 0.0)
                             )
+                            dropped_before = int(getattr(self.queue, "dropped_frame_count", 0) or 0)
                             self.queue.put_latest(packet_wrapped)
+                            dropped_after = int(getattr(self.queue, "dropped_frame_count", 0) or 0)
+                            self.fps_audit.source_fps = float(getattr(packet, "fps", 0.0) or 0.0) or self.fps_audit.source_fps
+                            self.fps_audit.note_capture(queue_dropped=max(0, dropped_after - dropped_before))
                             
                             frame_count += 1
                             now = time.time()
@@ -1118,6 +1338,35 @@ class OverlayWorker:
                 sync_sink=self.sync_sink,
                 pose_reporter=pose_reporter,
             )
+            # Analysis path counts: process_frame always runs detector+tracker for this frame.
+            self.fps_audit.note_analysis()
+            self.fps_audit.note_detector()
+            self.fps_audit.note_tracker_update()
+            if not self._resolution_audited and frame_packet.frame is not None:
+                h, w = frame_packet.frame.shape[:2]
+                print(
+                    f"[resolution-audit]\n"
+                    f"cameraLoginId={self.camera_login_id}\n"
+                    f"frameId={frame_packet.frame_id}\n"
+                    f"sourceShape={w}x{h}\n"
+                    f"modelRequestedImgsz={getattr(self.args, 'imgsz', getattr(detector, 'imgsz', 640))}\n"
+                    f"modelPath={getattr(detector, 'model_path', getattr(detector, 'model_name', ''))}\n"
+                    f"coordinatePolicy=ultralytics_boxes.xyxy_and_keypoints.xy_are_source_space\n"
+                    f"overlayCanvas={getattr(self.args, 'mjpeg_width', w)}x{getattr(self.args, 'mjpeg_height', h)}\n"
+                    f"mjpegEncodedSize={getattr(self.args, 'mjpeg_width', w)}x{getattr(self.args, 'mjpeg_height', h)}\n"
+                    f"mjpegTargetFps={getattr(self.args, 'mjpeg_fps', None)}\n"
+                    f"trackerConfigFrameRate={getattr(self.args, 'frame_rate', None)}",
+                    flush=True,
+                )
+                self._resolution_audited = True
+            mjpeg_count = None
+            try:
+                mjpeg_count = int(self.state.status().get("mjpeg_frame_count") or 0)
+            except Exception:
+                mjpeg_count = None
+            audit = self.fps_audit.maybe_emit(mjpeg_frame_count=mjpeg_count)
+            if audit is not None:
+                log_fps_audit(audit)
 
             now_ms = time.time_ns() // 1_000_000
             queue_lag_ms = now_ms - frame_packet.captured_at_ms

@@ -73,9 +73,14 @@ class SimpleTrackerTest(unittest.TestCase):
         self.assertLess(ratio, 0.1)
 
     def test_predicted_bbox_uses_velocity_and_missing_frames(self):
-        track = {"smoothed_bbox": [10, 0, 110, 100], "velocity": [10, 0, 10, 0], "missing_frames": 2}
-
-        self.assertEqual(predicted_bbox(track), [30.0, 0.0, 130.0, 100.0])
+        # velocity is px/s; with timestamps, gap=0.2s → +2 px on x edges
+        track = {
+            "smoothed_bbox": [10, 0, 110, 100],
+            "velocity": [10, 0, 10, 0],
+            "last_seen_at": 1.0,
+            "missing_frames": 2,
+        }
+        self.assertEqual(predicted_bbox(track, now=1.2), [12.0, 0.0, 112.0, 100.0])
 
     def test_fall_aspect_change_keeps_same_track_id(self):
         """Standing tall bbox → lying wide bbox should not allocate a new ID."""

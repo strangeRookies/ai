@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import os
 from dataclasses import dataclass
 from typing import Final
 from typing import Protocol
@@ -144,6 +145,22 @@ class SupervisionByteTrackAdapter:
             if session_reconnect
             else None
         )
+        # Production defaults after offline A/B + cam_03 live canary (2026-07):
+        # NEAR_DUP_SUPPRESS_MODE=hybrid_kp, SIMPLE_TRACK_NEW_TRACK_THRESH=0.30.
+        # Rollback: none + 0.25 (see scripts/rollback_tracking_suppression.sh).
+        # Known limitations: real two-person GT incomplete; residual new/lost may remain.
+        near_dup_mode = (os.getenv("NEAR_DUP_SUPPRESS_MODE") or "hybrid_kp").strip().lower()
+        near_dup_sort = (os.getenv("NEAR_DUP_SORT_BY_CONF") or "1").strip().lower() not in {
+            "0",
+            "false",
+            "no",
+            "off",
+        }
+        new_track_env = os.getenv("SIMPLE_TRACK_NEW_TRACK_THRESH")
+        if new_track_env is not None and str(new_track_env).strip() != "":
+            new_track_thresh = float(new_track_env)
+        else:
+            new_track_thresh = 0.30
         self._fallback_assigner = (
             SimpleTrackAssigner(
                 track_thresh=track_thresh,
@@ -153,6 +170,16 @@ class SupervisionByteTrackAdapter:
                 bbox_smoothing_alpha=bbox_smoothing_alpha if bbox_smoothing_alpha < 1.0 else 0.60,
                 max_missing_seconds=fallback_max_missing_seconds,
                 center_match_ratio=fallback_center_match_ratio,
+                # Associate low-conf dets to existing tracks, but mint new IDs only above gate.
+                new_track_thresh=new_track_thresh,
+                assumed_fps=float(frame_rate),
+                near_dup_suppress_mode=near_dup_mode,
+                near_dup_iou_thresh=float(os.getenv("NEAR_DUP_IOU_THRESH") or 0.70),
+                near_dup_center_ratio=float(os.getenv("NEAR_DUP_CENTER_RATIO") or 0.25),
+                near_dup_area_ratio_min=float(os.getenv("NEAR_DUP_AREA_RATIO_MIN") or 0.55),
+                near_dup_area_ratio_max=float(os.getenv("NEAR_DUP_AREA_RATIO_MAX") or 1.80),
+                near_dup_keypoint_dist=float(os.getenv("NEAR_DUP_KEYPOINT_DIST") or 0.35),
+                sort_detections_by_conf=near_dup_sort if near_dup_mode not in {"", "none", "off"} else False,
             )
             if self._stability_fallback
             else None

@@ -25,6 +25,7 @@ from ai.registered_cameras import (
     load_active_cameras,
     tracking_stability_fallback_enabled,
 )
+from ai.tracking_canary import apply_canary_env, canary_signature_fragment
 from ai.streams.video_reader import VideoReader
 from stream.rtsp_reader import redact_url
 
@@ -188,6 +189,7 @@ def camera_source_signature(camera: RegisteredCamera, config: RunnerConfig) -> s
             "tracking_relink_iou_threshold": config.tracking_relink_iou_threshold,
             "tracking_relink_max_time_gap_seconds": config.tracking_relink_max_time_gap_seconds,
             "tracking_stability_fallback": tracking_stability_fallback_enabled(camera, config),
+            "tracking_canary": canary_signature_fragment(camera.camera_login_id),
             "webrtc_sync_base_port": config.webrtc_sync_base_port,
             "webrtc_sync_enabled": config.webrtc_sync_enabled,
             "webrtc_sync_host": config.webrtc_sync_host,
@@ -199,9 +201,20 @@ def camera_source_signature(camera: RegisteredCamera, config: RunnerConfig) -> s
         case "REAL_RTSP":
             return f"REAL_RTSP:{camera.rtsp_url or ''}|roi:{roi_suffix}|exit_roi:{exit_roi_suffix}|hazard_roi:{hazard_roi_suffix}|runtime:{runtime_suffix}"
         case "SIMULATED_RTSP":
+            # Use the resolved mp4 path (not just backend assignedVideoPath) so that
+            # dummy-placeholder diversification or pool changes restart ffmpeg/workers.
+            resolved_video = camera.assigned_video_path or ""
+            try:
+                from ai.registered_cameras import resolve_simulated_video
+
+                resolved_video = str(
+                    resolve_simulated_video(camera, config.video_pool, config)
+                )
+            except Exception as exc:  # noqa: BLE001 - signature must stay best-effort
+                resolved_video = f"{camera.assigned_video_path or ''}|resolve-error:{exc}"
             return (
                 f"SIMULATED_RTSP:{camera_rtsp_url(config.rtsp_base_url, camera.camera_login_id)}:"
-                f"{camera.assigned_video_path or ''}|roi:{roi_suffix}|exit_roi:{exit_roi_suffix}|hazard_roi:{hazard_roi_suffix}|runtime:{runtime_suffix}"
+                f"{resolved_video}|roi:{roi_suffix}|exit_roi:{exit_roi_suffix}|hazard_roi:{hazard_roi_suffix}|runtime:{runtime_suffix}"
             )
 
 
@@ -294,7 +307,27 @@ def start_camera_worker(camera: RegisteredCamera, config: RunnerConfig, port: in
     from ai.worker_registry import force_kill_existing_worker
     force_kill_existing_worker(camera.camera_login_id)
 
+    assigned_video_for_log = camera.assigned_video_path or ""
+    if camera.source_type == "SIMULATED_RTSP":
+        try:
+            from ai.registered_cameras import resolve_simulated_video
+
+            assigned_video_for_log = str(
+                resolve_simulated_video(camera, config.video_pool, config)
+            )
+        except Exception as exc:  # noqa: BLE001 - diagnostic only
+            assigned_video_for_log = f"{camera.assigned_video_path or ''} (resolve-failed: {exc})"
+
     if config.dry_run:
+        print(
+            f"[camera-map]\n"
+            f"cameraLoginId={camera.camera_login_id}\n"
+            f"sourceUrl={redact_url(rtsp_url)}\n"
+            f"assignedVideoPath={assigned_video_for_log}\n"
+            f"workerPid=dry-run\n"
+            f"overlayUrl=http://{config.overlay_host}:{port}{config.mjpeg_base_path}/{camera.camera_login_id}",
+            flush=True,
+        )
         return CameraWorker(
             processes=[],
             overlay_port=port,
@@ -318,6 +351,8 @@ def start_camera_worker(camera: RegisteredCamera, config: RunnerConfig, port: in
         overlay_env["MQTT_PASSWORD"] = config.mqtt_password
     if config.webrtc_sync_token:
         overlay_env["AI_WEBRTC_SYNC_TOKEN"] = config.webrtc_sync_token
+    # Production defaults for all cameras; optional per-camera canary override only if enabled.
+    canary_settings = apply_canary_env(camera.camera_login_id, overlay_env)
     overlay_log_path = REPO_ROOT / "runs" / "registered_cameras" / f"{camera.camera_login_id}-overlay.log"
     processes.append(
         spawn_process(
@@ -326,8 +361,28 @@ def start_camera_worker(camera: RegisteredCamera, config: RunnerConfig, port: in
             env=overlay_env,
         )
     )
+    overlay_pid = getattr(processes[-1], "pid", None)
+    print(
+        f"[camera-map]\n"
+        f"cameraLoginId={camera.camera_login_id}\n"
+        f"sourceUrl={redact_url(rtsp_url)}\n"
+        f"assignedVideoPath={assigned_video_for_log}\n"
+        f"workerPid={overlay_pid}\n"
+        f"overlayUrl=http://{config.overlay_host}:{port}{config.mjpeg_base_path}/{camera.camera_login_id}",
+        flush=True,
+    )
+    print(
+        f"[tracking-config]\n"
+        f"cameraLoginId={camera.camera_login_id}\n"
+        f"nearDupSuppressMode={canary_settings.get('near_dup_suppress_mode')}\n"
+        f"newTrackThresh={canary_settings.get('new_track_thresh')}\n"
+        f"canary={str(bool(canary_settings.get('canary'))).lower()}\n"
+        f"configSource={canary_settings.get('configSource') or canary_settings.get('source')}\n"
+        f"source={canary_settings.get('source')}",
+        flush=True,
+    )
     if config.mjpeg_debug or config.mjpeg_enabled:
-        report_overlay_status(camera, rtsp_url, port, config, "RUNNING", getattr(processes[-1], "pid", None))
+        report_overlay_status(camera, rtsp_url, port, config, "RUNNING", overlay_pid)
     elif config.overlay_report_enabled:
         print(
             f"[registered-cameras] overlay HTTP disabled for camera={camera.camera_login_id}; "
@@ -364,6 +419,22 @@ def sync_camera_workers(
             stop_processes(workers[camera_login_id].processes)
             report_overlay_stopped(camera_login_id, workers[camera_login_id].rtsp_url, workers[camera_login_id].overlay_port, config)
             del workers[camera_login_id]
+
+    # Detect backend-side shared simulated content before spawn/restart.
+    assigned_groups: dict[str, list[str]] = {}
+    for camera in cameras:
+        key = (camera.assigned_video_path or "").strip().replace("\\", "/").lower()
+        if not key:
+            continue
+        assigned_groups.setdefault(key, []).append(camera.camera_login_id)
+    for path_key, login_ids in assigned_groups.items():
+        if len(login_ids) > 1:
+            print(
+                f"[camera-map][warning] shared assignedVideoPath across cameras: "
+                f"path={path_key} cameras={','.join(sorted(login_ids))}",
+                file=sys.stderr,
+                flush=True,
+            )
 
     for camera in active_cameras.values():
         existing_worker = workers.get(camera.camera_login_id)

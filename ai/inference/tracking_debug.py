@@ -96,7 +96,7 @@ def log_track_lifecycle_events(
     *,
     force: bool = False,
 ) -> None:
-    """Print structured track lifecycle events (lost/new/filter/match fail).
+    """Print structured track lifecycle events (lost/new/filter/id_switch).
 
     Enable with env TRACK_ID_LOG=true (or TRACKING_DEBUG=true).
     Only emits when there are interesting events (lost/new/filter/id_switch),
@@ -116,6 +116,28 @@ def log_track_lifecycle_events(
         # Still log a compact line if counts show activity
         if int(diag.get("lost_tracks", 0) or 0) == 0 and int(diag.get("new_tracks", 0) or 0) == 0:
             return
+    # Emit explicit [track-id-switch] lines for new IDs that replace unmatched previous tracks.
+    for event in interesting:
+        if event.get("event") != "new_track":
+            continue
+        previous = event.get("previousTrackId")
+        new_id = event.get("trackId")
+        rejected = (event.get("bestRejected") or {}).get("rejectedCandidates") or []
+        best_iou = rejected[0].get("iou") if rejected else None
+        print(
+            f"[track-id-switch]\n"
+            f"cameraLoginId={camera_login_id}\n"
+            f"previousTrackId={previous}\n"
+            f"newTrackId={new_id}\n"
+            f"gapFrames=?\n"
+            f"lastBBox={(rejected[0].get('lastBbox') if rejected else None)}\n"
+            f"newBBox={event.get('bbox')}\n"
+            f"lastConf=?\n"
+            f"newConf={event.get('confidence')}\n"
+            f"bestIoU={best_iou}\n"
+            f"reason={event.get('switchReason') or event.get('reason') or 'UNKNOWN'}",
+            flush=True,
+        )
     record = {
         "stage": "track_lifecycle",
         "cameraLoginId": camera_login_id,
@@ -130,6 +152,65 @@ def log_track_lifecycle_events(
         "events": interesting or events[:20],
     }
     print(f"[track-lifecycle] {json.dumps(record, ensure_ascii=False)}", flush=True)
+
+
+def log_compact_tracking_debug(
+    camera_login_id: str,
+    frame_id: int | None,
+    timestamp_ms: int | None,
+    raw_detections: Sequence[Mapping[str, object]],
+    tracked_detections: Sequence[Mapping[str, object]],
+    tracker_diagnostics: Mapping[str, object] | None,
+    *,
+    worker_pid: int | None = None,
+    stream_run_id: str | None = None,
+    every_n: int = 15,
+) -> None:
+    """Compact multi-line [tracking-debug] block for diagnosis.
+
+    Enabled when TRACKING_DEBUG=true. Emits every frame on miss/new/lost, otherwise every_n.
+    """
+    if not tracking_debug_enabled():
+        return
+    diag = dict(tracker_diagnostics or {})
+    new_tracks = int(diag.get("new_tracks", 0) or 0)
+    lost_tracks = int(diag.get("lost_tracks", 0) or 0)
+    raw_n = len(raw_detections)
+    tracked_n = len(tracked_detections)
+    interesting = raw_n == 0 or tracked_n == 0 or new_tracks > 0 or lost_tracks > 0
+    if frame_id is not None and not interesting and every_n > 0 and int(frame_id) % every_n != 0:
+        return
+
+    active_ids = _track_ids(tracked_detections)
+    primary = tracked_detections[0] if tracked_detections else None
+    bbox = list(primary.get("bbox") or []) if primary else []
+    width = round(float(bbox[2]) - float(bbox[0]), 1) if len(bbox) >= 4 else None
+    height = round(float(bbox[3]) - float(bbox[1]), 1) if len(bbox) >= 4 else None
+    area_ratio = None
+    if width is not None and height is not None:
+        area_ratio = round((width * height) / (1280.0 * 720.0), 5)
+    print(
+        f"[tracking-debug]\n"
+        f"cameraLoginId={camera_login_id}\n"
+        f"frameId={frame_id}\n"
+        f"timestampMs={timestamp_ms}\n"
+        f"detectionsBeforeFilter={raw_n}\n"
+        f"detectionsAfterFilter={tracked_n}\n"
+        f"personConf={(None if primary is None else primary.get('confidence'))}\n"
+        f"bbox={bbox}\n"
+        f"bboxWidth={width}\n"
+        f"bboxHeight={height}\n"
+        f"bboxAreaRatio={area_ratio}\n"
+        f"avgKeypointConf={(None if primary is None else primary.get('keypoint_confidence'))}\n"
+        f"validKeypoints={(0 if primary is None else len(primary.get('keypoints') or []))}\n"
+        f"trackId={(None if primary is None else primary.get('track_id'))}\n"
+        f"activeTrackIds={active_ids}\n"
+        f"newTracks={new_tracks}\n"
+        f"lostTracks={lost_tracks}\n"
+        f"workerPid={worker_pid}\n"
+        f"streamRunId={stream_run_id}",
+        flush=True,
+    )
 
 
 def build_tracker_reset_record(
