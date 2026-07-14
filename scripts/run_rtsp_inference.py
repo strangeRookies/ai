@@ -62,6 +62,7 @@ from ai.evaluation.prediction_log import append_prediction_jsonl, build_predicti
 import threading
 from ai.frame_sync import FrameMetadataBuffer, FramePacket, CameraFrameQueue
 from ai.publishers.async_delivery import AsyncMqttDelivery
+from ai.publishers.event_outbox import event_outbox_path
 from ai.publishers.event_publisher import create_event_publisher, mqtt_topic_settings_from_args
 from ai.runtime_metrics import RuntimeMetrics
 from ai.streams.video_reader import VideoReader
@@ -202,7 +203,10 @@ def run(args):
         return summary
 
     publisher, publisher_mode = create_event_publisher(args, role="inference")
-    publisher = AsyncMqttDelivery(publisher)
+    publisher = AsyncMqttDelivery(
+        publisher,
+        outbox_path=event_outbox_path(camera_login_id) if publisher_mode == "mqtt" else None,
+    )
     summary["alert_delivery_result"] = publisher_mode
     print(
         "[rtsp-inference] sequence config: "
