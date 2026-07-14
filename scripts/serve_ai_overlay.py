@@ -50,6 +50,7 @@ from ai.inference.tracking_debug import (
     log_track_lifecycle_events,
 )
 from ai.inference.fps_audit import FpsAuditWindow, log_fps_audit
+from ai.inference.session_boundary import session_reset_reason
 from ai.inference.pose_diagnostics import PoseDiagnosticsReporter, config_from_args as pose_diagnostics_config_from_args
 from ai.overlay_http import OverlayState, create_overlay_server
 from ai.roi import apply_roi_mask, combine_roi_masks, find_boxes_in_exit_zone, find_boxes_in_hazard_zone
@@ -1390,17 +1391,13 @@ class OverlayWorker:
             if last_captured_at_ms is not None:
                 time_gap = frame_packet.captured_at_ms - last_captured_at_ms
             
-            reset_decided = False
-            reset_reason = ""
-            if frame_gap is not None and frame_gap < 0:
-                reset_decided = True
-                reset_reason = "FRAME_ID_RESET"
-            elif time_gap is not None and time_gap > 3000.0:
-                reset_decided = True
-                reset_reason = "LARGE_TIME_GAP"
-            elif frame_gap is not None and frame_gap > 90:
-                reset_decided = True
-                reset_reason = "LARGE_FRAME_GAP"
+            reset_reason = session_reset_reason(
+                last_frame_id,
+                frame_packet.frame_idx,
+                last_captured_at_ms,
+                frame_packet.captured_at_ms,
+            )
+            reset_decided = reset_reason is not None
 
             if reset_decided:
                 tracker, postprocessing_mode = create_detection_postprocessor(self.args, source_fps=getattr(frame_packet, "fps", None))
