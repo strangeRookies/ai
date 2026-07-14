@@ -37,8 +37,20 @@ def video_pool_for_camera_position(
     return outdoor_files, False
 
 
+def scan_stream_video_directories(video_dir: str, chromakey_video_dir: str | None) -> list[Path]:
+    video_files = scan_video_directory(video_dir)
+    if chromakey_video_dir:
+        video_files.extend(scan_video_directory(chromakey_video_dir))
+
+    # The chromakey directory may be nested under --video-dir. Keep one entry
+    # per physical path so stable camera hashing is not skewed by duplicates.
+    unique_files = {video_path.resolve(): video_path for video_path in video_files}
+    return sorted(unique_files.values(), key=lambda video_path: str(video_path).lower())
+
+
 def run_simulated_rtsp_publisher(args: argparse.Namespace, repo_root: Path) -> None:
     video_dir = args.video_dir
+    chromakey_video_dir = getattr(args, "chromakey_video_dir", None)
     backend_url = args.backend_url
     rtsp_base_url = f"rtsp://{args.rtsp_host}:{args.rtsp_port}"
     poll_interval = args.poll_interval
@@ -52,6 +64,7 @@ def run_simulated_rtsp_publisher(args: argparse.Namespace, repo_root: Path) -> N
     print("==================================================", flush=True)
     print("Starting simulated RTSP stream publisher", flush=True)
     print(f"Video Directory: {video_dir}", flush=True)
+    print(f"Chromakey Directory: {chromakey_video_dir or '(from video directory)'}", flush=True)
     print(f"Backend URL:     {backend_url}", flush=True)
     print(f"RTSP Base URL:   {rtsp_base_url}", flush=True)
     print(f"Poll Interval:   {poll_interval}s", flush=True)
@@ -67,7 +80,7 @@ def run_simulated_rtsp_publisher(args: argparse.Namespace, repo_root: Path) -> N
         print("[NVENC CHECK] h264_nvenc unavailable. Falling back to copy/libx264.", flush=True)
     print("==================================================", flush=True)
 
-    all_scanned_files = scan_video_directory(video_dir)
+    all_scanned_files = scan_stream_video_directories(video_dir, chromakey_video_dir)
     if not all_scanned_files:
         print(f"[simulated-rtsp][error] No video files (mp4, avi, mov, mkv) found in {video_dir}", file=sys.stderr)
         sys.exit(1)
@@ -143,7 +156,7 @@ def run_simulated_rtsp_publisher(args: argparse.Namespace, repo_root: Path) -> N
             simulated_cameras = None
             if now - last_backend_poll_time >= poll_interval:
                 try:
-                    all_scanned_files = scan_video_directory(video_dir)
+                    all_scanned_files = scan_stream_video_directories(video_dir, chromakey_video_dir)
                     outdoor_files, chromakey_files, excluded_files = filter_stream_video_pools(
                         all_scanned_files, args.domain, args.label, args.video_filter
                     )

@@ -75,12 +75,18 @@ if [ "${AI_WEBRTC_SYNC_ENABLED:-false}" = "true" ] || [ "${AI_WEBRTC_SYNC_ENABLE
     )
 fi
 VIDEO_POOL_DIR="${VIDEO_POOL_DIR:-$REMOTE_ROOT/video_pool}"
+CHROMAKEY_VIDEO_DIR="${CHROMAKEY_VIDEO_DIR:-/home/welabs/yolo_training/ai_fall_experiments/data/raw/indoor_chromakey/videos}"
 if [ ! -d "$VIDEO_POOL_DIR" ]; then
     echo "[start_ai_stable][error] VIDEO_POOL_DIR not found: $VIDEO_POOL_DIR"
     exit 1
 fi
+if [ ! -d "$CHROMAKEY_VIDEO_DIR" ]; then
+    echo "[start_ai_stable][error] CHROMAKEY_VIDEO_DIR not found: $CHROMAKEY_VIDEO_DIR"
+    exit 1
+fi
 POOL_MP4_COUNT=$(find "$VIDEO_POOL_DIR" -maxdepth 1 -type f -name '*.mp4' | wc -l)
 echo "[start_ai_stable] Using VIDEO_POOL_DIR=$VIDEO_POOL_DIR (mp4_count=$POOL_MP4_COUNT)"
+echo "[start_ai_stable] Using CHROMAKEY_VIDEO_DIR=$CHROMAKEY_VIDEO_DIR"
 if [ "$POOL_MP4_COUNT" -lt 1 ]; then
     echo "[start_ai_stable][error] No mp4 files in VIDEO_POOL_DIR"
     exit 1
@@ -94,6 +100,7 @@ echo "[start_ai_stable] Starting start_simulated_rtsp_from_folder.py..."
 # flat names like faint_01.mp4 / fall_01.mp4 under video_pool are accepted.
 nohup env VIDEO_DOMAIN= python scripts/start_simulated_rtsp_from_folder.py \
     --video-dir "$VIDEO_POOL_DIR" \
+    --chromakey-video-dir "$CHROMAKEY_VIDEO_DIR" \
     --backend-url http://safety-backend-alb-eks-1607216893.ap-northeast-2.elb.amazonaws.com \
     --rtsp-host 127.0.0.1 \
     --rtsp-port 8554 \

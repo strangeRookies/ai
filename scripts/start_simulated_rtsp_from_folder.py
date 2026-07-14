@@ -28,6 +28,11 @@ def parse_arguments() -> argparse.Namespace:
         description="Auto-scan a folder of videos and publish them as simulated RTSP streams based on active cameras."
     )
     parser.add_argument("--video-dir", required=True, help="Directory containing video files (mp4, avi, mov, mkv).")
+    parser.add_argument(
+        "--chromakey-video-dir",
+        default=os.environ.get("CHROMAKEY_VIDEO_DIR"),
+        help="Optional separate directory containing chromakey videos.",
+    )
     parser.add_argument("--backend-url", default=DEFAULT_BACKEND_BASE_URL, help="Backend base URL.")
     parser.add_argument("--rtsp-host", default="127.0.0.1", help="RTSP server publish host.")
     parser.add_argument("--rtsp-port", type=int, default=8554, help="RTSP server publish port.")

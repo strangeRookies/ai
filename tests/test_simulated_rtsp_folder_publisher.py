@@ -7,7 +7,7 @@ import ai.worker_registry
 from ai.registered_cameras import RegisteredCamera
 from ai.ffmpeg_command import build_ffmpeg_command
 from ai.simulated_rtsp_publisher import FfmpegRestartPolicy, PublisherLock, select_initial_ffmpeg_mode, tail_text_file
-from ai.simulated_rtsp_runtime import video_pool_for_camera_position
+from ai.simulated_rtsp_runtime import scan_stream_video_directories, video_pool_for_camera_position
 from scripts.start_simulated_rtsp_from_folder import build_ffmpeg_cmd, parse_arguments, stable_video_index, video_for_camera
 from ai.simulated_rtsp_sources import filter_stream_video_pools, filter_video_files
 
@@ -67,6 +67,19 @@ class SimulatedRtspFolderPublisherTest(unittest.TestCase):
         # Empty domain = accept all non-chromakey files (close-up fall clips work).
         self.assertEqual(args.domain, "")
         self.assertIsNone(args.label)
+
+    def test_cli_accepts_separate_chromakey_video_directory(self):
+        argv = [
+            "start_simulated_rtsp_from_folder.py",
+            "--video-dir",
+            "video_pool",
+            "--chromakey-video-dir",
+            "chromakey_pool",
+        ]
+        with patch.dict("os.environ", {}, clear=True), patch("sys.argv", argv):
+            args = parse_arguments()
+
+        self.assertEqual(args.chromakey_video_dir, "chromakey_pool")
 
     def test_stable_start_script_streams_outside_videos_only(self):
         script = Path("scripts/start_ai_stable.sh").read_text(encoding="utf-8")
@@ -265,6 +278,22 @@ class SimulatedRtspFolderPublisherTest(unittest.TestCase):
         self.assertFalse(first_is_chromakey)
         self.assertEqual(second_pool, chromakey)
         self.assertTrue(second_is_chromakey)
+
+    def test_scan_stream_video_directories_combines_separate_pools(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            outdoor_dir = root / "video_pool"
+            chromakey_dir = root / "indoor_chromakey" / "videos"
+            outdoor_dir.mkdir()
+            chromakey_dir.mkdir(parents=True)
+            outdoor_video = outdoor_dir / "outside.mp4"
+            chromakey_video = chromakey_dir / "cam1.mp4"
+            outdoor_video.write_bytes(b"outdoor")
+            chromakey_video.write_bytes(b"chromakey")
+
+            scanned = scan_stream_video_directories(str(outdoor_dir), str(chromakey_dir))
+
+        self.assertEqual(set(scanned), {outdoor_video, chromakey_video})
 
     def test_video_for_chromakey_camera_accepts_assigned_chromakey_video(self):
         with tempfile.TemporaryDirectory() as temp_dir:
