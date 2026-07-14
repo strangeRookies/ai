@@ -58,12 +58,13 @@ class SimulatedRtspFolderPublisherTest(unittest.TestCase):
 
         self.assertEqual(args.ffmpeg_mode, "copy")
 
-    def test_cli_defaults_to_outside_domain_for_live_publisher(self):
+    def test_cli_defaults_to_empty_domain_for_local_video_pool(self):
         argv = ["start_simulated_rtsp_from_folder.py", "--video-dir", "."]
         with patch.dict("os.environ", {}, clear=True), patch("sys.argv", argv):
             args = parse_arguments()
 
-        self.assertEqual(args.domain, "outside")
+        # Empty domain = accept all non-chromakey files (close-up fall clips work).
+        self.assertEqual(args.domain, "")
         self.assertIsNone(args.label)
 
     def test_stable_start_script_streams_outside_videos_only(self):

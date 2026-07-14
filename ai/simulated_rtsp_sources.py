@@ -10,7 +10,9 @@ from ai.camera_input_safety import assigned_video_candidates, is_path_under, res
 from ai.registered_cameras import RegisteredCamera
 
 
-DEFAULT_STREAM_DOMAIN: Final = "outside"
+# Empty default: use every non-chromakey file under --video-dir.
+# Outdoor-only pools can still pass --domain outside (or VIDEO_DOMAIN=outside).
+DEFAULT_STREAM_DOMAIN: Final = ""
 CHROMAKEY_PATH_PATTERN: Final = re.compile(
     r"(indoor_chromakey|croki|크로마키|chroma|chromakey|green[_ -]?screen|studio|chm)",
     re.IGNORECASE,
