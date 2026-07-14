@@ -6,6 +6,7 @@ from pathlib import Path
 
 from ai.action.classifier import LSTMActionClassifier, MockActionClassifier
 from ai.action.cheap_filter import CheapFilterConfig
+from ai.inference.tracker_timebase import resolve_tracker_fps
 from ai.action.faint_post_processing import (
     DEFAULT_ACTION_MODEL,
     DEFAULT_CAMERA_COOLDOWN_SECONDS,
@@ -110,7 +111,7 @@ def env_flag(name, default=False):
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def create_detection_postprocessor(args):
+def create_detection_postprocessor(args, source_fps=None):
     """tracking backend를 선택하고 YOLO detection 후처리기를 만든다.
 
     기본 파이프라인은 Supervision ByteTrack이다. `tracking_mode=auto`에서는
@@ -119,6 +120,7 @@ def create_detection_postprocessor(args):
     detection에 `track_id`를 붙이는 책임을 가진다.
     """
 
+    tracker_fps = resolve_tracker_fps(source_fps, getattr(args, "frame_rate", 30))
     tracking_mode = str(getattr(args, "tracking_mode", "auto") or "auto").strip().lower()
     if tracking_mode == "supervision" or (
         tracking_mode == "auto" and env_flag("ENABLE_SUPERVISION_POSTPROCESSING", False)
@@ -128,7 +130,7 @@ def create_detection_postprocessor(args):
             track_thresh=getattr(args, "track_thresh", 0.10),
             track_buffer=getattr(args, "track_buffer", 120),
             match_thresh=getattr(args, "match_thresh", 0.15),
-            frame_rate=getattr(args, "frame_rate", 30),
+            frame_rate=int(round(tracker_fps)),
             bbox_smoothing_alpha=getattr(args, "bbox_smoothing_alpha", 1.0),
             stability_fallback=bool(getattr(args, "tracking_stability_fallback", True)),
             fallback_max_missing_seconds=getattr(args, "track_max_missing_seconds", 6.0),
@@ -145,6 +147,7 @@ def create_detection_postprocessor(args):
         bbox_smoothing_alpha=getattr(args, "bbox_smoothing_alpha", 0.60),
         max_missing_seconds=getattr(args, "track_max_missing_seconds", 6.0),
         center_match_ratio=getattr(args, "center_match_ratio", 0.85),
+        assumed_fps=tracker_fps,
     ), "simple_tracker"
 
 

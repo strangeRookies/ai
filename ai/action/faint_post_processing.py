@@ -474,7 +474,18 @@ class ExitEventPostProcessor:
         self.cooldown_seconds = max(0.0, float(cooldown_seconds))
         self._consecutive_by_track = {}
         self._last_event_time = {}
+        self._inside_by_track = {}
 
+    def observe(self, camera_id, track_id, *, inside_safe_zone, timestamp):
+        """Emit only after a tracked person crosses from inside to outside."""
+        key = f"{camera_id}:track:{track_id}"
+        if inside_safe_zone:
+            self._inside_by_track[key] = True
+            self.reset_track(camera_id, track_id)
+            return False
+        if not self._inside_by_track.pop(key, False):
+            return False
+        return self.should_trigger(camera_id, track_id, timestamp)
     def should_trigger(self, camera_id, track_id, timestamp):
         key = f"{camera_id}:track:{track_id}"
         consecutive = self._consecutive_by_track.get(key, 0) + 1
@@ -502,7 +513,18 @@ class HazardEventPostProcessor:
         self.cooldown_seconds = max(0.0, float(cooldown_seconds))
         self._consecutive_by_track = {}
         self._last_event_time = {}
+        self._inside_by_track = {}
 
+    def observe(self, camera_id, track_id, *, inside_safe_zone, timestamp):
+        """Emit only after a tracked person crosses from inside to outside."""
+        key = f"{camera_id}:track:{track_id}"
+        if inside_safe_zone:
+            self._inside_by_track[key] = True
+            self.reset_track(camera_id, track_id)
+            return False
+        if not self._inside_by_track.pop(key, False):
+            return False
+        return self.should_trigger(camera_id, track_id, timestamp)
     def should_trigger(self, camera_id, track_id, timestamp):
         key = f"{camera_id}:track:{track_id}"
         consecutive = self._consecutive_by_track.get(key, 0) + 1

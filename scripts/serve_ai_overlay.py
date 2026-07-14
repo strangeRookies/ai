@@ -154,6 +154,12 @@ def _record_publish_outcome(summary, prefix, result=None, *, attempted=False):
         summary[f"{prefix}_failed"] = int(summary.get(f"{prefix}_failed", 0)) + 1
 
 
+def _publish_event(publisher, payload, topic):
+    enqueue = getattr(publisher, "enqueue_event", None)
+    if callable(enqueue):
+        return enqueue(payload, topic)
+    return publisher.publish(payload, topic=topic)
+
 def mjpeg_server_enabled(args: argparse.Namespace) -> bool:
     """MJPEG 서버를 켜야 하는지 판단. mjpeg_enabled 또는 mjpeg_debug 중 하나라도 켜지면 서버를 시작한다."""
     return bool(getattr(args, "mjpeg_enabled", False) or getattr(args, "mjpeg_debug", False))
@@ -834,6 +840,8 @@ def _process_frame_impl(
     summary["per_track_sequences_generated"] = {
         str(track_id): count for track_id, count in sequence_buffer.sequences_generated_by_track.items()
     }
+    if hasattr(sequence_buffer, "sequence_completion_summary"):
+        summary["sequence_completion"] = sequence_buffer.sequence_completion_summary()
     if pose_reporter is not None:
         summary["pose_diagnostics"] = pose_reporter.observe(
             camera_login_id=stream_id,
@@ -1000,7 +1008,7 @@ def _process_frame_impl(
             print(f"[ai-overlay-event] {json.dumps(payload, ensure_ascii=False)}", flush=True)
         if publisher is not None:
             try:
-                event_publish_result = publisher.publish(payload, topic=topic_settings["event_topic"], qos=1)
+                event_publish_result = _publish_event(publisher, payload, topic_settings["event_topic"])
                 _record_publish_outcome(summary, "events_publish", event_publish_result, attempted=True)
                 # Single VLM snapshot assist hook (never blocks alert loop)
                 try:
@@ -1369,6 +1377,10 @@ class OverlayWorker:
                 time.sleep(0.005)
                 continue
 
+            if inference_count == 0:
+                tracker, postprocessing_mode = create_detection_postprocessor(self.args, source_fps=getattr(frame_packet, "fps", None))
+                summary["tracker_effective_fps"] = getattr(tracker, "assumed_fps", getattr(getattr(tracker, "config", None), "frame_rate", None))
+
             # RTSP reconnect / large frame gap tracker reset check
             frame_gap = None
             if last_frame_id is not None and frame_packet.frame_idx is not None:
@@ -1391,7 +1403,7 @@ class OverlayWorker:
                 reset_reason = "LARGE_FRAME_GAP"
 
             if reset_decided:
-                tracker, postprocessing_mode = create_detection_postprocessor(self.args)
+                tracker, postprocessing_mode = create_detection_postprocessor(self.args, source_fps=getattr(frame_packet, "fps", None))
                 if self.args.classifier_input == "crops":
                     sequence_buffers[current_cam_id] = PerTrackCropSequenceBuffers(
                         self.args.sequence_length,

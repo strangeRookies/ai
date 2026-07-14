@@ -283,6 +283,10 @@ def run(args):
                 time.sleep(0.005)
                 continue
                 
+            if summary["frames_processed"] == 0:
+                detection_postprocessor, postprocessing_mode = create_detection_postprocessor(args, source_fps=getattr(frame_packet, "fps", None))
+                summary["tracker_effective_fps"] = getattr(detection_postprocessor, "assumed_fps", getattr(getattr(detection_postprocessor, "config", None), "frame_rate", None))
+
             frame_started_at = time.perf_counter()
             frame_metadata = frame_buffer.get_by_frame_id(camera_login_id, frame_packet.frame_id)
             if frame_metadata is not None:
@@ -560,7 +564,7 @@ def run(args):
                     if publisher is not None:
                         summary["events_publish_attempted"] += 1
                         try:
-                            published = publisher.publish(payload, topic=topic_settings["event_topic"], qos=1)
+                            published = _publish_event(publisher, payload, topic_settings["event_topic"])
                             if published is True:
                                 summary["events_publish_succeeded"] += 1
                             else:
@@ -625,10 +629,19 @@ def run(args):
             summary["lstm_predictions"],
         )
     )
+    active_sequence_buffer = crop_buffers if crop_buffers is not None else keypoint_buffers
+    if hasattr(active_sequence_buffer, "sequence_completion_summary"):
+        summary["sequence_completion"] = active_sequence_buffer.sequence_completion_summary()
     summary["incident_recovery"] = incident_recovery.diagnostics(camera_login_id)
     finalize_runtime_summary_fields(summary)
     return summary
 
+
+def _publish_event(publisher, payload, topic):
+    enqueue = getattr(publisher, "enqueue_event", None)
+    if callable(enqueue):
+        return enqueue(payload, topic)
+    return publisher.publish(payload, topic=topic)
 
 def write_run_summary(output_path, summary):
     output = Path(output_path)

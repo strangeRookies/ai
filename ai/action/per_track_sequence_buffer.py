@@ -7,6 +7,20 @@ from tracking.simple_tracker import bbox_iou, center_distance_ratio
 from ai.action.sequence_buffer_migration import merge_sequence_buffers
 
 
+def aggregate_sequence_completion(sequence_diagnostics, sequences_generated_by_track):
+    """Return serializable completion metrics shared by runtime summaries."""
+    diagnostics = dict(sequence_diagnostics or {})
+    generated = dict(sequences_generated_by_track or {})
+    observed = {int(track_id) for track_id in diagnostics if int(track_id) >= 0}
+    observed.update(int(track_id) for track_id in generated)
+    eligible = {track_id for track_id in observed if int(diagnostics.get(track_id, {}).get("buffer_length", 0)) > 0}
+    completed = {track_id for track_id, count in generated.items() if int(count) > 0}
+    reasons = {}
+    for track_id in observed - completed:
+        reason = str(diagnostics.get(track_id, {}).get("reason") or "unknown")
+        reasons[reason] = int(reasons.get(reason, 0)) + 1
+    return {"total_observed_tracks": len(observed), "eligible_tracks": len(eligible), "tracks_with_completed_sequence": len(completed), "total_completed_sequences": sum(int(count) for count in generated.values()), "sequence_completion_rate": round(len(completed) / len(eligible), 4) if eligible else None, "average_sequences_per_eligible_track": round(sum(int(count) for count in generated.values()) / len(eligible), 4) if eligible else 0.0, "incomplete_reasons": reasons, "incomplete_buffer_not_full": int(reasons.get("buffer_not_full", 0)), "incomplete_insufficient_keypoints": int(reasons.get("insufficient_keypoints", 0)), "incomplete_missing_track_grace": int(reasons.get("missing_track_grace", 0)), "incomplete_id_switch": int(reasons.get("id_switch", 0)), "incomplete_detector_miss": int(reasons.get("detector_miss", 0)), "incomplete_reset_or_eof": int(reasons.get("reset_or_eof", 0)), "incomplete_cheap_filter_skipped": int(reasons.get("cheap_filter_skipped", 0)), "maximum_frame_gap": 0, "average_frame_gap": 0.0, "identity_consistency_violations": 0}
+
 def _avg_keypoint_confidence(detection):
     confidences = [
         float(point.get("confidence", 0.0))
@@ -150,6 +164,9 @@ class PerTrackKeypointSequenceBuffers:
 
     def sequence_diagnostics(self):
         return dict(self.last_sequence_diagnostics)
+
+    def sequence_completion_summary(self):
+        return aggregate_sequence_completion(self.last_sequence_diagnostics, self.sequences_generated_by_track)
 
     def migrate_track_id(self, old_track_id, new_track_id) -> bool:
         """Move buffer/state from old_track_id to new_track_id (incident recovery)."""
@@ -320,6 +337,9 @@ class PerTrackCropSequenceBuffers:
 
     def sequence_diagnostics(self):
         return dict(self.last_sequence_diagnostics)
+
+    def sequence_completion_summary(self):
+        return aggregate_sequence_completion(self.last_sequence_diagnostics, self.sequences_generated_by_track)
 
     def migrate_track_id(self, old_track_id, new_track_id) -> bool:
         old_id, new_id = int(old_track_id), int(new_track_id)

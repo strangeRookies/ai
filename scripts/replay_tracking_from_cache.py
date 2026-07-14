@@ -12,7 +12,7 @@ import json
 import math
 import sys
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -138,6 +138,22 @@ def load_cache(cache_path: Path) -> tuple[dict, list[dict]]:
     frames.sort(key=lambda x: int(x["frame_id"]))
     return meta, frames
 
+
+def validate_cache(meta: dict, frames: list[dict]) -> dict:
+    """Validate ordered finite detection rows before tracker replay."""
+    previous = None
+    for row in frames:
+        frame_id = int(row["frame_id"])
+        if previous is not None and frame_id <= previous:
+            raise ValueError("cache frame_id must be strictly increasing")
+        previous = frame_id
+        for detection in row.get("detections") or []:
+            bbox = detection.get("bbox_xyxy") or []
+            if len(bbox) != 4 or not all(math.isfinite(float(value)) for value in bbox):
+                raise ValueError("cache bbox must contain four finite values")
+    if meta.get("frames_written") is not None and int(meta["frames_written"]) != len(frames):
+        raise ValueError("cache frames_written does not match rows")
+    return {"frames": len(frames), "last_frame_id": previous}
 
 def build_cache_from_video(
     video_path: Path,
@@ -355,44 +371,28 @@ class ConfigurableTracker(SimpleTrackAssigner):
 
 
 def classify_iou_failure(event: dict, gap_seconds: float, prev_bbox, det_bbox, pred_bbox) -> str:
-    """Classify residual association failures. Only call for IOU_BELOW_THRESHOLD.
-
-    Classification priority (documented for experiment reports):
-    - LOW_CONFIDENCE: det conf < 0.20
-    - MULTIPLE_CANDIDATES: 2+ rejected unmatched tracks
-    - SHORT_OCCLUSION: gap_seconds >= 0.4
-    - BBOX_SIZE_JUMP: width/height scale >= 2x either way
-    - PREDICTION_OVERSHOOT: predicted center far from previous
-    - EDGE_OF_FRAME: detection near frame border
-    - DETECTION_JITTER: single rejected candidate with measurable IoU/center
-    - UNKNOWN: residual
-    """
-    conf = float(event.get("confidence") or 0.0)
-    rejected = (event.get("bestRejected") or {}).get("rejectedCandidates") or []
-    if conf < 0.20:
-        return "LOW_CONFIDENCE"
+    """Classify a residual association failure from tracker evidence."""
+    confidence = float(event.get("confidence") or 0.0)
+    rejected = list((event.get("bestRejected") or {}).get("rejectedCandidates") or [])
+    if confidence < 0.20:
+        return "LOW_CONFIDENCE_DETECTION"
     if len(rejected) >= 2:
-        return "MULTIPLE_CANDIDATES"
+        return "MULTI_TRACK_COMPETITION"
     if gap_seconds >= 0.4:
-        return "SHORT_OCCLUSION"
-    if prev_bbox and det_bbox and len(prev_bbox) >= 4 and len(det_bbox) >= 4:
-        pw = max(1e-3, float(prev_bbox[2]) - float(prev_bbox[0]))
-        ph = max(1e-3, float(prev_bbox[3]) - float(prev_bbox[1]))
-        dw = max(1e-3, float(det_bbox[2]) - float(det_bbox[0]))
-        dh = max(1e-3, float(det_bbox[3]) - float(det_bbox[1]))
-        if max(dw / pw, pw / dw, dh / ph, ph / dh) >= 2.0:
-            return "BBOX_SIZE_JUMP"
+        return "FRAME_GAP"
+    if det_bbox and (float(det_bbox[0]) < 8 or float(det_bbox[1]) < 8 or float(det_bbox[2]) > 1272 or float(det_bbox[3]) > 712):
+        return "SCREEN_BOUNDARY"
+    if prev_bbox and det_bbox:
+        prev_ratio = max(float(prev_bbox[2]) - float(prev_bbox[0]), 1e-3) / max(float(prev_bbox[3]) - float(prev_bbox[1]), 1e-3)
+        det_ratio = max(float(det_bbox[2]) - float(det_bbox[0]), 1e-3) / max(float(det_bbox[3]) - float(det_bbox[1]), 1e-3)
+        if abs(det_ratio / prev_ratio - 1.0) >= 0.5:
+            return "BBOX_ASPECT_RATIO_CHANGE"
     if pred_bbox and prev_bbox and center_distance_ratio(pred_bbox, prev_bbox) > 1.5:
-        return "PREDICTION_OVERSHOOT"
-    if det_bbox and len(det_bbox) >= 4 and (
-        float(det_bbox[0]) < 8
-        or float(det_bbox[1]) < 8
-        or float(det_bbox[2]) > 1272
-        or float(det_bbox[3]) > 712
-    ):
-        return "EDGE_OF_FRAME"
-    if rejected and (rejected[0].get("iou") is not None or rejected[0].get("centerRatio") is not None):
-        return "DETECTION_JITTER"
+        return "PREDICTED_BBOX_DRIFT"
+    if rejected and rejected[0].get("iou") is not None and abs(float(rejected[0]["iou"]) - 0.20) <= 0.03:
+        return "THRESHOLD_EDGE"
+    if rejected and rejected[0].get("centerRatio") is not None and float(rejected[0]["centerRatio"]) > 1.8:
+        return "VELOCITY_OVERSHOOT"
     return "UNKNOWN"
 
 
@@ -403,6 +403,8 @@ def run_tracker_config(
     source_fps: float,
 ) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
+    effective_fps = float(source_fps) if float(source_fps) > 0 else cfg.assumed_fps
+    cfg = replace(cfg, assumed_fps=effective_fps)
     (out_dir / "config.json").write_text(json.dumps(asdict(cfg), indent=2), encoding="utf-8")
 
     tracker = ConfigurableTracker(cfg)
@@ -657,6 +659,7 @@ def run_tracker_config(
         "frames": n_frames,
         "duration_sec": round(duration_sec, 3),
         "source_fps": source_fps,
+        "tracker_assumed_fps": cfg.assumed_fps,
         "total_new_tracks": total_new,
         "expected_initial_tracks": expected_initial,
         "unexpected_new_tracks": unexpected_new,
