@@ -176,33 +176,52 @@ class Motion54PackagingTest(unittest.TestCase):
                 package_checkpoint(src, dst, sequence_length=30, sequence_stride=15, dry_run=False)
 
     def test_schema_collision_motion_checkpoint_vs_bbox_runtime(self):
+        """motion54 metadata must fail-fast when forced into bbox54 (and reverse)."""
+        from ai.action.feature_schema import keypoint_bbox54_feature_names
+
         with tempfile.TemporaryDirectory() as tmp:
             src = Path(tmp) / "best.pt"
             packaged = Path(tmp) / "packaged.pt"
             _make_raw_motion54_checkpoint(src)
             package_checkpoint(src, packaged, sequence_length=30, sequence_stride=15, dry_run=False)
-            clf = LSTMActionClassifier(str(packaged), device="cpu")
-            self.assertEqual(clf.feature_schema, KEYPOINT_MOTION54_SCHEMA_VERSION)
-            # Force wrong schema at predict-time feature build path is not exposed; constructor mismatch:
-            bad = torch.load(packaged, map_location="cpu")
-            bad["feature_schema_version"] = KEYPOINT_BBOX54_SCHEMA_VERSION
-            bad_path = Path(tmp) / "bad.pt"
-            torch.save(bad, bad_path)
-            # schema still 54-dim compatible so constructor accepts; runtime feature path uses bbox append
-            # Objective: motion54 ckpt must not silently run as bbox - packaging forbids bbox source.
-            # Collision at load when schema/dim mismatch:
-            bad["model_config"] = dict(bad["model_config"])
-            # Keep dims equal; instead verify classifier with motion schema rejects wrong produced dims if forced.
+
+            # Happy path still works for packaged motion54.
             clf_motion = LSTMActionClassifier(str(packaged), device="cpu")
-            sequence = {
-                "detections": [{"keypoints": _standing_pose(), "bbox": [1, 2, 3, 4]} for _ in range(8)],
-                "frame_shapes": [(480, 640, 3)] * 8,
-                "camera_login_id": "cam_01",
-                "track_id": 1,
-            }
-            out = clf_motion.predict(sequence)
-            self.assertIn(out["label"], {"Normal", "Faint"})
-            self.assertEqual(clf_motion.last_tensor_shape, (1, 8, 54))
+            self.assertEqual(clf_motion.feature_schema, KEYPOINT_MOTION54_SCHEMA_VERSION)
+
+            # motion54 weights + motion names but schema flipped to bbox54 → collision fail
+            motion_as_bbox = torch.load(packaged, map_location="cpu")
+            motion_as_bbox["feature_schema_version"] = KEYPOINT_BBOX54_SCHEMA_VERSION
+            motion_as_bbox_path = Path(tmp) / "motion_as_bbox.pt"
+            torch.save(motion_as_bbox, motion_as_bbox_path)
+            with self.assertRaisesRegex(ValueError, "schema collision|does not match feature_names"):
+                LSTMActionClassifier(str(motion_as_bbox_path), device="cpu")
+
+            # bbox54 names + motion54 schema → collision fail
+            bbox_as_motion = torch.load(packaged, map_location="cpu")
+            bbox_as_motion["feature_schema_version"] = KEYPOINT_MOTION54_SCHEMA_VERSION
+            bbox_as_motion["feature_names"] = keypoint_bbox54_feature_names()
+            bbox_as_motion_path = Path(tmp) / "bbox_as_motion.pt"
+            torch.save(bbox_as_motion, bbox_as_motion_path)
+            with self.assertRaisesRegex(ValueError, "schema collision|does not match feature_names"):
+                LSTMActionClassifier(str(bbox_as_motion_path), device="cpu")
+
+            # Packaging path also rejects bbox54 sources for motion package
+            bbox_src = Path(tmp) / "bbox_src.pt"
+            model_config = {"input_size": 54, "hidden_size": 16, "num_layers": 1, "num_classes": 2, "dropout": 0.0}
+            model = LSTMActionModel(**model_config)
+            torch.save(
+                {
+                    "model_state": model.model.state_dict(),
+                    "model_config": model_config,
+                    "classes": ["Normal", "Faint"],
+                    "feature_schema_version": KEYPOINT_BBOX54_SCHEMA_VERSION,
+                    "feature_names": keypoint_bbox54_feature_names(),
+                },
+                bbox_src,
+            )
+            with self.assertRaisesRegex(ValueError, "keypoint_bbox54"):
+                package_checkpoint(bbox_src, Path(tmp) / "out.pt", sequence_length=30, sequence_stride=15)
 
     def test_bbox_checkpoint_rejects_as_motion_package_source_and_dim_mismatch(self):
         with tempfile.TemporaryDirectory() as tmp:

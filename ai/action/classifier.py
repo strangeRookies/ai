@@ -11,6 +11,7 @@ from ai.action.feature_schema import (
     KEYPOINT_MOTION54_SCHEMA_VERSION,
     KNOWN_KEYPOINT_SCHEMAS,
     feature_dim_for_schema,
+    feature_names_for_schema,
 )
 from ai.action.motion_features import append_motion_features
 
@@ -112,6 +113,18 @@ class LSTMActionClassifier(ActionClassifier):
                     f"Checkpoint Metadata Mismatch: feature_names length={len(self.feature_names)} "
                     f"does not match input_size={self.input_size}. checkpoint={checkpoint_path}"
                 )
+            # Reject motion↔bbox collisions when names are present (strict for 54-dim schemas).
+            if self.feature_schema in {
+                KEYPOINT_MOTION54_SCHEMA_VERSION,
+                KEYPOINT_BBOX54_SCHEMA_VERSION,
+            } and self.feature_names:
+                expected_names = feature_names_for_schema(self.feature_schema)
+                if list(self.feature_names) != list(expected_names):
+                    raise ValueError(
+                        f"Checkpoint schema collision: feature_schema={self.feature_schema} "
+                        f"does not match feature_names (e.g. motion54 vs bbox54). "
+                        f"checkpoint={checkpoint_path}"
+                    )
 
     def predict(self, sequence):
         if not sequence:
