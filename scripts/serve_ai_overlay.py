@@ -27,6 +27,8 @@ from ai.inference.rtsp_runtime import (
     create_detection_postprocessor,
     ensure_mock_keypoints,
     log_pose_tracking_config,
+    apply_tracker_timebase,
+    tracker_configured_fps,
 )
 from ai.inference.rtsp_runtime import (
     log_classifier_contract,
@@ -50,6 +52,7 @@ from ai.inference.tracking_debug import (
     log_track_lifecycle_events,
 )
 from ai.inference.fps_audit import FpsAuditWindow, log_fps_audit
+from ai.inference.tracker_timebase import TrackerUpdateFpsEstimator
 from ai.inference.session_boundary import session_reset_reason
 from ai.inference.pose_diagnostics import PoseDiagnosticsReporter, config_from_args as pose_diagnostics_config_from_args
 from ai.overlay_http import OverlayState, create_overlay_server
@@ -1359,6 +1362,9 @@ class OverlayWorker:
 
         last_heartbeat_time = time.monotonic()
         inference_count = 0
+        tracker_source_initialized = False
+        tracker_timebase_estimator = None
+        tracker_timebase_last_applied_at = 0.0
         mqtt_publish_count = 0
         last_frame_id = None
         last_captured_at_ms = None
@@ -1378,9 +1384,19 @@ class OverlayWorker:
                 time.sleep(0.005)
                 continue
 
-            if inference_count == 0:
-                tracker, postprocessing_mode = create_detection_postprocessor(self.args, source_fps=getattr(frame_packet, "fps", None))
-                summary["tracker_effective_fps"] = getattr(tracker, "assumed_fps", getattr(getattr(tracker, "config", None), "frame_rate", None))
+            if not tracker_source_initialized:
+                source_fps = getattr(frame_packet, "fps", None)
+                tracker, postprocessing_mode = create_detection_postprocessor(self.args, source_fps=source_fps)
+                tracker_source_initialized = True
+                tracker_timebase_estimator = TrackerUpdateFpsEstimator(
+                    source_fps,
+                    getattr(self.args, "frame_rate", 30),
+                    latest_frame_mode=True,
+                )
+                summary["tracker_effective_fps"] = tracker_configured_fps(tracker)
+                summary["trackerFpsState"] = tracker_timebase_estimator.state
+                summary["trackerFpsSource"] = tracker_timebase_estimator.source
+                self.fps_audit.tracker_config_frame_rate = tracker_configured_fps(tracker)
 
             # RTSP reconnect / large frame gap tracker reset check
             frame_gap = None
@@ -1400,7 +1416,16 @@ class OverlayWorker:
             reset_decided = reset_reason is not None
 
             if reset_decided:
-                tracker, postprocessing_mode = create_detection_postprocessor(self.args, source_fps=getattr(frame_packet, "fps", None))
+                source_fps = getattr(frame_packet, "fps", None)
+                tracker, postprocessing_mode = create_detection_postprocessor(self.args, source_fps=source_fps)
+                tracker_source_initialized = True
+                tracker_timebase_estimator = TrackerUpdateFpsEstimator(
+                    source_fps,
+                    getattr(self.args, "frame_rate", 30),
+                    latest_frame_mode=True,
+                )
+                tracker_timebase_last_applied_at = 0.0
+                summary["tracker_effective_fps"] = tracker_configured_fps(tracker)
                 if self.args.classifier_input == "crops":
                     sequence_buffers[current_cam_id] = PerTrackCropSequenceBuffers(
                         self.args.sequence_length,
@@ -1522,6 +1547,8 @@ class OverlayWorker:
             self.fps_audit.note_analysis()
             self.fps_audit.note_detector()
             self.fps_audit.note_tracker_update()
+            if tracker_timebase_estimator is not None:
+                tracker_timebase_estimator.observe_update(frame_packet.timestamp)
             if not self._resolution_audited and frame_packet.frame is not None:
                 h, w = frame_packet.frame.shape[:2]
                 print(
@@ -1546,6 +1573,23 @@ class OverlayWorker:
                 mjpeg_count = None
             audit = self.fps_audit.maybe_emit(mjpeg_frame_count=mjpeg_count)
             if audit is not None:
+                if tracker_timebase_estimator is not None:
+                    tracker_timebase_estimator.record_window(audit.get("trackerUpdateFps"))
+                    current_fps = tracker_configured_fps(tracker)
+                    now_monotonic = time.monotonic()
+                    if (
+                        tracker_timebase_estimator.should_apply(current_fps)
+                        and now_monotonic - tracker_timebase_last_applied_at >= 10.0
+                        and apply_tracker_timebase(tracker, tracker_timebase_estimator.effective_fps)
+                    ):
+                        tracker_timebase_last_applied_at = now_monotonic
+                        self.fps_audit.tracker_config_frame_rate = tracker_configured_fps(tracker)
+                    summary["tracker_effective_fps"] = tracker_configured_fps(tracker)
+                    summary["trackerFpsState"] = tracker_timebase_estimator.state
+                    summary["trackerConfiguredFps"] = tracker_configured_fps(tracker)
+                    summary["trackerMeasuredFps"] = tracker_timebase_estimator.measured_fps
+                    summary["trackerFpsSource"] = tracker_timebase_estimator.source
+                    summary["trackerFpsSampleCount"] = tracker_timebase_estimator.sample_count
                 log_fps_audit(audit)
 
             now_ms = time.time_ns() // 1_000_000

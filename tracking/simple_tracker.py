@@ -41,6 +41,8 @@ class SimpleTrackAssigner:
         self.soft_iou_scale = max(0.0, float(soft_iou_scale))
         self.soft_center_scale = max(1.0, float(soft_center_scale))
         self.assumed_fps = max(1.0, float(assumed_fps))
+        # Preserve the configured lost-track tolerance in seconds across cadence changes.
+        self.track_buffer_seconds = self.track_buffer / self.assumed_fps
         self.near_dup_suppress_mode = str(near_dup_suppress_mode or "none").lower()
         self.near_dup_iou_thresh = float(near_dup_iou_thresh)
         self.near_dup_center_ratio = float(near_dup_center_ratio)
@@ -53,6 +55,18 @@ class SimpleTrackAssigner:
         self._frame_index = 0
         self.last_diagnostics = self._empty_diagnostics()
         self.last_events: list[dict] = []
+
+    def set_assumed_fps(self, assumed_fps):
+        """Update only timebase-derived buffer length; keep existing track state intact."""
+        try:
+            effective_fps = float(assumed_fps)
+        except (TypeError, ValueError):
+            return False
+        if effective_fps <= 0.0:
+            return False
+        self.assumed_fps = effective_fps
+        self.track_buffer = max(1, int(round(self.track_buffer_seconds * self.assumed_fps)))
+        return True
 
     def update(self, detections, now=None):
         now = time.time() if now is None else float(now)
@@ -617,6 +631,7 @@ class SimpleTrackAssigner:
             "smoothed_bbox": smoothed_bbox,
             "velocity": velocity,
             "last_seen_at": now,
+            "assumed_fps": self.assumed_fps,
             "age": age,
             "missing_frames": 0,
             "confidence": float(detection.get("confidence", 0.0)),
@@ -820,7 +835,10 @@ def predicted_bbox(track, *, max_predict_seconds=0.35, now=None):
     if now is None or last_seen is None:
         missing_frames = max(0, int(track.get("missing_frames", 0)))
         # Fallback when timestamps unavailable: assume ~15–30 FPS without overshoot.
-        gap_s = min(float(max_predict_seconds), missing_frames / 20.0)
+        fallback_fps = float(track.get("assumed_fps") or 20.0)
+        if fallback_fps <= 0.0:
+            fallback_fps = 20.0
+        gap_s = min(float(max_predict_seconds), missing_frames / fallback_fps)
     else:
         gap_s = max(0.0, float(now) - float(last_seen))
         gap_s = min(gap_s, float(max_predict_seconds))

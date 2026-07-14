@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import os
+from dataclasses import replace
 from dataclasses import dataclass
 from typing import Final
 from typing import Protocol
@@ -21,6 +22,9 @@ BYTETRACK_MODERN_PARAMETERS: Final = {
 
 
 class ByteTrackAdapter(Protocol):
+    def set_timebase(self, frame_rate: float) -> bool:
+        ...
+
     def update(self, detections: list[dict]) -> list[dict]:
         ...
 
@@ -84,6 +88,13 @@ class SupervisionPostProcessor:
     def diagnostics(self) -> dict:
         return self._tracker.diagnostics()
 
+    def set_timebase(self, frame_rate: float) -> bool:
+        """Safely update ByteTrack timebase without replacing its active track state."""
+        if not self._tracker.set_timebase(frame_rate):
+            return False
+        self.config = replace(self.config, frame_rate=int(round(frame_rate)))
+        return True
+
 
 class SupervisionByteTrackAdapter:
     def __init__(
@@ -124,6 +135,8 @@ class SupervisionByteTrackAdapter:
             "supported_parameters": sorted(_constructor_parameters(sv.ByteTrack)),
         }
         self._tracker = sv.ByteTrack(**constructor_kwargs)
+        self._frame_rate = max(1.0, float(frame_rate))
+        self._track_buffer_seconds = max(0, int(track_buffer)) / self._frame_rate
         self._active_track_ids: set[int] = set()
         self._previous_active_track_ids: set[int] = set()
         self._lifecycle_events: list[dict] = []
@@ -184,6 +197,28 @@ class SupervisionByteTrackAdapter:
             if self._stability_fallback
             else None
         )
+
+    def set_timebase(self, frame_rate: float) -> bool:
+        """Rescale frame-count buffers in seconds while preserving ByteTrack state."""
+        try:
+            effective_fps = float(frame_rate)
+        except (TypeError, ValueError):
+            return False
+        if effective_fps <= 0.0:
+            return False
+        self._frame_rate = effective_fps
+        buffer_frames = max(1, int(round(self._track_buffer_seconds * effective_fps)))
+        updated = False
+        if hasattr(self._tracker, "frame_rate"):
+            self._tracker.frame_rate = int(round(effective_fps))
+            updated = True
+        if hasattr(self._tracker, "max_time_lost"):
+            self._tracker.max_time_lost = buffer_frames
+            updated = True
+        if self._fallback_assigner is not None:
+            self._fallback_assigner.set_assumed_fps(effective_fps)
+            updated = True
+        return updated
 
     def update(self, detections: list[dict]) -> list[dict]:
         """supervision ByteTrack을 호출하고 결과를 원본 YOLO detection에 다시 매핑한다.

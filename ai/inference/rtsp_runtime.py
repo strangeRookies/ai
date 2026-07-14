@@ -151,6 +151,28 @@ def create_detection_postprocessor(args, source_fps=None):
     ), "simple_tracker"
 
 
+def tracker_configured_fps(postprocessor) -> float | None:
+    """Read the currently configured tracker timebase without backend-specific callers."""
+    value = getattr(postprocessor, "assumed_fps", None)
+    if value is None:
+        value = getattr(getattr(postprocessor, "config", None), "frame_rate", None)
+    try:
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def apply_tracker_timebase(postprocessor, fps: float) -> bool:
+    """Update a tracker in place; never recreate it merely for cadence adjustment."""
+    setter = getattr(postprocessor, "set_assumed_fps", None)
+    if callable(setter):
+        return bool(setter(fps))
+    setter = getattr(postprocessor, "set_timebase", None)
+    if callable(setter):
+        return bool(setter(fps))
+    return False
+
+
 def update_detections_with_postprocessor(postprocessor, detections, frame, timestamp):
     """선택된 tracker 인터페이스 차이를 숨기고 tracked detections를 반환한다.
 

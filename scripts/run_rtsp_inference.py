@@ -41,7 +41,11 @@ from ai.inference.rtsp_runtime import (
     update_detections_with_postprocessor,
     update_prediction_counts,
     update_tracking_summary,
+    apply_tracker_timebase,
+    tracker_configured_fps,
 )
+from ai.inference.fps_audit import FpsAuditWindow, log_fps_audit
+from ai.inference.tracker_timebase import TrackerUpdateFpsEstimator
 from ai.inference.tensorrt_runtime import (
     attach_runtime_summary_fields,
     finalize_runtime_summary_fields,
@@ -223,6 +227,9 @@ def run(args):
     is_offline_video = rtsp_url_str.endswith((".mp4", ".avi", ".mkv", ".mov")) or args.detector_mode == "mock" or getattr(args, "max_frames", 0) > 0
     max_q_size = 10000 if is_offline_video else getattr(args, "frame_queue_maxsize", 3)
     queue = CameraFrameQueue(camera_login_id, maxsize=max_q_size)
+    fps_audit = FpsAuditWindow(camera_login_id=camera_login_id, window_sec=10.0)
+    tracker_timebase_estimator = None
+    tracker_timebase_last_applied_at = 0.0
     stop_event = threading.Event()
     reader_exited = threading.Event()
 
@@ -249,6 +256,8 @@ def run(args):
                         fps=getattr(packet, "fps", 0.0)
                     )
                     queue.put_latest(packet_wrapped)
+                    fps_audit.source_fps = float(getattr(packet, "fps", 0.0) or 0.0) or fps_audit.source_fps
+                    fps_audit.note_capture()
                     
                     every_n = max(0, int(getattr(args, "debug_every_n", 30)))
                     if every_n > 0 and frame_metadata.frame_id % every_n == 0:
@@ -284,8 +293,17 @@ def run(args):
                 continue
                 
             if summary["frames_processed"] == 0:
-                detection_postprocessor, postprocessing_mode = create_detection_postprocessor(args, source_fps=getattr(frame_packet, "fps", None))
-                summary["tracker_effective_fps"] = getattr(detection_postprocessor, "assumed_fps", getattr(getattr(detection_postprocessor, "config", None), "frame_rate", None))
+                source_fps = getattr(frame_packet, "fps", None)
+                detection_postprocessor, postprocessing_mode = create_detection_postprocessor(args, source_fps=source_fps)
+                tracker_timebase_estimator = TrackerUpdateFpsEstimator(
+                    source_fps,
+                    getattr(args, "frame_rate", 30),
+                    latest_frame_mode=drop_stale,
+                )
+                summary["tracker_effective_fps"] = tracker_configured_fps(detection_postprocessor)
+                summary["trackerFpsState"] = tracker_timebase_estimator.state
+                summary["trackerFpsSource"] = tracker_timebase_estimator.source
+                fps_audit.tracker_config_frame_rate = tracker_configured_fps(detection_postprocessor)
 
             frame_started_at = time.perf_counter()
             frame_metadata = frame_buffer.get_by_frame_id(camera_login_id, frame_packet.frame_id)
@@ -306,6 +324,31 @@ def run(args):
                 frame_packet.frame,
                 frame_packet.timestamp,
             )
+            fps_audit.note_analysis()
+            fps_audit.note_detector()
+            fps_audit.note_tracker_update()
+            if tracker_timebase_estimator is not None:
+                tracker_timebase_estimator.observe_update(frame_packet.timestamp)
+            audit = fps_audit.maybe_emit()
+            if audit is not None:
+                if tracker_timebase_estimator is not None:
+                    tracker_timebase_estimator.record_window(audit.get("trackerUpdateFps"))
+                    current_fps = tracker_configured_fps(detection_postprocessor)
+                    now_monotonic = time.monotonic()
+                    if (
+                        tracker_timebase_estimator.should_apply(current_fps)
+                        and now_monotonic - tracker_timebase_last_applied_at >= 10.0
+                        and apply_tracker_timebase(detection_postprocessor, tracker_timebase_estimator.effective_fps)
+                    ):
+                        tracker_timebase_last_applied_at = now_monotonic
+                        fps_audit.tracker_config_frame_rate = tracker_configured_fps(detection_postprocessor)
+                    summary["tracker_effective_fps"] = tracker_configured_fps(detection_postprocessor)
+                    summary["trackerFpsState"] = tracker_timebase_estimator.state
+                    summary["trackerConfiguredFps"] = tracker_configured_fps(detection_postprocessor)
+                    summary["trackerMeasuredFps"] = tracker_timebase_estimator.measured_fps
+                    summary["trackerFpsSource"] = tracker_timebase_estimator.source
+                    summary["trackerFpsSampleCount"] = tracker_timebase_estimator.sample_count
+                log_fps_audit(audit)
             # Fall/Faint ROI recovery (does not change global detector conf).
             frame_shape = getattr(frame_packet.frame, "shape", None)
             if frame_shape is not None and len(frame_shape) >= 2:
