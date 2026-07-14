@@ -330,6 +330,10 @@ def sequence_metadata(sequence, args):
         "sequenceEndFrameId": int(sequence.get("sequence_end_frame_id", sequence.get("end_frame", 0))),
         "sequenceStartAtMs": sequence.get("sequence_start_at_ms"),
         "sequenceEndAtMs": sequence.get("sequence_end_at_ms"),
+        "sequenceTimingMode": sequence.get("sequence_timing_mode"),
+        "sequenceDurationMs": sequence.get("sequence_duration_ms"),
+        "sequenceSampleIntervalMs": sequence.get("sequence_sample_interval_ms"),
+        "sequenceStrideMs": sequence.get("sequence_stride_ms"),
     }
 
 

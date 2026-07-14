@@ -43,6 +43,20 @@ class IncidentRecoveryIntegrityTest(unittest.TestCase):
         self.assertNotIn(1, buffers._buffers)
         self.assertEqual([item["frame_id"] for item in buffers._buffers[2]._frames], [1, 2, 3])
 
+    def test_sequence_collision_preserves_latest_emit_timestamp(self):
+        buffers = PerTrackKeypointSequenceBuffers(sequence_length=3, stride=1, max_track_age_seconds=30.0)
+        source = KeypointSequenceBuffer(sequence_length=3, stride=1)
+        destination = KeypointSequenceBuffer(sequence_length=3, stride=1)
+        source._frames = [{"frame_id": 1, "frame_idx": 1, "detection": {"track_id": 1}}]
+        destination._frames = [{"frame_id": 2, "frame_idx": 2, "detection": {"track_id": 2}}]
+        source._last_emit_at_ms = 1000
+        destination._last_emit_at_ms = 1100
+        buffers._buffers = {1: source, 2: destination}
+        buffers._last_seen_at = {1: 1.0, 2: 2.0}
+
+        self.assertTrue(buffers.migrate_track_id(1, 2))
+        self.assertEqual(buffers._buffers[2]._last_emit_at_ms, 1100)
+
     def test_incompatible_collision_preserves_both_and_records_conflict(self):
         buffers = PerTrackKeypointSequenceBuffers(sequence_length=5, stride=1, max_track_age_seconds=30.0)
         buffers._buffers[1] = KeypointSequenceBuffer(sequence_length=3, stride=1)

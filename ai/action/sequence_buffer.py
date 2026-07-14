@@ -1,3 +1,5 @@
+from ai.action.sequence_timing import sequence_is_ready
+
 class CropSequenceBuffer:
     """Build overlapping crop sequences without changing input FPS.
 
@@ -12,6 +14,7 @@ class CropSequenceBuffer:
         self.resize_size = resize_size
         self._crops = []
         self._last_emit_frame = -1
+        self._last_emit_at_ms = None
 
     def add(self, frame_idx, frame, boxes, frame_id=None, captured_at_ms=None):
         box = largest_box(boxes)
@@ -30,10 +33,18 @@ class CropSequenceBuffer:
         self._crops = self._crops[-self.sequence_length :]
         if len(self._crops) < self.sequence_length:
             return None
-        if self._last_emit_frame >= 0 and frame_idx - self._last_emit_frame < self.stride:
+        ready, timing = sequence_is_ready(
+            self._crops,
+            self.stride,
+            self._last_emit_frame,
+            self._last_emit_at_ms,
+        )
+        if not ready:
             return None
         self._last_emit_frame = frame_idx
-        return {
+        if timing["sequence_timing_mode"] == "captured_at_ms":
+            self._last_emit_at_ms = int(self._crops[-1]["captured_at_ms"])
+        sequence = {
             "start_frame": self._crops[0]["frame_idx"],
             "end_frame": self._crops[-1]["frame_idx"],
             "sequence_start_frame_id": self._crops[0]["frame_id"],
@@ -43,6 +54,8 @@ class CropSequenceBuffer:
             "crops": [item["crop"] for item in self._crops],
             "box": self._crops[-1]["box"],
         }
+        sequence.update(timing)
+        return sequence
 
 
 def largest_box(boxes):
