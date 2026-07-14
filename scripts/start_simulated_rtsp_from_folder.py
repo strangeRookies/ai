@@ -59,8 +59,14 @@ def parse_arguments() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def video_for_camera(camera: RegisteredCamera, video_files: list[Path], index: int) -> Path:
-    return _video_for_camera(camera, video_files, index, REPO_ROOT)
+def video_for_camera(
+    camera: RegisteredCamera,
+    video_files: list[Path],
+    index: int,
+    *,
+    chromakey: bool = False,
+) -> Path:
+    return _video_for_camera(camera, video_files, index, REPO_ROOT, chromakey=chromakey)
 
 
 def main() -> None:

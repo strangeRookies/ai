@@ -19,7 +19,22 @@ from ai.simulated_rtsp_publisher import (
     summarize_ffmpeg_exit,
     tail_text_file,
 )
-from ai.simulated_rtsp_sources import scan_video_directory, stable_video_index, video_for_camera
+from ai.simulated_rtsp_sources import (
+    filter_stream_video_pools,
+    scan_video_directory,
+    stable_video_index,
+    video_for_camera,
+)
+
+
+def video_pool_for_camera_position(
+    camera_position: int,
+    outdoor_files: list[Path],
+    chromakey_files: list[Path],
+) -> tuple[list[Path], bool]:
+    if camera_position == 1:
+        return chromakey_files, True
+    return outdoor_files, False
 
 
 def run_simulated_rtsp_publisher(args: argparse.Namespace, repo_root: Path) -> None:
@@ -57,16 +72,20 @@ def run_simulated_rtsp_publisher(args: argparse.Namespace, repo_root: Path) -> N
         print(f"[simulated-rtsp][error] No video files (mp4, avi, mov, mkv) found in {video_dir}", file=sys.stderr)
         sys.exit(1)
 
-    from ai.simulated_rtsp_sources import filter_video_files
     try:
-        video_files, excluded_files = filter_video_files(all_scanned_files, args.domain, args.label, args.video_filter)
+        outdoor_files, chromakey_files, excluded_files = filter_stream_video_pools(
+            all_scanned_files, args.domain, args.label, args.video_filter
+        )
     except ValueError as exc:
         print(f"[simulated-rtsp][error] Filter mismatch: {exc}", file=sys.stderr)
         sys.exit(1)
 
     print(f"Scanned {len(all_scanned_files)} video files. Filter results:")
-    print(f"  Accepted ({len(video_files)}):")
-    for vf in video_files:
+    print(f"  Outdoor/non-chromakey ({len(outdoor_files)}):")
+    for vf in outdoor_files:
+        print(f"    - {vf.name}")
+    print(f"  Chromakey ({len(chromakey_files)}):")
+    for vf in chromakey_files:
         print(f"    - {vf.name}")
     if excluded_files:
         print(f"  Excluded ({len(excluded_files)}):")
@@ -125,8 +144,9 @@ def run_simulated_rtsp_publisher(args: argparse.Namespace, repo_root: Path) -> N
             if now - last_backend_poll_time >= poll_interval:
                 try:
                     all_scanned_files = scan_video_directory(video_dir)
-                    from ai.simulated_rtsp_sources import filter_video_files
-                    video_files, excluded_files = filter_video_files(all_scanned_files, args.domain, args.label, args.video_filter)
+                    outdoor_files, chromakey_files, excluded_files = filter_stream_video_pools(
+                        all_scanned_files, args.domain, args.label, args.video_filter
+                    )
                 except Exception as exc:
                     print(f"[simulated-rtsp][error] Failed during directory scan or filtering: {exc}", file=sys.stderr)
                     cleanup_all_streams()
@@ -140,11 +160,21 @@ def run_simulated_rtsp_publisher(args: argparse.Namespace, repo_root: Path) -> N
 
             if simulated_cameras is not None:
                 current_active_ids: set[str] = set()
-                for camera in simulated_cameras:
+                sorted_cameras = sorted(simulated_cameras, key=lambda item: item.camera_login_id)
+                for camera_position, camera in enumerate(sorted_cameras):
                     camera_login_id = camera.camera_login_id
                     current_active_ids.add(camera_login_id)
-                    video_index = stable_video_index(camera_login_id, len(video_files))
-                    assigned_video = video_for_camera(camera, video_files, video_index, repo_root)
+                    camera_video_pool, use_chromakey = video_pool_for_camera_position(
+                        camera_position, outdoor_files, chromakey_files
+                    )
+                    video_index = stable_video_index(camera_login_id, len(camera_video_pool))
+                    assigned_video = video_for_camera(
+                        camera,
+                        camera_video_pool,
+                        video_index,
+                        repo_root,
+                        chromakey=use_chromakey,
+                    )
                     target_rtsp_url = camera_rtsp_url(rtsp_base_url, camera_login_id)
 
                     existing = running_streams.get(camera_login_id)
@@ -169,7 +199,8 @@ def run_simulated_rtsp_publisher(args: argparse.Namespace, repo_root: Path) -> N
                         from ai.simulated_rtsp_sources import estimate_video_metadata
                         meta = estimate_video_metadata(assigned_video)
                         print(
-                            f"[simulated-rtsp] Mapping camera={camera_login_id} to video={assigned_video.name} "
+                            f"[simulated-rtsp] Mapping camera={camera_login_id} "
+                            f"pool={'chromakey' if use_chromakey else 'outdoor'} to video={assigned_video.name} "
                             f"(domain={meta['domain']}, label={meta['label']}, source={meta['source']})",
                             flush=True
                         )

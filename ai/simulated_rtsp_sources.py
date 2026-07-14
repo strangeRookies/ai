@@ -73,6 +73,54 @@ def filter_video_files(
     return matching, excluded
 
 
+def filter_stream_video_pools(
+    video_files: list[Path],
+    domain: str | None,
+    label: str | None,
+    video_filter: str | None,
+) -> tuple[list[Path], list[Path], list[Path]]:
+    """Build separate normal/outdoor and chromakey pools for two-camera streaming.
+
+    ``domain`` applies to the normal pool only. Chromakey paths commonly use an
+    ``indoor_chromakey`` directory name, so applying an ``outside`` domain filter
+    to that pool would make the requested split impossible.
+    """
+    outdoor_files: list[Path] = []
+    chromakey_files: list[Path] = []
+    excluded_files: list[Path] = []
+
+    for video_path in video_files:
+        path_lower = str(video_path.absolute()).lower()
+        is_chromakey = is_chromakey_video_path(video_path)
+        matches_common_filters = (
+            (not label or label.lower() in path_lower)
+            and (not video_filter or video_filter.lower() in path_lower)
+        )
+        matches_domain = is_chromakey or not domain or domain.lower() in path_lower
+
+        if not matches_common_filters or not matches_domain:
+            excluded_files.append(video_path)
+        elif is_chromakey:
+            chromakey_files.append(video_path)
+        else:
+            outdoor_files.append(video_path)
+
+    missing_pools: list[str] = []
+    if not outdoor_files:
+        missing_pools.append("outdoor/non-chromakey")
+    if not chromakey_files:
+        missing_pools.append("chromakey")
+    if missing_pools:
+        filter_summary = f"domain={domain}, label={label}, video_filter={video_filter}"
+        raise ValueError(
+            f"Required video pool(s) are empty: {', '.join(missing_pools)} ({filter_summary}). "
+            "Add at least one normal/outdoor video and one chromakey video whose path contains "
+            "chroma, chromakey, green_screen, studio, chm, croki, or 크로마키."
+        )
+
+    return outdoor_files, chromakey_files, excluded_files
+
+
 def estimate_video_metadata(video_path: Path) -> dict[str, str]:
     path_lower = str(video_path.absolute()).lower()
     
@@ -109,21 +157,39 @@ def estimate_video_metadata(video_path: Path) -> dict[str, str]:
     }
 
 
-def resolve_assigned_video_path(camera: RegisteredCamera, video_pool: Path, repo_root: Path) -> Path | None:
+def resolve_assigned_video_path(
+    camera: RegisteredCamera,
+    video_pool: Path,
+    repo_root: Path,
+    *,
+    chromakey: bool = False,
+) -> Path | None:
     if not camera.assigned_video_path:
         return None
 
     pool_root = resolved_video_pool(video_pool, repo_root)
     for candidate in assigned_video_candidates(camera.assigned_video_path, pool_root, repo_root):
-        if candidate.exists() and candidate.is_file() and is_path_under(candidate, pool_root) and not is_chromakey_video_path(candidate):
+        if (
+            candidate.exists()
+            and candidate.is_file()
+            and is_path_under(candidate, pool_root)
+            and is_chromakey_video_path(candidate) is chromakey
+        ):
             return candidate
 
     return None
 
 
-def video_for_camera(camera: RegisteredCamera, video_files: list[Path], index: int, repo_root: Path) -> Path:
+def video_for_camera(
+    camera: RegisteredCamera,
+    video_files: list[Path],
+    index: int,
+    repo_root: Path,
+    *,
+    chromakey: bool = False,
+) -> Path:
     video_pool = video_files[0].parent if video_files else repo_root
-    assigned_video = resolve_assigned_video_path(camera, video_pool, repo_root)
+    assigned_video = resolve_assigned_video_path(camera, video_pool, repo_root, chromakey=chromakey)
     if assigned_video is not None:
         return assigned_video
     return video_files[index % len(video_files)]

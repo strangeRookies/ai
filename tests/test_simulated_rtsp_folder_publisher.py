@@ -7,8 +7,9 @@ import ai.worker_registry
 from ai.registered_cameras import RegisteredCamera
 from ai.ffmpeg_command import build_ffmpeg_command
 from ai.simulated_rtsp_publisher import FfmpegRestartPolicy, PublisherLock, select_initial_ffmpeg_mode, tail_text_file
+from ai.simulated_rtsp_runtime import video_pool_for_camera_position
 from scripts.start_simulated_rtsp_from_folder import build_ffmpeg_cmd, parse_arguments, stable_video_index, video_for_camera
-from ai.simulated_rtsp_sources import filter_video_files
+from ai.simulated_rtsp_sources import filter_stream_video_pools, filter_video_files
 
 
 class SimulatedRtspFolderPublisherTest(unittest.TestCase):
@@ -226,6 +227,62 @@ class SimulatedRtspFolderPublisherTest(unittest.TestCase):
 
         self.assertEqual(matching, [normal_video])
         self.assertEqual(excluded, [chromakey_video])
+
+    def test_stream_video_pools_separate_outdoor_and_chromakey_candidates(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            chromakey_video = root / "indoor_chromakey" / "fall.mp4"
+            outdoor_video = root / "outside" / "fall.mp4"
+            chromakey_video.parent.mkdir()
+            outdoor_video.parent.mkdir()
+            chromakey_video.write_bytes(b"chromakey")
+            outdoor_video.write_bytes(b"outdoor")
+
+            outdoor, chromakey, excluded = filter_stream_video_pools(
+                [chromakey_video, outdoor_video], "outside", None, None
+            )
+
+        self.assertEqual(outdoor, [outdoor_video])
+        self.assertEqual(chromakey, [chromakey_video])
+        self.assertEqual(excluded, [])
+
+    def test_stream_video_pools_require_both_kinds(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            outdoor_video = Path(temp_dir) / "outside_fall.mp4"
+            outdoor_video.write_bytes(b"outdoor")
+
+            with self.assertRaisesRegex(ValueError, "chromakey"):
+                filter_stream_video_pools([outdoor_video], None, None, None)
+
+    def test_first_camera_uses_outdoor_and_second_uses_chromakey_pool(self):
+        outdoor = [Path("outside.mp4")]
+        chromakey = [Path("chromakey.mp4")]
+
+        first_pool, first_is_chromakey = video_pool_for_camera_position(0, outdoor, chromakey)
+        second_pool, second_is_chromakey = video_pool_for_camera_position(1, outdoor, chromakey)
+
+        self.assertEqual(first_pool, outdoor)
+        self.assertFalse(first_is_chromakey)
+        self.assertEqual(second_pool, chromakey)
+        self.assertTrue(second_is_chromakey)
+
+    def test_video_for_chromakey_camera_accepts_assigned_chromakey_video(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            chromakey_video = Path(temp_dir) / "chromakey_fall.mp4"
+            fallback_video = Path(temp_dir) / "green_screen_fall.mp4"
+            chromakey_video.write_bytes(b"assigned")
+            fallback_video.write_bytes(b"fallback")
+            camera = RegisteredCamera(
+                camera_id="2",
+                camera_login_id="cam_02",
+                rtsp_url=None,
+                source_type="SIMULATED_RTSP",
+                assigned_video_path=str(chromakey_video),
+            )
+
+            selected = video_for_camera(camera, [fallback_video], 0, chromakey=True)
+
+        self.assertEqual(selected, chromakey_video)
 
     def test_video_for_camera_ignores_assigned_video_outside_video_pool(self):
         with tempfile.TemporaryDirectory() as temp_dir:
