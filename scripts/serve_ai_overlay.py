@@ -70,6 +70,7 @@ from ai.action.faint_post_processing import ExitEventPostProcessor, DEFAULT_EXIT
 from stream.rtsp_reader import redact_url
 from tracking.display_id_mapper import DisplayIdMapper
 from ai.publishers.async_delivery import AsyncMqttDelivery
+from ai.publishers.event_outbox import event_outbox_path
 from ai.publishers.event_publisher import create_event_publisher, mqtt_topic_settings_from_args
 from ai.publishers.camera_status_publisher import CameraStatusPublisher
 from ai.publishers.mqtt_payloads import build_overlay_payload, current_timestamp_ms, frame_size_from_shape, build_frame_sync_payload
@@ -1264,7 +1265,10 @@ class OverlayWorker:
         detector = create_detector(self.args.detector_mode, self.args.yolo_model, self.args.device, self.args.imgsz, conf=self.args.detector_conf)
         classifier, _classifier_mode = create_classifier(self.args.action_model, self.args.action_device, action_threshold)
         publisher, publisher_mode = create_event_publisher(self.args, role="inference")
-        publisher = AsyncMqttDelivery(publisher)
+        publisher = AsyncMqttDelivery(
+            publisher,
+            outbox_path=event_outbox_path(self.camera_login_id) if publisher_mode == "mqtt" else None,
+        )
         print(f"[ai-overlay-inference] initialized event publisher: {publisher_mode}", flush=True)
         log_worker_backend_startup(
             camera_login_id=self.camera_login_id,

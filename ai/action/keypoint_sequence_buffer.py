@@ -1,3 +1,5 @@
+from ai.action.sequence_timing import sequence_is_ready
+
 class KeypointSequenceBuffer:
     """입력 FPS를 변경하지 않고 중첩된 키포인트 시퀀스를 생성합니다.
 
@@ -21,6 +23,7 @@ class KeypointSequenceBuffer:
         self.stride = stride
         self._frames = []          # 프레임 데이터를 저장할 링 버퍼
         self._last_emit_frame = -1 # 가장 최근에 시퀀스를 방출했을 때의 프레임 인덱스
+        self._last_emit_at_ms = None
 
     def add(self, frame_idx, detections, frame_shape=None, frame_id=None, captured_at_ms=None):
         """새로운 프레임의 감지 결과(detections)를 버퍼에 추가하고, 
@@ -58,12 +61,20 @@ class KeypointSequenceBuffer:
             return None
             
         # 2. 마지막 시퀀스 방출 시점으로부터 경과된 프레임 수가 stride 주기보다 작으면 시퀀스 방출 안 함
-        if self._last_emit_frame >= 0 and frame_idx - self._last_emit_frame < self.stride:
+        ready, timing = sequence_is_ready(
+            self._frames,
+            self.stride,
+            self._last_emit_frame,
+            self._last_emit_at_ms,
+        )
+        if not ready:
             return None
             
         # 시퀀스 방출 프레임 갱신 및 시퀀스 데이터 생성 후 반환
         self._last_emit_frame = int(frame_idx)
-        return {
+        if timing["sequence_timing_mode"] == "captured_at_ms":
+            self._last_emit_at_ms = int(self._frames[-1]["captured_at_ms"])
+        sequence = {
             "start_frame": self._frames[0]["frame_idx"],
             "end_frame": self._frames[-1]["frame_idx"],
             "sequence_start_frame_id": self._frames[0]["frame_id"],
@@ -76,6 +87,8 @@ class KeypointSequenceBuffer:
             "keypoints": self._frames[-1]["detection"].get("keypoints"),
             "track_id": self._frames[-1]["detection"].get("track_id"),
         }
+        sequence.update(timing)
+        return sequence
 
 
 def best_detection_with_keypoints(detections):
