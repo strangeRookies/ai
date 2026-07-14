@@ -62,6 +62,18 @@ def parse_args(argv=None):
     parser.add_argument("--persistent-repeat-sec", type=float, default=env_float("PERSISTENT_REPEAT_SEC", 30.0), help="Repeat interval for unrecovered events (0=once).")
     parser.add_argument("--track-lost-grace-sec", type=float, default=env_float("TRACK_LOST_GRACE_SEC", 3.0))
     parser.add_argument("--require-upright-to-lying", action=argparse.BooleanOptionalAction, default=os.getenv("REQUIRE_UPRIGHT_TO_LYING", "false").lower() in {"1", "true", "yes", "on"})
+    parser.add_argument(
+        "--block-upright-faint",
+        action=argparse.BooleanOptionalAction,
+        default=os.getenv("BLOCK_UPRIGHT_FAINT", "true").lower() in {"1", "true", "yes", "on"},
+        help="Block NEW_FALL while posture is upright_like without upright→lying transition (default true).",
+    )
+    parser.add_argument(
+        "--motion-feature-min-keypoint-conf",
+        type=float,
+        default=env_float("MOTION_FEATURE_MIN_KEYPOINT_CONF", 0.3),
+        help="Min conf for shoulder/hip keypoints used in motion54 center_drop/velocity/torso.",
+    )
     parser.add_argument("--lying-aspect-ratio", type=float, default=env_float("LYING_ASPECT_RATIO", 1.2))
     parser.add_argument("--upright-aspect-ratio", type=float, default=env_float("UPRIGHT_ASPECT_RATIO", 1.3))
     parser.add_argument("--min-keypoint-conf", type=float, default=env_float("MIN_KEYPOINT_CONF", 0.3))

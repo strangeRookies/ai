@@ -4,10 +4,14 @@ from __future__ import annotations
 import numpy as np
 
 # Allow a few latest-frame queue drops without treating them as recovery-scale gaps.
-# Measured recovery miss was ~67 frames; ordinary drops are typically 1–2.
 DEFAULT_MAX_CONTINUOUS_FRAME_STEP = 3
 # Used only when frame_ids/frame_idxs are unavailable.
 DEFAULT_MAX_CONTINUOUS_TIME_GAP_MS = 150
+# Shoulder/hip conf must meet this for raw motion deltas / torso angle.
+DEFAULT_MOTION_FEATURE_MIN_KEYPOINT_CONF = 0.3
+# Safe upright-ish torso_angle_norm when shoulder/hip conf is insufficient.
+# atan2(dy>0, dx~0) ≈ π/2 → (π/2 + π) / (2π) = 0.75
+SAFE_TORSO_ANGLE_NORM = 0.75
 
 
 def _int_or_none(value):
@@ -31,10 +35,7 @@ def build_motion_discontinuity_mask(
     Priority:
       1. Explicit recovery / motion discontinuity markers on the sample
       2. Valid consecutive frame_ids or frame_idxs → frame step only
-         (step <= max_frame_step keeps continuity even if timestamp is large;
-          step > max_frame_step or non-monotonic step → discontinuity)
-      3. Else fallback to captured_at_ms gap > max_time_gap_ms
-         (non-monotonic / non-positive delta → discontinuity)
+      3. Else fallback to captured_at_ms gap
     """
     mask = np.zeros(int(seq_len), dtype=bool)
     if seq_len <= 0:
@@ -63,7 +64,6 @@ def build_motion_discontinuity_mask(
         prev_idx = _int_or_none(frame_idxs[index - 1] if index - 1 < len(frame_idxs) else None)
         cur_idx = _int_or_none(frame_idxs[index] if index < len(frame_idxs) else None)
 
-        # Prefer frame_ids; else frame_idxs. If either pair is valid, do not use time.
         frame_pair = None
         if prev_id is not None and cur_id is not None:
             frame_pair = (prev_id, cur_id)
@@ -74,7 +74,6 @@ def build_motion_discontinuity_mask(
             step = frame_pair[1] - frame_pair[0]
             if step <= 0 or step > int(max_frame_step):
                 mask[index] = True
-            # step in 1..max_frame_step → continuous (ignore timestamp)
             continue
 
         prev_t = _int_or_none(times[index - 1] if index - 1 < len(times) else None)
@@ -86,20 +85,25 @@ def build_motion_discontinuity_mask(
     return mask
 
 
-def append_motion_features(base_features, discontinuity_mask=None):
+def append_motion_features(
+    base_features,
+    discontinuity_mask=None,
+    *,
+    min_keypoint_conf: float = DEFAULT_MOTION_FEATURE_MIN_KEYPOINT_CONF,
+    validity_out: dict | None = None,
+):
     """
     Append motion features (center_drop, velocity, torso_angle) to keypoint features.
 
-    Continuous-frame semantics are unchanged raw hip-midpoint displacements:
-      center_drop[t] = hip_mid_y[t] - hip_mid_y[t-1]
-      velocity[t]    = hypot(dx, dy)
-      torso_angle_norm from current-frame shoulder→hip vector
-    First sample and any discontinuity sample force center_drop=velocity=0.
-    torso_angle_norm is always recomputed for the current frame.
+    Continuous-frame semantics: raw hip-midpoint displacements when shoulder/hip
+    confidences are sufficient. Low-confidence frames do not invent motion from
+    (0,0) coordinates.
 
     Args:
         base_features: (seq_len, 51) normalized keypoints
         discontinuity_mask: optional bool array (seq_len,); True → zero motion deltas
+        min_keypoint_conf: conf threshold for L/R shoulder and hip (COCO 5,6,11,12)
+        validity_out: optional dict filled with motion validity diagnostics
     Returns:
         np.ndarray shape (seq_len, 54)
     """
@@ -107,6 +111,7 @@ def append_motion_features(base_features, discontinuity_mask=None):
     if seq_len == 0:
         return base_features
 
+    conf_min = float(min_keypoint_conf)
     motion_features = np.zeros((seq_len, 3), dtype=np.float32)
 
     # YOLO Pose (COCO 17): 5 LShoulder, 6 RShoulder, 11 LHip, 12 RHip
@@ -121,6 +126,15 @@ def append_motion_features(base_features, discontinuity_mask=None):
     lh_x, lh_y, lh_conf = get_xy(11)
     rh_x, rh_y, rh_conf = get_xy(12)
 
+    hip_valid = (lh_conf >= conf_min) & (rh_conf >= conf_min)
+    shoulder_valid = (ls_conf >= conf_min) & (rs_conf >= conf_min)
+    torso_valid = hip_valid & shoulder_valid
+    # Pair validity for displacement: both current and previous hips must be good.
+    pair_hip_valid = np.zeros(seq_len, dtype=bool)
+    if seq_len > 1:
+        pair_hip_valid[1:] = hip_valid[1:] & hip_valid[:-1]
+    pair_hip_valid[0] = False
+
     shoulder_mid_x = (ls_x + rs_x) / 2.0
     shoulder_mid_y = (ls_y + rs_y) / 2.0
     hip_mid_x = (lh_x + rh_x) / 2.0
@@ -130,7 +144,9 @@ def append_motion_features(base_features, discontinuity_mask=None):
     dy = hip_mid_y - shoulder_mid_y
     angles = np.arctan2(dy, dx)
     torso_angle_norm = (angles + np.pi) / (2 * np.pi)
-    motion_features[:, 2] = torso_angle_norm
+    # Invalid conf → safe upright-ish angle (do not use garbage coords)
+    torso_angle_norm = np.where(torso_valid, torso_angle_norm, SAFE_TORSO_ANGLE_NORM)
+    motion_features[:, 2] = torso_angle_norm.astype(np.float32)
 
     center_drop = np.zeros(seq_len, dtype=np.float32)
     velocity = np.zeros(seq_len, dtype=np.float32)
@@ -138,8 +154,13 @@ def append_motion_features(base_features, discontinuity_mask=None):
     if seq_len > 1:
         diff_y = hip_mid_y[1:] - hip_mid_y[:-1]
         diff_x = hip_mid_x[1:] - hip_mid_x[:-1]
-        center_drop[1:] = diff_y
-        velocity[1:] = np.sqrt(diff_x**2 + diff_y**2)
+        raw_drop = diff_y.astype(np.float32)
+        raw_vel = np.sqrt(diff_x**2 + diff_y**2).astype(np.float32)
+        center_drop[1:] = np.where(pair_hip_valid[1:], raw_drop, 0.0)
+        velocity[1:] = np.where(pair_hip_valid[1:], raw_vel, 0.0)
+
+    low_conf_motion = ~pair_hip_valid
+    low_conf_motion[0] = True
 
     if discontinuity_mask is not None:
         mask = np.asarray(discontinuity_mask, dtype=bool).reshape(-1)
@@ -149,8 +170,31 @@ def append_motion_features(base_features, discontinuity_mask=None):
             )
         center_drop = np.where(mask, 0.0, center_drop).astype(np.float32)
         velocity = np.where(mask, 0.0, velocity).astype(np.float32)
+    else:
+        mask = np.zeros(seq_len, dtype=bool)
+        mask[0] = True
 
     motion_features[:, 0] = center_drop
     motion_features[:, 1] = velocity
+
+    if validity_out is not None:
+        motion_valid = pair_hip_valid & ~mask
+        motion_valid[0] = False
+        low_conf_frames = int(np.count_nonzero(~hip_valid | ~shoulder_valid))
+        validity_out.clear()
+        validity_out.update(
+            {
+                "motion_valid_frames": int(np.count_nonzero(motion_valid)),
+                "motion_valid_ratio": float(np.count_nonzero(motion_valid) / max(seq_len - 1, 1)),
+                "low_conf_motion_frames": low_conf_frames,
+                "center_drop_min": float(np.min(center_drop)),
+                "center_drop_max": float(np.max(center_drop)),
+                "velocity_min": float(np.min(velocity)),
+                "velocity_max": float(np.max(velocity)),
+                "torso_angle_min": float(np.min(torso_angle_norm)),
+                "torso_angle_max": float(np.max(torso_angle_norm)),
+                "min_keypoint_conf": conf_min,
+            }
+        )
 
     return np.concatenate([base_features, motion_features], axis=1).astype(np.float32)

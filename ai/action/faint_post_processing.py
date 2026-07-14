@@ -11,6 +11,7 @@ DEFAULT_RECOVER_CONSECUTIVE = 4
 DEFAULT_PERSISTENT_DELAY_SEC = 10.0
 DEFAULT_PERSISTENT_REPEAT_SEC = 30.0
 DEFAULT_REQUIRE_UPRIGHT_TO_LYING = False
+DEFAULT_BLOCK_UPRIGHT_FAINT = True
 DEFAULT_ACTION_MODEL = (
     "benchmark/results/lstm_yolo26n_error_augmented_compare_smoke/"
     "YOLO26n-pose=./yolo26n-pose.pt/best.pt"
@@ -77,6 +78,7 @@ class FaintEventPostProcessor:
         use_fall_state_machine: bool = True,
         recover_consecutive: int = DEFAULT_RECOVER_CONSECUTIVE,
         require_upright_to_lying: bool = DEFAULT_REQUIRE_UPRIGHT_TO_LYING,
+        block_upright_faint: bool = DEFAULT_BLOCK_UPRIGHT_FAINT,
         unrecovered_after_seconds: float | None = None,
         unrecovered_repeat_seconds: float = DEFAULT_PERSISTENT_REPEAT_SEC,
         use_posture_estimator: bool = True,
@@ -95,6 +97,7 @@ class FaintEventPostProcessor:
         self.use_fall_state_machine = bool(use_fall_state_machine)
         self.use_posture_estimator = bool(use_posture_estimator)
         self.require_upright_to_lying = bool(require_upright_to_lying)
+        self.block_upright_faint = bool(block_upright_faint)
         self.movement_low_threshold = float(movement_low_threshold)
         self.faint_threshold = float(faint_threshold) if faint_threshold is not None else DEFAULT_FAINT_THRESHOLD
         self.fall_threshold = float(fall_threshold) if fall_threshold is not None else self.faint_threshold
@@ -126,6 +129,7 @@ class FaintEventPostProcessor:
                 min_consecutive_faint=self.min_consecutive_faint,
                 recover_consecutive=max(1, int(recover_consecutive)),
                 require_upright_to_lying=bool(require_upright_to_lying),
+                block_upright_faint=bool(block_upright_faint),
                 unrecovered_after_seconds=unrecovered_after,
                 unrecovered_repeat_seconds=max(0.0, float(unrecovered_repeat_seconds)),
             )
@@ -233,6 +237,15 @@ class FaintEventPostProcessor:
                 low_threshold=self.movement_low_threshold,
             )
 
+        # Standing Faint FP: do not feed alert into consecutive counters / lifecycle confirm.
+        standing_blocked = bool(
+            self.block_upright_faint
+            and is_alert
+            and posture_label == "upright_like"
+            and not upright_to_lying
+        )
+        effective_alert = bool(is_alert) and not standing_blocked
+
         def _context(**kwargs) -> AlertEmitDecision:
             state = None
             if kwargs.get("lifecycle") is not None:
@@ -252,7 +265,7 @@ class FaintEventPostProcessor:
                 camera_id,
                 timestamp,
                 track_id=track_id,
-                is_alert=is_alert,
+                is_alert=effective_alert,
                 posture_label=posture_label,
                 upright_to_lying=upright_to_lying,
                 prediction=prediction if isinstance(prediction, dict) else None,
@@ -261,7 +274,36 @@ class FaintEventPostProcessor:
             )
             self._last_lifecycle_decision = decision
 
-            if not is_alert:
+            if standing_blocked:
+                # Blocked upright Faint must not accumulate consecutive counts.
+                self._consecutive_by_camera[key] = 0
+                blocked_decision = LifecycleDecision(
+                    LifecycleKind.NONE,
+                    decision.state,
+                    reason="blocked_currently_upright_without_transition",
+                )
+                self._last_lifecycle_decision = blocked_decision
+                out = _context(
+                    emit=False,
+                    kind="none",
+                    lifecycle=blocked_decision,
+                    memo_text="blocked_currently_upright_without_transition",
+                )
+                self._last_emit_decision = out
+                _maybe_log_faint_diagnostic(
+                    camera_id=camera_id,
+                    track_id=track_id,
+                    prediction=prediction,
+                    posture_label=posture_label,
+                    upright_to_lying=bool(upright_to_lying),
+                    standing_blocked=True,
+                    lifecycle=blocked_decision,
+                    event_emit=False,
+                    sequence=detection if isinstance(detection, dict) else None,
+                )
+                return out
+
+            if not effective_alert:
                 self._consecutive_by_camera[key] = 0
                 out = _context(emit=False, kind="none", lifecycle=decision)
                 self._last_emit_decision = out
@@ -292,6 +334,17 @@ class FaintEventPostProcessor:
                     memo_text=MEMO_NEW_FALL,
                 )
                 self._last_emit_decision = out
+                _maybe_log_faint_diagnostic(
+                    camera_id=camera_id,
+                    track_id=track_id,
+                    prediction=prediction,
+                    posture_label=posture_label,
+                    upright_to_lying=bool(upright_to_lying),
+                    standing_blocked=False,
+                    lifecycle=decision,
+                    event_emit=True,
+                    sequence=detection if isinstance(detection, dict) else None,
+                )
                 return out
 
             if decision.kind == LifecycleKind.UNRECOVERED:
@@ -310,6 +363,19 @@ class FaintEventPostProcessor:
                 self._last_emit_decision = out
                 return out
 
+            # Faint prediction still active (candidate path) — optional diagnostic
+            if is_alert:
+                _maybe_log_faint_diagnostic(
+                    camera_id=camera_id,
+                    track_id=track_id,
+                    prediction=prediction,
+                    posture_label=posture_label,
+                    upright_to_lying=bool(upright_to_lying),
+                    standing_blocked=False,
+                    lifecycle=decision,
+                    event_emit=False,
+                    sequence=detection if isinstance(detection, dict) else None,
+                )
             out = _context(emit=False, kind="none", lifecycle=decision)
             self._last_emit_decision = out
             return out
@@ -412,6 +478,77 @@ class FaintEventPostProcessor:
                     cy.pop(old_key, None)
                 moved = True
         return moved
+
+
+def _maybe_log_faint_diagnostic(
+    *,
+    camera_id,
+    track_id,
+    prediction,
+    posture_label,
+    upright_to_lying: bool,
+    standing_blocked: bool,
+    lifecycle,
+    event_emit: bool,
+    sequence=None,
+) -> None:
+    """Structured sparse log for Faint FP diagnosis (not per-frame)."""
+    pred = prediction if isinstance(prediction, dict) else {}
+    label = pred.get("label")
+    probs = pred.get("probabilities") if isinstance(pred.get("probabilities"), dict) else {}
+    faint_p = probs.get("Faint")
+    normal_p = probs.get("Normal")
+    if faint_p is None:
+        try:
+            faint_p = float(pred.get("score")) if pred.get("score") is not None else None
+        except (TypeError, ValueError):
+            faint_p = None
+    motion = {}
+    if isinstance(sequence, dict):
+        motion = sequence.get("motion_validity") or {}
+    reason = getattr(lifecycle, "reason", None) if lifecycle is not None else None
+    state = None
+    if lifecycle is not None and getattr(lifecycle, "state", None) is not None:
+        st = lifecycle.state
+        state = st.value if hasattr(st, "value") else str(st)
+    motion_ratio = motion.get("motion_valid_ratio")
+    low_conf_frames = motion.get("low_conf_motion_frames")
+    should_log = bool(
+        standing_blocked
+        or event_emit
+        or str(label).lower() == "faint"
+        or (motion_ratio is not None and float(motion_ratio) < 0.5)
+        or (low_conf_frames is not None and int(low_conf_frames) > 0 and str(label).lower() == "faint")
+    )
+    if not should_log:
+        return
+    print(
+        "[faint-diagnostic] "
+        f"cameraLoginId={camera_id} "
+        f"trackId={track_id} "
+        f"tensor_shape={pred.get('tensor_shape') or ''} "
+        f"feature_schema={pred.get('feature_schema') or ''} "
+        f"sequence_length={pred.get('sequence_length') or ''} "
+        f"sequence_stride={pred.get('sequence_stride') or ''} "
+        f"faint_probability={faint_p} "
+        f"normal_probability={normal_p} "
+        f"predicted_label={label} "
+        f"posture_label={posture_label} "
+        f"upright_to_lying={str(bool(upright_to_lying)).lower()} "
+        f"standing_blocked={str(bool(standing_blocked)).lower()} "
+        f"motion_valid_ratio={motion.get('motion_valid_ratio', '')} "
+        f"low_conf_motion_frames={motion.get('low_conf_motion_frames', '')} "
+        f"center_drop_min={motion.get('center_drop_min', '')} "
+        f"center_drop_max={motion.get('center_drop_max', '')} "
+        f"velocity_min={motion.get('velocity_min', '')} "
+        f"velocity_max={motion.get('velocity_max', '')} "
+        f"torso_angle_min={motion.get('torso_angle_min', '')} "
+        f"torso_angle_max={motion.get('torso_angle_max', '')} "
+        f"lifecycle_state={state or ''} "
+        f"lifecycle_reason={reason or ''} "
+        f"event_emit={str(bool(event_emit)).lower()}",
+        flush=True,
+    )
 
 
 def event_cooldown_key(camera_id):

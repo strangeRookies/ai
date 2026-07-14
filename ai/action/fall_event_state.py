@@ -118,12 +118,15 @@ class FallEventStateMachine:
         min_consecutive_faint: int = 3,
         recover_consecutive: int = 3,
         require_upright_to_lying: bool = False,
+        block_upright_faint: bool = True,
         unrecovered_after_seconds: float = 10.0,
         unrecovered_repeat_seconds: float = 30.0,
     ):
         self.min_consecutive_faint = max(1, int(min_consecutive_faint))
         self.recover_consecutive = max(1, int(recover_consecutive))
         self.require_upright_to_lying = bool(require_upright_to_lying)
+        # Block NEW_FALL while currently upright_like without upright→lying transition.
+        self.block_upright_faint = bool(block_upright_faint)
         self.unrecovered_after_seconds = max(0.0, float(unrecovered_after_seconds))
         # 0 => emit unrecovered at most once until recover
         self.unrecovered_repeat_seconds = max(0.0, float(unrecovered_repeat_seconds))
@@ -335,10 +338,26 @@ class FallEventStateMachine:
         )
 
     def _try_confirm(self, st: FallTrackState, ts: float) -> LifecycleDecision:
-        # Block NEW_FALL only for tracks that look "already lying" without an upright history.
-        # - lying-only (no upright ever) → block
+        # Standing Faint false-positive guard (default on):
+        # currently upright_like without an upright→lying transition → never NEW_FALL.
+        if (
+            self.block_upright_faint
+            and st.last_posture == "upright_like"
+            and not st.saw_upright_to_lying
+        ):
+            st.candidate_count = 0
+            if st.state == FallState.FALL_CANDIDATE:
+                st.state = FallState.NORMAL
+                st.last_transition_ts = ts
+            return LifecycleDecision(
+                LifecycleKind.NONE,
+                st.state,
+                reason="blocked_currently_upright_without_transition",
+            )
+
+        # Optional stricter gate: already-lying without upright history.
+        # - lying-only (no upright ever) → block when require_upright_to_lying
         # - upright→lying transition seen → allow
-        # - unknown / no posture / upright-only (LSTM fall while standing) → allow
         if self.require_upright_to_lying and not st.saw_upright_to_lying:
             if not st.saw_upright and st.last_posture == "lying_like":
                 return LifecycleDecision(

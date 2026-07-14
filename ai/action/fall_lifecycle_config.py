@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ai.action.faint_post_processing import (
+    DEFAULT_BLOCK_UPRIGHT_FAINT,
     DEFAULT_CAMERA_COOLDOWN_SECONDS,
     DEFAULT_FAINT_THRESHOLD,
     DEFAULT_MIN_CONSECUTIVE_FAINT,
@@ -53,6 +54,9 @@ def build_faint_post_processor_from_args(args) -> FaintEventPostProcessor:
         recover_consecutive=int(getattr(args, "normal_recover_required", DEFAULT_RECOVER_CONSECUTIVE)),
         require_upright_to_lying=bool(
             getattr(args, "require_upright_to_lying", DEFAULT_REQUIRE_UPRIGHT_TO_LYING)
+        ),
+        block_upright_faint=bool(
+            getattr(args, "block_upright_faint", DEFAULT_BLOCK_UPRIGHT_FAINT)
         ),
         unrecovered_after_seconds=float(
             getattr(args, "persistent_delay_sec", DEFAULT_PERSISTENT_DELAY_SEC)
