@@ -71,7 +71,11 @@ class LSTMActionClassifierTest(unittest.TestCase):
             "frame_shapes": [(100, 200, 3), (100, 200, 3)],
         }
 
-        features = keypoint_sequence_to_features(sequence, expected_input_size=MOTION_KEYPOINT_FEATURE_DIM)
+        features = keypoint_sequence_to_features(
+            sequence,
+            expected_input_size=MOTION_KEYPOINT_FEATURE_DIM,
+            feature_schema="keypoint_motion54",
+        )
 
         self.assertEqual(features.shape, (2, 54))
 

@@ -9,3 +9,8 @@ set "MQTT_PORT=1883"
 
 set "STABLE_ROOT=/home/GPU_SSH_USER/yolo_training/strange_ai_lstm"
 set "DEV_BASE=/home/GPU_SSH_USER/yolo_training/strange_ai_lstm-dev"
+
+rem Packaged keypoint_motion54 LSTM (weights copied with schema metadata only).
+rem Original best.pt must remain untouched; point workers at the packaged file.
+set "ACTION_MODEL=/home/GPU_SSH_USER/yolo_training/strange_ai_lstm/benchmark/results/lstm_sequence30_motion_features/YOLO26n-pose/best_motion54_packaged.pt"
+set "MODEL_CHECKPOINT_PATH=%ACTION_MODEL%"
