@@ -13,6 +13,8 @@ from enum import Enum
 from typing import Any, Callable, Sequence  # noqa: F401 — Any used by assign_recovery_track
 from uuid import uuid4
 
+from ai.postprocess.relink_evaluation import normalize_identity_ground_truth, wrong_relink_if_evaluable
+
 
 class IncidentPhase(str, Enum):
     FALL_FAINT_SUSPECTED = "FALL_FAINT_SUSPECTED"
@@ -56,6 +58,7 @@ class IncidentRecord:
     last_reject_reason: str | None = None
     # True after first successful recovery assigned a (possibly new) track_id.
     recovery_linked: bool = False
+    identity_gt: str | None = None
 
 
 @dataclass
@@ -65,8 +68,16 @@ class RecoveryStats:
     recovery_rejects: int = 0
     timeouts: int = 0
     wrong_relink: int | None = None
+    wrong_relink_evaluated_count: int = 0
     total_recovery_latency_ms: float = 0.0
     recovery_latency_samples: int = 0
+
+    def note_wrong_relink(self, expected_identity: str | None, observed_identity: str | None) -> None:
+        wrong = wrong_relink_if_evaluable(expected_identity, observed_identity)
+        if wrong is None:
+            return
+        self.wrong_relink_evaluated_count += 1
+        self.wrong_relink = int(self.wrong_relink or 0) + int(wrong)
 
     def note_latency_ms(self, ms: float) -> None:
         self.total_recovery_latency_ms += float(ms)
@@ -85,7 +96,8 @@ class RecoveryStats:
             "recovery_rejects": self.recovery_rejects,
             "timeouts": self.timeouts,
             "wrong_relink": self.wrong_relink,
-            "wrong_relink_evaluation_status": "not_evaluated",
+            "wrong_relink_evaluation_status": ("evaluated" if self.wrong_relink_evaluated_count else "not_evaluated"),
+            "wrong_relink_evaluated_count": self.wrong_relink_evaluated_count,
             "mean_recovery_latency_ms": self.mean_recovery_latency_ms,
         }
 
@@ -225,6 +237,7 @@ class IncidentRecoveryManager:
         incident_id: str,
         new_track_id: int,
         from_track_id: int | None = None,
+        recovery_identity_gt: str | None = None,
     ) -> IncidentRecord | None:
         """Bind a (new) track_id to an existing incident after state migration."""
         cam = str(camera_login_id)
@@ -245,6 +258,7 @@ class IncidentRecoveryManager:
         rec.miss_frames = 0
         rec.recovery_started_ts = None
         rec.last_reject_reason = None
+        self.stats.note_wrong_relink(rec.identity_gt, recovery_identity_gt)
         return rec
 
     def _reject_recovery_candidate(self, camera_login_id, record, item, reason):
@@ -316,6 +330,7 @@ class IncidentRecoveryManager:
                 incident_id=rec.incident_id,
                 new_track_id=new_id,
                 from_track_id=int(from_id) if from_id is not None else None,
+                recovery_identity_gt=normalize_identity_ground_truth(item.get("identity_gt")),
             )
         else:
             self._track_incident.setdefault(cam, {})[new_id] = str(incident_id or "")
@@ -331,10 +346,12 @@ class IncidentRecoveryManager:
         timestamp: float,
         frame_id: int,
         incident_id: str | None = None,
+        identity_gt: str | None = None,
     ) -> IncidentRecord:
         """Register or refresh a fall/faint-suspected incident for a track."""
         cam = str(camera_login_id)
         tid = int(track_id)
+        normalized_identity_gt = normalize_identity_ground_truth(identity_gt)
         if not bbox or len(bbox) < 4:
             raise ValueError("bbox required")
         self._incidents.setdefault(cam, {})
@@ -346,6 +363,8 @@ class IncidentRecoveryManager:
             rec.last_seen_ts = float(timestamp)
             rec.last_seen_frame_id = int(frame_id)
             rec.miss_frames = 0
+            if normalized_identity_gt is not None:
+                rec.identity_gt = normalized_identity_gt
             if rec.phase in {IncidentPhase.TEMPORARILY_LOST, IncidentPhase.FALL_UNRECOVERED}:
                 # Seen again via normal path; keep incident_id, clear temporary loss
                 rec.phase = IncidentPhase.FALL_FAINT_SUSPECTED
@@ -362,6 +381,7 @@ class IncidentRecoveryManager:
             last_seen_frame_id=int(frame_id),
             phase=IncidentPhase.FALL_FAINT_SUSPECTED,
             active_track_id=tid,
+            identity_gt=normalized_identity_gt,
         )
         self._incidents[cam][iid] = rec
         self._track_incident[cam][tid] = iid

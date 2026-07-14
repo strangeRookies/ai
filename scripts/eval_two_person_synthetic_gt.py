@@ -86,6 +86,8 @@ def evaluate(frame_results_path: Path, frames: list[dict]) -> dict:
     merged_frames = 0
     hijack = 0
     last_owner_center = {}
+    last_track_by_person = {}
+    person_identity_switches = defaultdict(int)
 
     with frame_results_path.open(encoding="utf-8") as f:
         for line in f:
@@ -121,6 +123,10 @@ def evaluate(frame_results_path: Path, frames: list[dict]) -> dict:
                     used.add(best_lab)
                     track_hist[int(tid)][best_lab] += 1
                     person_track[best_lab][int(tid)] += 1
+                    previous_track_id = last_track_by_person.get(best_lab)
+                    if previous_track_id is not None and previous_track_id != int(tid):
+                        person_identity_switches[best_lab] += 1
+                    last_track_by_person[best_lab] = int(tid)
                     c = ((float(tbb[0]) + float(tbb[2])) / 2, (float(tbb[1]) + float(tbb[3])) / 2)
                     if int(tid) in last_owner_center:
                         prev_lab, pc = last_owner_center[int(tid)]
@@ -175,6 +181,9 @@ def evaluate(frame_results_path: Path, frames: list[dict]) -> dict:
     return {
         "frames": len(frames),
         "hijack_count": hijack,
+        "track_owner_switch_count": hijack,
+        "person_identity_switches": {label: int(person_identity_switches.get(label, 0)) for label in ("P1", "P2")},
+        "person_identity_switch_count": sum(person_identity_switches.values()),
         "wrong_suppression_or_miss": wrong_suppress,
         "missed_person_count": missed_person,
         "two_person_merged_frames": merged_frames,

@@ -51,7 +51,9 @@ class MqttEventPublisher(EventPublisher):
             self.client.username_pw_set(username=username, password=password or None)
 
     def _on_connect(self, _client, _userdata, _flags, reason_code, _properties=None):
-        self.connected = int(reason_code) == 0
+        # Paho v2 passes a ReasonCode object here, which is comparable to 0
+        # but cannot be converted with int().
+        self.connected = _mqtt_connect_succeeded(reason_code)
 
     def _on_disconnect(self, _client, _userdata, _disconnect_flags=None, _reason_code=None, _properties=None):
         self.connected = False
@@ -256,6 +258,13 @@ def _is_event_payload(payload):
 
 def _current_timestamp_ms():
     return int(time.time() * 1000)
+
+
+def _mqtt_connect_succeeded(reason_code):
+    """Handle both legacy integer and Paho v2 ReasonCode connect results."""
+    if reason_code == 0:
+        return True
+    return getattr(reason_code, "value", None) == 0
 
 
 def _optional_int(value):

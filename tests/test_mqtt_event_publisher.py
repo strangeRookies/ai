@@ -3,6 +3,7 @@ import unittest
 
 from ai.publishers.event_publisher import (
     MqttEventPublisher,
+    _mqtt_connect_succeeded,
     _payload_context,
     _stamp_event_publish_attempt,
     mqtt_settings_from_env,
@@ -10,6 +11,16 @@ from ai.publishers.event_publisher import (
 
 
 class MqttEventPublisherTest(unittest.TestCase):
+    def test_connect_callback_accepts_paho_v2_reason_code(self):
+        class ReasonCode:
+            value = 0
+
+            def __int__(self):
+                raise TypeError("ReasonCode cannot be converted to int")
+
+        self.assertTrue(_mqtt_connect_succeeded(ReasonCode()))
+        self.assertFalse(_mqtt_connect_succeeded(type("FailureReasonCode", (), {"value": 5})()))
+
     def test_mqtt_settings_from_env_uses_local_defaults(self):
         original_values = {name: os.environ.get(name) for name in mqtt_env_names()}
         try:

@@ -30,4 +30,11 @@ def merge_sequence_buffers(source, destination, new_track_id: int) -> bool:
                 detection["track_id"] = int(new_track_id)
     setattr(destination, entries_attr, ordered)
     destination._last_emit_frame = max(int(getattr(source, "_last_emit_frame", -1)), int(getattr(destination, "_last_emit_frame", -1)))
+    emit_timestamps = [
+        int(timestamp)
+        for timestamp in (getattr(source, "_last_emit_at_ms", None), getattr(destination, "_last_emit_at_ms", None))
+        if timestamp is not None
+    ]
+    if emit_timestamps:
+        destination._last_emit_at_ms = max(emit_timestamps)
     return True

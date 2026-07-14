@@ -74,10 +74,15 @@ def classifier_contract_summary(classifier):
         "feature_names_count": len(getattr(classifier, "feature_names", []) or []),
         "sequence_length": getattr(classifier, "checkpoint_sequence_length", None),
         "sequence_stride": getattr(classifier, "checkpoint_sequence_stride", None),
+        "classes": list(getattr(classifier, "classes", []) or []),
+        "device": str(getattr(classifier, "device", "") or ""),
     }
 
 
 def log_classifier_contract(prefix, camera_login_id, classifier):
+    """Emit startup contract; always also print the required [lstm-contract] line."""
+    from ai.action.lstm_contract import format_lstm_contract_line
+
     summary = classifier_contract_summary(classifier)
     print(
         f"{prefix} "
@@ -88,6 +93,20 @@ def log_classifier_contract(prefix, camera_login_id, classifier):
         f"feature_names_count={summary['feature_names_count']} "
         f"sequence_length={summary['sequence_length']} "
         f"sequence_stride={summary['sequence_stride']}",
+        flush=True,
+    )
+    print(
+        format_lstm_contract_line(
+            camera_login_id=str(camera_login_id or ""),
+            checkpoint=summary["checkpoint_path"],
+            input_size=summary["checkpoint_input_size"],
+            feature_schema=summary["feature_schema_version"],
+            feature_names_count=summary["feature_names_count"],
+            sequence_length=summary["sequence_length"],
+            sequence_stride=summary["sequence_stride"],
+            classes=summary["classes"],
+            device=summary["device"],
+        ),
         flush=True,
     )
 
@@ -330,6 +349,10 @@ def sequence_metadata(sequence, args):
         "sequenceEndFrameId": int(sequence.get("sequence_end_frame_id", sequence.get("end_frame", 0))),
         "sequenceStartAtMs": sequence.get("sequence_start_at_ms"),
         "sequenceEndAtMs": sequence.get("sequence_end_at_ms"),
+        "sequenceTimingMode": sequence.get("sequence_timing_mode"),
+        "sequenceDurationMs": sequence.get("sequence_duration_ms"),
+        "sequenceSampleIntervalMs": sequence.get("sequence_sample_interval_ms"),
+        "sequenceStrideMs": sequence.get("sequence_stride_ms"),
     }
 
 
