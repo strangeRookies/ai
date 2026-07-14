@@ -267,17 +267,23 @@ class SimulatedRtspFolderPublisherTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "chromakey"):
                 filter_stream_video_pools([outdoor_video], None, None, None)
 
-    def test_first_camera_uses_outdoor_and_second_uses_chromakey_pool(self):
+    def test_camera_pairs_alternate_outdoor_and_chromakey_pools(self):
         outdoor = [Path("outside.mp4")]
         chromakey = [Path("chromakey.mp4")]
 
         first_pool, first_is_chromakey = video_pool_for_camera_position(0, outdoor, chromakey)
         second_pool, second_is_chromakey = video_pool_for_camera_position(1, outdoor, chromakey)
+        third_pool, third_is_chromakey = video_pool_for_camera_position(2, outdoor, chromakey)
+        fourth_pool, fourth_is_chromakey = video_pool_for_camera_position(3, outdoor, chromakey)
 
         self.assertEqual(first_pool, outdoor)
         self.assertFalse(first_is_chromakey)
         self.assertEqual(second_pool, chromakey)
         self.assertTrue(second_is_chromakey)
+        self.assertEqual(third_pool, outdoor)
+        self.assertFalse(third_is_chromakey)
+        self.assertEqual(fourth_pool, chromakey)
+        self.assertTrue(fourth_is_chromakey)
 
     def test_scan_stream_video_directories_combines_separate_pools(self):
         with tempfile.TemporaryDirectory() as temp_dir:

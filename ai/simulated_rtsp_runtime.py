@@ -32,7 +32,10 @@ def video_pool_for_camera_position(
     outdoor_files: list[Path],
     chromakey_files: list[Path],
 ) -> tuple[list[Path], bool]:
-    if camera_position == 1:
+    # Pair cameras in sorted order: 1st/3rd/... use outdoor footage and
+    # 2nd/4th/... use chromakey footage. This keeps cam_03/cam_04 split even
+    # when cam_01/cam_02 are also active in the backend.
+    if camera_position % 2 == 1:
         return chromakey_files, True
     return outdoor_files, False
 
