@@ -514,6 +514,53 @@ class RegisteredCameraRunnerTest(unittest.TestCase):
 
         self.assertEqual(port, occupied_port + 1)
 
+    def test_next_overlay_port_reclaims_camera_dedicated_port_from_orphan(self):
+        import socket
+
+        # OS가 실제로 비어있는 포트를 골라주게 해서, 이 머신에 떠있는 다른 터널/프로세스와
+        # 충돌할 여지를 없앤다 (overlay_base_port를 역산해서 cam_03의 전용 포트가
+        # 이 동적으로 고른 포트와 정확히 일치하도록 맞춘다).
+        server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server.bind(("127.0.0.1", 0))
+        server.listen(1)
+        dedicated_port = server.getsockname()[1]
+        config = replace(fake_config(Path("video_pool")), overlay_base_port=dedicated_port - 2)
+
+        def fake_kill(port):
+            # 실제 `fuser -k` 성공을 흉내내서 orphan 소켓을 실제로 반환한다
+            server.close()
+
+        try:
+            with patch("ai.overlay_ports._kill_orphan_on_port", side_effect=fake_kill) as kill_mock:
+                port = next_overlay_port({}, config, camera_login_id="cam_03")
+        finally:
+            try:
+                server.close()
+            except OSError:
+                pass
+
+        kill_mock.assert_called_once_with(dedicated_port)
+        self.assertEqual(port, dedicated_port)
+
+    def test_next_overlay_port_falls_back_when_reclaim_fails(self):
+        import socket
+
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
+            server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            server.bind(("127.0.0.1", 0))
+            server.listen(5)
+            dedicated_port = server.getsockname()[1]
+            config = replace(fake_config(Path("video_pool")), overlay_base_port=dedicated_port - 2)
+
+            with patch("ai.overlay_ports._kill_orphan_on_port") as kill_mock:
+                port = next_overlay_port({}, config, camera_login_id="cam_03")
+
+        kill_mock.assert_called_once_with(dedicated_port)
+        # reclaim didn't actually free the port, so it must fall back safely
+        # instead of returning a port that's still occupied
+        self.assertNotEqual(port, dedicated_port)
+
     def test_runner_warns_when_multiple_registered_camera_runners_exist(self):
         completed = Namespace(
             returncode=0,
