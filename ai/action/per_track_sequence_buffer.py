@@ -168,13 +168,47 @@ class PerTrackKeypointSequenceBuffers:
     def sequence_completion_summary(self):
         return aggregate_sequence_completion(self.last_sequence_diagnostics, self.sequences_generated_by_track)
 
-    def migrate_track_id(self, old_track_id, new_track_id) -> bool:
-        """Move buffer/state from old_track_id to new_track_id (incident recovery)."""
+    def migrate_track_id(self, old_track_id, new_track_id, *, fresh_start_history: bool = False) -> bool:
+        """Move buffer/state from old_track_id to new_track_id.
+
+        Incident Recovery should pass ``fresh_start_history=True`` so pre-gap
+        keypoint history is dropped instead of merged — raw motion features
+        would otherwise treat the long miss as one huge frame step (velocity spike).
+        Ordinary tracker resilience may keep the default merge/move behavior.
+        """
         old_id, new_id = int(old_track_id), int(new_track_id)
         if old_id == new_id:
             return False
+
+        if fresh_start_history:
+            # Fail-safe for recovery: discard LSTM history on BOTH old and new ids.
+            # Fall lifecycle / display-id / overlay are migrated separately.
+            side_maps = (
+                self._buffers,
+                self._last_seen_at,
+                self._last_detection_by_track,
+                self.last_sequence_diagnostics,
+                self.sequences_generated_by_track,
+            )
+            had = False
+            for track_id in (old_id, new_id):
+                for mapping in side_maps:
+                    if track_id in mapping:
+                        had = True
+                        mapping.pop(track_id, None)
+            self.last_sequence_diagnostics[new_id] = {
+                "track_id": new_id,
+                "reason": "recovery_sequence_fresh_start",
+                "migrated_from": old_id,
+                "buffer_length": 0,
+                "required_sequence_length": self.sequence_length,
+                "stride": self.stride,
+            }
+            return bool(had)
+
         if old_id not in self._buffers and old_id not in self._last_seen_at:
             return False
+
         if new_id in self._buffers and old_id in self._buffers:
             if not merge_sequence_buffers(self._buffers[old_id], self._buffers[new_id], new_id):
                 self.migration_conflicts.append({"source_track_id": old_id, "destination_track_id": new_id, "reason": "incompatible_buffer"})
@@ -341,10 +375,24 @@ class PerTrackCropSequenceBuffers:
     def sequence_completion_summary(self):
         return aggregate_sequence_completion(self.last_sequence_diagnostics, self.sequences_generated_by_track)
 
-    def migrate_track_id(self, old_track_id, new_track_id) -> bool:
+    def migrate_track_id(self, old_track_id, new_track_id, *, fresh_start_history: bool = False) -> bool:
         old_id, new_id = int(old_track_id), int(new_track_id)
         if old_id == new_id:
             return False
+        if fresh_start_history:
+            side_maps = (
+                self._buffers,
+                self._last_seen_at,
+                self.last_sequence_diagnostics,
+                self.sequences_generated_by_track,
+            )
+            had = False
+            for track_id in (old_id, new_id):
+                for mapping in side_maps:
+                    if track_id in mapping:
+                        had = True
+                        mapping.pop(track_id, None)
+            return bool(had)
         if old_id not in self._buffers and old_id not in self._last_seen_at:
             return False
         if new_id in self._buffers and old_id in self._buffers:
