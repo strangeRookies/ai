@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from ai.inference.tracker_timebase import resolve_tracker_fps  # noqa: E402
 from tracking.simple_tracker import (  # noqa: E402
     SimpleTrackAssigner,
     bbox_iou,
@@ -53,6 +54,11 @@ class TrackerConfig:
     near_dup_area_ratio_max: float = 1.80
     near_dup_keypoint_dist: float = 0.35
     sort_detections_by_conf: bool = False
+
+
+PRESETS: dict[str, tuple[str, ...]] = {
+    "new-track-thresholds": ("A_current", "B_new_thresh_020", "C_new_thresh_030"),
+}
 
 
 CONFIGS: dict[str, TrackerConfig] = {
@@ -403,7 +409,14 @@ def run_tracker_config(
     source_fps: float,
 ) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
-    effective_fps = float(source_fps) if float(source_fps) > 0 else cfg.assumed_fps
+    raw_source_fps = source_fps
+    effective_fps = resolve_tracker_fps(raw_source_fps, cfg.assumed_fps)
+    try:
+        valid_source_fps = float(raw_source_fps)
+    except (TypeError, ValueError):
+        valid_source_fps = 0.0
+    tracker_fps_source = "cache_metadata" if math.isfinite(valid_source_fps) and valid_source_fps > 0.0 else "configured_fallback"
+    source_fps = effective_fps if tracker_fps_source != "cache_metadata" else valid_source_fps
     cfg = replace(cfg, assumed_fps=effective_fps)
     (out_dir / "config.json").write_text(json.dumps(asdict(cfg), indent=2), encoding="utf-8")
 
@@ -417,6 +430,10 @@ def run_tracker_config(
     multi_det_extra = 0
     near_dup_suppress = 0
     switch_events = 0
+    switch_reason_counts: dict[str, int] = {}
+    match_mode_counts = {"hard": 0, "soft": 0, "ultra_soft": 0, "sole": 0}
+    previous_input_frame_id = None
+    frame_gap_values: list[int] = []
     ghost_events = 0
     max_ghost_duration = 0.0
     duplicate_frames = 0
@@ -439,6 +456,9 @@ def run_tracker_config(
     with frame_path.open("w", encoding="utf-8") as f_out, switch_path.open("w", encoding="utf-8") as s_out:
         for row in frames:
             frame_id = int(row["frame_id"])
+            if previous_input_frame_id is not None:
+                frame_gap_values.append(max(0, frame_id - previous_input_frame_id - 1))
+            previous_input_frame_id = frame_id
             ts_ms = int(row.get("timestamp_ms") or 0)
             now = float(ts_ms) / 1000.0
             raw_dets = row.get("detections") or []
@@ -523,6 +543,10 @@ def run_tracker_config(
                 id_before_gap = None
 
             for ev in events:
+                if ev.get("event") == "match":
+                    mode = str(ev.get("reason") or "").lower().replace("-", "_")
+                    if mode in match_mode_counts:
+                        match_mode_counts[mode] += 1
                 if ev.get("event") == "filter" and ev.get("reason") == "near_duplicate_suppress":
                     near_dup_suppress += 1
                     continue
@@ -530,6 +554,7 @@ def run_tracker_config(
                     continue
                 switch_events += 1
                 reason = ev.get("switchReason") or ev.get("reason") or "UNKNOWN"
+                switch_reason_counts[reason] = switch_reason_counts.get(reason, 0) + 1
                 if reason == "IOU_BELOW_THRESHOLD":
                     iou_below += 1
                 if reason == "MULTI_DET_EXTRA":
@@ -654,12 +679,17 @@ def run_tracker_config(
     if first_person_frame is not None and first_track_frame is not None:
         start_delay_ms = max(0.0, (first_track_frame - first_person_frame) * 1000.0 / source_fps)
 
+    eligible_tracks = sum(1 for frames_seen in track_id_hist.values() if frames_seen >= 30)
+    completed_sequences = sum(frames_seen // 30 for frames_seen in track_id_hist.values())
+    incomplete_reason_counts = {"insufficient_track_frames": sum(1 for frames_seen in track_id_hist.values() if frames_seen < 30)}
+    total_match_events = sum(match_mode_counts.values())
     summary = {
         "config_name": cfg.name,
         "frames": n_frames,
         "duration_sec": round(duration_sec, 3),
         "source_fps": source_fps,
         "tracker_assumed_fps": cfg.assumed_fps,
+        "tracker_fps_source": tracker_fps_source,
         "total_new_tracks": total_new,
         "expected_initial_tracks": expected_initial,
         "unexpected_new_tracks": unexpected_new,
@@ -670,6 +700,31 @@ def run_tracker_config(
         "multi_det_extra": multi_det_extra,
         "near_dup_suppress_count": near_dup_suppress,
         "switch_events": switch_events,
+        "total_id_switch_events": switch_events,
+        "switch_reason_counts": switch_reason_counts,
+        "switch_reason_new_scene": switch_reason_counts.get("NEW_SCENE", 0),
+        "switch_reason_iou_below_threshold": switch_reason_counts.get("IOU_BELOW_THRESHOLD", 0),
+        "switch_reason_multi_det_extra": switch_reason_counts.get("MULTI_DET_EXTRA", 0),
+        "switch_reason_no_candidate": switch_reason_counts.get("NO_CANDIDATE", 0),
+        "fragmentation_count": unexpected_new,
+        "fragmentation_rate": round(unexpected_new / max(person_present_frames, 1), 4),
+        "hard_match_count": match_mode_counts["hard"],
+        "soft_match_count": match_mode_counts["soft"],
+        "ultra_soft_match_count": match_mode_counts["ultra_soft"],
+        "sole_match_count": match_mode_counts["sole"],
+        "hard_match_rate": round(match_mode_counts["hard"] / max(total_match_events, 1), 4),
+        "soft_match_rate": round(match_mode_counts["soft"] / max(total_match_events, 1), 4),
+        "ultra_soft_match_rate": round(match_mode_counts["ultra_soft"] / max(total_match_events, 1), 4),
+        "sole_match_rate": round(match_mode_counts["sole"] / max(total_match_events, 1), 4),
+        "eligible_tracks": eligible_tracks,
+        "completed_tracks": eligible_tracks,
+        "total_completed_sequences": completed_sequences,
+        "sequence_completion_rate": round(eligible_tracks / max(len(track_id_hist), 1), 4),
+        "incomplete_reason_counts": incomplete_reason_counts,
+        "incomplete_insufficient_track_frames": incomplete_reason_counts["insufficient_track_frames"],
+        "maximum_frame_gap": max(frame_gap_values, default=0),
+        "average_frame_gap": round(sum(frame_gap_values) / max(len(frame_gap_values), 1), 4),
+        "identity_consistency_violation_count": iou_below + multi_det_extra,
         "id_retention_rate": round(id_retention, 4),
         "dominant_track_id": dominant_id,
         "person_present_frames": person_present_frames,
@@ -701,6 +756,29 @@ def write_comparison(exp_dir: Path, summaries: list[dict], baseline_name: str = 
     fields = [
         "config_name",
         "new_track_thresh",
+        "total_id_switch_events",
+        "switch_reason_new_scene",
+        "switch_reason_iou_below_threshold",
+        "switch_reason_multi_det_extra",
+        "switch_reason_no_candidate",
+        "fragmentation_count",
+        "fragmentation_rate",
+        "hard_match_count",
+        "hard_match_rate",
+        "soft_match_count",
+        "soft_match_rate",
+        "ultra_soft_match_count",
+        "ultra_soft_match_rate",
+        "sole_match_count",
+        "sole_match_rate",
+        "eligible_tracks",
+        "completed_tracks",
+        "total_completed_sequences",
+        "sequence_completion_rate",
+        "incomplete_insufficient_track_frames",
+        "maximum_frame_gap",
+        "average_frame_gap",
+        "identity_consistency_violation_count",
         "match_thresh",
         "ultra_soft_enabled",
         "near_dup_suppress_mode",
@@ -801,6 +879,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--frame-start", type=int, default=0)
     p.add_argument("--frame-end", type=int, default=3599)
     p.add_argument("--configs", type=str, default=",".join(CONFIGS.keys()))
+    p.add_argument("--preset", choices=sorted(PRESETS), default="", help="Named configuration subset; --configs remains available.")
     p.add_argument("--force-rerun", action="store_true", help="Ignore existing summary.json and re-run listed configs")
     p.add_argument(
         "--reuse-summary-from",
@@ -838,9 +917,8 @@ def main() -> int:
         meta, frames = load_cache(cache_path)
         if not frames:
             raise SystemExit(f"empty cache: {cache_path}")
-        source_fps = float(meta.get("source_fps") or 30.0)
-        # After resize cache, analysis path is 30 fps publish; keep meta source_fps for time.
-        names = [n.strip() for n in args.configs.split(",") if n.strip()]
+        source_fps = meta.get("source_fps")
+        names = list(PRESETS[args.preset]) if args.preset else [n.strip() for n in args.configs.split(",") if n.strip()]
         reuse_root = Path(args.reuse_summary_from) if args.reuse_summary_from else None
         summaries = []
         for name in names:
@@ -868,7 +946,7 @@ def main() -> int:
                     frames,
                     cfg,
                     out,
-                    source_fps=30.0 if meta.get("source_width") == 1280 else source_fps,
+                    source_fps=source_fps,
                 )
             )
         write_comparison(exp_dir, summaries)
