@@ -13,7 +13,11 @@ from ai.action.feature_schema import (
     feature_dim_for_schema,
     feature_names_for_schema,
 )
-from ai.action.motion_features import append_motion_features, build_motion_discontinuity_mask
+from ai.action.motion_features import (
+    DEFAULT_MOTION_FEATURE_MIN_KEYPOINT_CONF,
+    append_motion_features,
+    build_motion_discontinuity_mask,
+)
 
 DEFAULT_CLASSES = ("Normal", "Faint")
 KEYPOINT_FEATURE_DIM = DEFAULT_KEYPOINT_INPUT_SIZE
@@ -262,8 +266,22 @@ def keypoint_sequence_to_features(
     elif schema == KEYPOINT_MOTION54_SCHEMA_VERSION:
         # Continuous samples keep raw per-frame displacement; only declared
         # discontinuities (recovery relink / large gaps) zero center_drop+velocity.
+        # Low shoulder/hip confidence also zeros motion (no inventing from (0,0)).
         disc = build_motion_discontinuity_mask(sequence, base_features.shape[0])
-        features = append_motion_features(base_features, discontinuity_mask=disc)
+        min_conf = float(
+            sequence.get("motion_min_keypoint_conf", DEFAULT_MOTION_FEATURE_MIN_KEYPOINT_CONF)
+            if isinstance(sequence, dict)
+            else DEFAULT_MOTION_FEATURE_MIN_KEYPOINT_CONF
+        )
+        validity: dict = {}
+        features = append_motion_features(
+            base_features,
+            discontinuity_mask=disc,
+            min_keypoint_conf=min_conf,
+            validity_out=validity,
+        )
+        if isinstance(sequence, dict):
+            sequence["motion_validity"] = validity
     elif schema == KEYPOINT51_SCHEMA_VERSION:
         features = base_features
     elif expected_input_size == 54:
