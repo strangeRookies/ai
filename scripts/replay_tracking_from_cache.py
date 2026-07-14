@@ -435,6 +435,7 @@ def run_tracker_config(
     previous_input_frame_id = None
     frame_gap_values: list[int] = []
     ghost_events = 0
+    ghost_track_ids: set[int] = set()
     max_ghost_duration = 0.0
     duplicate_frames = 0
     unique_duplicate_pairs: set[tuple[int, int]] = set()
@@ -526,6 +527,7 @@ def run_tracker_config(
                     ghost_sec = miss / max(source_fps, 1e-6)
                     if ghost_sec > 1.0:
                         ghost_events += 1
+                        ghost_track_ids.add(int(tid))
                         max_ghost_duration = max(max_ghost_duration, ghost_sec)
 
             # occlusion recovery proxy
@@ -733,6 +735,8 @@ def run_tracker_config(
         "occlusion_recovered": occlusion_recovered,
         "occlusion_recovery_rate": round(occlusion_recovered / occlusion_gaps, 4) if occlusion_gaps else None,
         "ghost_count": ghost_events,
+        "ghost_frame_count": ghost_events,
+        "unique_ghost_tracks": len(ghost_track_ids),
         "max_ghost_duration_sec": round(max_ghost_duration, 3),
         "duplicate_frames": duplicate_frames,
         "unique_duplicate_pairs": len(unique_duplicate_pairs),
@@ -794,6 +798,8 @@ def write_comparison(exp_dir: Path, summaries: list[dict], baseline_name: str = 
         "track_start_delay_ms",
         "occlusion_recovery_rate",
         "ghost_count",
+        "ghost_frame_count",
+        "unique_ghost_tracks",
         "max_ghost_duration_sec",
         "duplicate_frames",
         "unique_duplicate_pairs",
