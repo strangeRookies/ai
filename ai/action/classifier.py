@@ -13,7 +13,7 @@ from ai.action.feature_schema import (
     feature_dim_for_schema,
     feature_names_for_schema,
 )
-from ai.action.motion_features import append_motion_features
+from ai.action.motion_features import append_motion_features, build_motion_discontinuity_mask
 
 DEFAULT_CLASSES = ("Normal", "Faint")
 KEYPOINT_FEATURE_DIM = DEFAULT_KEYPOINT_INPUT_SIZE
@@ -260,7 +260,10 @@ def keypoint_sequence_to_features(
     if schema == KEYPOINT_BBOX54_SCHEMA_VERSION:
         features = append_bbox_features(base_features, sequence)
     elif schema == KEYPOINT_MOTION54_SCHEMA_VERSION:
-        features = append_motion_features(base_features)
+        # Continuous samples keep raw per-frame displacement; only declared
+        # discontinuities (recovery relink / large gaps) zero center_drop+velocity.
+        disc = build_motion_discontinuity_mask(sequence, base_features.shape[0])
+        features = append_motion_features(base_features, discontinuity_mask=disc)
     elif schema == KEYPOINT51_SCHEMA_VERSION:
         features = base_features
     elif expected_input_size == 54:

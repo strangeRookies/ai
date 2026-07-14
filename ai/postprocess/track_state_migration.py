@@ -21,13 +21,62 @@ def _move_dict_key(mapping: dict, old_key: Any, new_key: Any) -> bool:
     return True
 
 
-def migrate_sequence_buffer(sequence_buffer: Any, old_track_id: int, new_track_id: int) -> bool:
-    """Move per-track sequence buffer entries from old_track_id → new_track_id."""
+def migrate_sequence_buffer(
+    sequence_buffer: Any,
+    old_track_id: int,
+    new_track_id: int,
+    *,
+    fresh_start_history: bool = False,
+) -> bool:
+    """Move per-track sequence buffer entries from old_track_id → new_track_id.
+
+    ``fresh_start_history=True`` drops pre-relink keypoint/crop history (Incident
+    Recovery fail-safe) instead of merging frames across a long detection miss.
+    """
     if sequence_buffer is None or int(old_track_id) == int(new_track_id):
         return False
     old_id, new_id = int(old_track_id), int(new_track_id)
     if hasattr(sequence_buffer, "migrate_track_id"):
-        return bool(sequence_buffer.migrate_track_id(old_id, new_id))
+        try:
+            return bool(
+                sequence_buffer.migrate_track_id(
+                    old_id, new_id, fresh_start_history=fresh_start_history
+                )
+            )
+        except TypeError:
+            # Older buffers without the kwarg keep legacy merge/move.
+            if fresh_start_history:
+                had = False
+                for track_id in (old_id, new_id):
+                    for attr in (
+                        "_buffers",
+                        "_last_seen_at",
+                        "_last_detection_by_track",
+                        "last_sequence_diagnostics",
+                        "sequences_generated_by_track",
+                    ):
+                        side = getattr(sequence_buffer, attr, None)
+                        if isinstance(side, dict) and track_id in side:
+                            had = True
+                            side.pop(track_id, None)
+                return had
+            return bool(sequence_buffer.migrate_track_id(old_id, new_id))
+
+    if fresh_start_history:
+        had = False
+        for track_id in (old_id, new_id):
+            for attr in (
+                "_buffers",
+                "_last_seen_at",
+                "_last_detection_by_track",
+                "last_sequence_diagnostics",
+                "sequences_generated_by_track",
+            ):
+                side = getattr(sequence_buffer, attr, None)
+                if isinstance(side, dict) and track_id in side:
+                    had = True
+                    side.pop(track_id, None)
+        return had
 
     moved = False
     for attr in ("_buffers", "_last_seen_at", "_last_detection_by_track", "last_sequence_diagnostics", "sequences_generated_by_track"):
@@ -132,10 +181,20 @@ def migrate_track_runtime_state(
     post_processor: Any = None,
     display_id_mapper: Any = None,
     overlay_publish_state: Any = None,
+    sequence_fresh_start: bool = False,
 ) -> dict[str, bool]:
-    """Migrate all known runtime maps for a track id change. Returns per-target flags."""
+    """Migrate all known runtime maps for a track id change. Returns per-target flags.
+
+    Incident Recovery should set ``sequence_fresh_start=True`` so keypoint LSTM
+    history is not carried across a long detection miss (motion velocity spike).
+    """
     return {
-        "sequence_buffer": migrate_sequence_buffer(sequence_buffer, old_track_id, new_track_id),
+        "sequence_buffer": migrate_sequence_buffer(
+            sequence_buffer,
+            old_track_id,
+            new_track_id,
+            fresh_start_history=sequence_fresh_start,
+        ),
         "post_processor": migrate_faint_post_processor(post_processor, camera_id, old_track_id, new_track_id),
         "display_id_mapper": migrate_display_id_mapper(display_id_mapper, old_track_id, new_track_id),
         "overlay_publish_state": migrate_overlay_publish_state(overlay_publish_state, old_track_id, new_track_id),
@@ -186,6 +245,8 @@ def finalize_recovery_detections(
         item.update(assigned)
 
         if from_id_int is not None and from_id_int != new_id:
+            # Keypoint LSTM history must not bridge the recovery miss window;
+            # other runtime maps (lifecycle, display id, overlay) still migrate.
             flags = migrate_track_runtime_state(
                 camera_id=camera_login_id,
                 old_track_id=from_id_int,
@@ -194,6 +255,7 @@ def finalize_recovery_detections(
                 post_processor=post_processor,
                 display_id_mapper=display_id_mapper,
                 overlay_publish_state=overlay_publish_state,
+                sequence_fresh_start=True,
             )
             migrations.append(
                 {
@@ -201,6 +263,7 @@ def finalize_recovery_detections(
                     "from_track_id": from_id_int,
                     "to_track_id": new_id,
                     "migrated": flags,
+                    "sequence_fresh_start": True,
                 }
             )
         out.append(item)

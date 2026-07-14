@@ -81,6 +81,10 @@ class KeypointSequenceBuffer:
             "sequence_end_frame_id": self._frames[-1]["frame_id"],
             "sequence_start_at_ms": self._frames[0]["captured_at_ms"],
             "sequence_end_at_ms": self._frames[-1]["captured_at_ms"],
+            # Per-sample timing for motion discontinuity (recovery / large gaps).
+            "frame_ids": [item["frame_id"] for item in self._frames],
+            "frame_idxs": [item["frame_idx"] for item in self._frames],
+            "sample_captured_at_ms": [item["captured_at_ms"] for item in self._frames],
             "detections": [item["detection"] for item in self._frames],
             "frame_shapes": [item["frame_shape"] for item in self._frames],
             "bbox": self._frames[-1]["detection"].get("bbox"),
