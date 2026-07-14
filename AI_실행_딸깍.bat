@@ -107,17 +107,10 @@ echo.
 echo ========================================================
 echo [2/5] GPU 서버 코드 동기화
 echo ========================================================
-call :LOG "Syncing GPU stable repo to origin/%BRANCH%..."
-ssh %GPU_USER%@%GPU_HOST% "cd %REMOTE_ROOT% && git stash push -u -m auto-stash-before-ai-stable-run || true && git fetch origin && git checkout %BRANCH% && git pull --ff-only origin %BRANCH%"
+call :LOG "Syncing GPU stable repo to origin/%BRANCH% and stopping previous AI runtime processes (single SSH connection to avoid MaxStartups)..."
+ssh %GPU_USER%@%GPU_HOST% "cd %REMOTE_ROOT% && git stash push -u -m auto-stash-before-ai-stable-run || true && git fetch origin && git checkout %BRANCH% && git pull --ff-only origin %BRANCH% && (pkill -f 'scripts/run_registered_cameras.py' 2>/dev/null || true; pkill -f 'scripts/start_simulated_rtsp_from_folder.py' 2>/dev/null || true; pkill -f 'scripts/serve_ai_overlay.py' 2>/dev/null || true; pkill -f 'ffmpeg' 2>/dev/null || true; rm -f %REMOTE_ROOT%/runs/camera_worker_registry.json 2>/dev/null || true; docker rm -f mediamtx 2>/dev/null || true)"
 if errorlevel 1 (
-  set "CURRENT_STEP=[2/5] GPU 서버 코드 동기화"
-  goto FAIL
-)
-
-call :LOG "Stopping previous AI runtime processes..."
-ssh %GPU_USER%@%GPU_HOST% "pkill -f 'scripts/run_registered_cameras.py' 2>/dev/null || true; pkill -f 'scripts/start_simulated_rtsp_from_folder.py' 2>/dev/null || true; pkill -f 'scripts/serve_ai_overlay.py' 2>/dev/null || true; pkill -f 'ffmpeg' 2>/dev/null || true; rm -f %REMOTE_ROOT%/runs/camera_worker_registry.json 2>/dev/null || true; docker rm -f mediamtx 2>/dev/null || true"
-if errorlevel 1 (
-  set "CURRENT_STEP=[2/5] 기존 AI 프로세스 정리"
+  set "CURRENT_STEP=[2/5] GPU 서버 코드 동기화 및 기존 프로세스 정리"
   goto FAIL
 )
 
