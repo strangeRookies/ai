@@ -138,21 +138,28 @@ class VlmKeyframeRegressionTest(unittest.TestCase):
     def test_result_contract_rejects_unknown_invalid_and_forbidden_values(self) -> None:
         valid = {
             "schema_version": "vlm-result-v1",
+            "incident_id": "inc-1",
             "visual_event_type": "person_lying_on_floor",
             "people_count": 1,
             "korean_search_keywords": ["바닥", "쓰러짐"],
             "detailed_description_ko": "한 사람이 바닥 가까이에 있습니다.",
-            "uncertainty_notes": ["영상에서 직접 관찰되는 내용만 기술했습니다."],
+            "frame_count": KEYFRAME_COUNT,
+            "provider": "mock",
+            "is_mock": True,
         }
         validate_vlm_result(valid)
 
         invalid_results = (
             ({**valid, "unknown": True}, "unknown"),
+            ({**valid, "incident_id": ""}, "incident_id"),
             ({**valid, "people_count": -1}, "nonnegative"),
             ({**valid, "people_count": True}, "integer"),
             ({**valid, "people_count": 1.5}, "integer"),
             ({**valid, "korean_search_keywords": []}, "nonempty"),
             ({**valid, "korean_search_keywords": ["바닥", "바닥"]}, "unique"),
+            ({**valid, "frame_count": 7}, "equal 8"),
+            ({**valid, "provider": "gemini"}, "provider"),
+            ({**valid, "is_mock": False}, "is_mock"),
             ({**valid, "detailed_description_ko": "남성으로 보이는 사람이 쓰러졌습니다."}, "forbidden"),
             ({**valid, "visual_event_type": "medical condition"}, "forbidden"),
         )
@@ -174,7 +181,8 @@ class VlmKeyframeRegressionTest(unittest.TestCase):
                     "--output-urls",
                     "unused",
                     "--metadata",
-                    '{"incident":{"id":"inc-1"}}',
+                    '{"incident_id":"inc-1","camera_login_id":"cam-1",'
+                    '"clip_start_sec":0,"clip_end_sec":0.875}',
                 ],
                 check=False,
                 capture_output=True,
@@ -206,7 +214,11 @@ class VlmKeyframeRegressionTest(unittest.TestCase):
                     ProcessVlmArgs(
                         input_url=str(video),
                         output_urls=("unused",),
-                        metadata=MetadataJson('{"incident":{"id":"inc-1"}}'),
+                        metadata=MetadataJson(
+                            '{"incident_id":"inc-1","camera_login_id":"cam-1",'
+                            '"clip_start_sec":0,"clip_end_sec":2,'
+                            '"incident":{"id":"nested-inc-1"}}'
+                        ),
                         mock_mode=True,
                     )
                 )
