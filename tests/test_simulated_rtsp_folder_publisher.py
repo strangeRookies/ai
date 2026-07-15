@@ -1,3 +1,4 @@
+import random
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,7 +8,16 @@ import ai.worker_registry
 from ai.registered_cameras import RegisteredCamera
 from ai.ffmpeg_command import build_ffmpeg_command
 from ai.simulated_rtsp_publisher import FfmpegRestartPolicy, PublisherLock, select_initial_ffmpeg_mode, tail_text_file
-from ai.simulated_rtsp_runtime import scan_stream_video_directories, video_pool_for_camera_position
+from ai.simulated_rtsp_runtime import (
+    load_video_assignments,
+    save_video_assignments,
+    scan_stream_video_directories,
+    select_rotating_video,
+    stream_config_changed,
+    video_file_fingerprint,
+    video_pool_fingerprint,
+    video_pool_for_camera_position,
+)
 from scripts.start_simulated_rtsp_from_folder import build_ffmpeg_cmd, parse_arguments, stable_video_index, video_for_camera
 from ai.simulated_rtsp_sources import filter_stream_video_pools, filter_video_files
 
@@ -300,6 +310,101 @@ class SimulatedRtspFolderPublisherTest(unittest.TestCase):
             scanned = scan_stream_video_directories(str(outdoor_dir), str(chromakey_dir))
 
         self.assertEqual(set(scanned), {outdoor_video, chromakey_video})
+
+    def test_rotating_selection_avoids_previous_and_in_use_videos(self):
+        videos = [Path("outside_01.mp4"), Path("outside_02.mp4"), Path("outside_03.mp4")]
+
+        selected = select_rotating_video(
+            videos,
+            previous_video=videos[0],
+            used_videos={videos[1]},
+            rng=random.Random(7),
+        )
+
+        self.assertEqual(selected, videos[2])
+
+    def test_rotating_selection_reuses_only_video_when_no_alternative_exists(self):
+        only_video = Path("chromakey_01.mp4")
+
+        selected = select_rotating_video(
+            [only_video],
+            previous_video=only_video,
+            used_videos={only_video},
+            rng=random.Random(7),
+        )
+
+        self.assertEqual(selected, only_video)
+
+    def test_video_assignments_round_trip(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            state_path = Path(temp_dir) / "video_assignments.json"
+            expected = {
+                "cam_03": Path(temp_dir) / "outside.mp4",
+                "cam_04": Path(temp_dir) / "chromakey.mp4",
+            }
+
+            save_video_assignments(state_path, expected)
+            loaded = load_video_assignments(state_path)
+
+        self.assertEqual(loaded, {camera_id: path.resolve() for camera_id, path in expected.items()})
+
+    def test_video_fingerprint_detects_same_path_content_change(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            video_path = Path(temp_dir) / "outside.mp4"
+            video_path.write_bytes(b"old")
+            before = video_file_fingerprint(video_path)
+
+            video_path.write_bytes(b"new-content")
+            after = video_file_fingerprint(video_path)
+
+        self.assertNotEqual(before, after)
+
+    def test_video_pool_fingerprint_detects_added_file(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            first_video = Path(temp_dir) / "outside_01.mp4"
+            second_video = Path(temp_dir) / "outside_02.mp4"
+            first_video.write_bytes(b"first")
+            second_video.write_bytes(b"second")
+
+            before = video_pool_fingerprint([first_video])
+            after = video_pool_fingerprint([first_video, second_video])
+
+        self.assertNotEqual(before, after)
+
+    def test_stream_config_stays_unchanged_for_same_file_fingerprint(self):
+        video_path = Path("outside.mp4")
+        fingerprint = (str(video_path.resolve()), 100, 12345)
+        stream_info = {
+            "video_path": video_path,
+            "video_fingerprint": fingerprint,
+            "rtsp_url": "rtsp://localhost:8554/cam_03",
+        }
+
+        changed = stream_config_changed(
+            stream_info,
+            video_path,
+            fingerprint,
+            "rtsp://localhost:8554/cam_03",
+        )
+
+        self.assertFalse(changed)
+
+    def test_stream_config_changes_when_same_path_content_fingerprint_changes(self):
+        video_path = Path("outside.mp4")
+        stream_info = {
+            "video_path": video_path,
+            "video_fingerprint": (str(video_path.resolve()), 100, 12345),
+            "rtsp_url": "rtsp://localhost:8554/cam_03",
+        }
+
+        changed = stream_config_changed(
+            stream_info,
+            video_path,
+            (str(video_path.resolve()), 200, 67890),
+            "rtsp://localhost:8554/cam_03",
+        )
+
+        self.assertTrue(changed)
 
     def test_video_for_chromakey_camera_accepts_assigned_chromakey_video(self):
         with tempfile.TemporaryDirectory() as temp_dir:

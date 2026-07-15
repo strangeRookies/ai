@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import json
+import random
 import signal
 import subprocess
 import sys
@@ -22,9 +24,11 @@ from ai.simulated_rtsp_publisher import (
 from ai.simulated_rtsp_sources import (
     filter_stream_video_pools,
     scan_video_directory,
-    stable_video_index,
-    video_for_camera,
 )
+
+
+ASSIGNMENT_STATE_PATH = Path("runs/simulated_rtsp/video_assignments.json")
+VideoFingerprint = tuple[str, int, int]
 
 
 def video_pool_for_camera_position(
@@ -46,9 +50,80 @@ def scan_stream_video_directories(video_dir: str, chromakey_video_dir: str | Non
         video_files.extend(scan_video_directory(chromakey_video_dir))
 
     # The chromakey directory may be nested under --video-dir. Keep one entry
-    # per physical path so stable camera hashing is not skewed by duplicates.
+    # per physical path so rotating camera assignment is not skewed by duplicates.
     unique_files = {video_path.resolve(): video_path for video_path in video_files}
     return sorted(unique_files.values(), key=lambda video_path: str(video_path).lower())
+
+
+def video_file_fingerprint(video_path: Path) -> VideoFingerprint:
+    stat = video_path.stat()
+    return str(video_path.resolve()), stat.st_size, stat.st_mtime_ns
+
+
+def video_pool_fingerprint(video_files: list[Path]) -> tuple[VideoFingerprint, ...]:
+    return tuple(sorted(video_file_fingerprint(video_path) for video_path in video_files))
+
+
+def load_video_assignments(state_path: Path) -> dict[str, Path]:
+    try:
+        payload = json.loads(state_path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    return {
+        str(camera_login_id): Path(video_path)
+        for camera_login_id, video_path in payload.items()
+        if isinstance(camera_login_id, str) and isinstance(video_path, str) and video_path
+    }
+
+
+def save_video_assignments(state_path: Path, assignments: dict[str, Path]) -> None:
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = state_path.with_suffix(f"{state_path.suffix}.tmp")
+    payload = {camera_login_id: str(video_path.resolve()) for camera_login_id, video_path in assignments.items()}
+    temp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    temp_path.replace(state_path)
+
+
+def select_rotating_video(
+    video_files: list[Path],
+    previous_video: Path | None,
+    used_videos: set[Path],
+    rng: random.Random | random.SystemRandom | None = None,
+) -> Path:
+    if not video_files:
+        raise ValueError("video_files must not be empty")
+
+    chooser = rng or random.SystemRandom()
+    previous_resolved = previous_video.resolve() if previous_video is not None else None
+    resolved_used = {video_path.resolve() for video_path in used_videos}
+
+    candidates = [
+        video_path
+        for video_path in video_files
+        if video_path.resolve() != previous_resolved and video_path.resolve() not in resolved_used
+    ]
+    if not candidates:
+        candidates = [video_path for video_path in video_files if video_path.resolve() != previous_resolved]
+    if not candidates:
+        candidates = [video_path for video_path in video_files if video_path.resolve() not in resolved_used]
+    if not candidates:
+        candidates = list(video_files)
+    return chooser.choice(candidates)
+
+
+def stream_config_changed(
+    stream_info: dict[str, Any],
+    assigned_video: Path,
+    assigned_fingerprint: VideoFingerprint,
+    target_rtsp_url: str,
+) -> bool:
+    return (
+        stream_info["video_path"] != assigned_video
+        or stream_info["video_fingerprint"] != assigned_fingerprint
+        or stream_info["rtsp_url"] != target_rtsp_url
+    )
 
 
 def run_simulated_rtsp_publisher(args: argparse.Namespace, repo_root: Path) -> None:
@@ -110,6 +185,13 @@ def run_simulated_rtsp_publisher(args: argparse.Namespace, repo_root: Path) -> N
     print("--------------------------------------------------", flush=True)
 
     running_streams: dict[str, dict[str, Any]] = {}
+    session_assignments: dict[str, Path] = {}
+    assignment_history = load_video_assignments(ASSIGNMENT_STATE_PATH)
+    pool_fingerprints = {
+        "outdoor": video_pool_fingerprint(outdoor_files),
+        "chromakey": video_pool_fingerprint(chromakey_files),
+    }
+    pending_pool_changes: set[str] = set()
 
     def stop_stream(camera_login_id: str, stream_info: dict[str, Any]) -> None:
         process = stream_info["process"]
@@ -163,6 +245,19 @@ def run_simulated_rtsp_publisher(args: argparse.Namespace, repo_root: Path) -> N
                     outdoor_files, chromakey_files, excluded_files = filter_stream_video_pools(
                         all_scanned_files, args.domain, args.label, args.video_filter
                     )
+                    scanned_pool_fingerprints = {
+                        "outdoor": video_pool_fingerprint(outdoor_files),
+                        "chromakey": video_pool_fingerprint(chromakey_files),
+                    }
+                    for pool_name, fingerprint in scanned_pool_fingerprints.items():
+                        if fingerprint != pool_fingerprints[pool_name]:
+                            pending_pool_changes.add(pool_name)
+                            print(
+                                f"[simulated-rtsp] Video pool changed: {pool_name}. "
+                                "Affected streams will be reassigned or restarted.",
+                                flush=True,
+                            )
+                    pool_fingerprints = scanned_pool_fingerprints
                 except Exception as exc:
                     print(f"[simulated-rtsp][error] Failed during directory scan or filtering: {exc}", file=sys.stderr)
                     cleanup_all_streams()
@@ -176,6 +271,8 @@ def run_simulated_rtsp_publisher(args: argparse.Namespace, repo_root: Path) -> N
 
             if simulated_cameras is not None:
                 current_active_ids: set[str] = set()
+                used_videos_by_pool: dict[str, set[Path]] = {"outdoor": set(), "chromakey": set()}
+                assignment_history_changed = False
                 sorted_cameras = sorted(simulated_cameras, key=lambda item: item.camera_login_id)
                 for camera_position, camera in enumerate(sorted_cameras):
                     camera_login_id = camera.camera_login_id
@@ -183,19 +280,32 @@ def run_simulated_rtsp_publisher(args: argparse.Namespace, repo_root: Path) -> N
                     camera_video_pool, use_chromakey = video_pool_for_camera_position(
                         camera_position, outdoor_files, chromakey_files
                     )
-                    video_index = stable_video_index(camera_login_id, len(camera_video_pool))
-                    assigned_video = video_for_camera(
-                        camera,
-                        camera_video_pool,
-                        video_index,
-                        repo_root,
-                        chromakey=use_chromakey,
+                    pool_name = "chromakey" if use_chromakey else "outdoor"
+                    used_videos = used_videos_by_pool[pool_name]
+                    current_assignment = session_assignments.get(camera_login_id)
+                    current_is_available = current_assignment in camera_video_pool
+                    current_is_duplicate = current_assignment is not None and current_assignment in used_videos
+                    needs_new_assignment = (
+                        current_assignment is None
+                        or not current_is_available
+                        or pool_name in pending_pool_changes
+                        or current_is_duplicate
                     )
+                    if needs_new_assignment:
+                        previous_video = current_assignment or assignment_history.get(camera_login_id)
+                        assigned_video = select_rotating_video(camera_video_pool, previous_video, used_videos)
+                        session_assignments[camera_login_id] = assigned_video
+                        assignment_history[camera_login_id] = assigned_video
+                        assignment_history_changed = True
+                    else:
+                        assigned_video = current_assignment
+                    used_videos.add(assigned_video)
+                    assigned_fingerprint = video_file_fingerprint(assigned_video)
                     target_rtsp_url = camera_rtsp_url(rtsp_base_url, camera_login_id)
 
                     existing = running_streams.get(camera_login_id)
-                    if existing is not None and (
-                        existing["video_path"] != assigned_video or existing["rtsp_url"] != target_rtsp_url
+                    if existing is not None and stream_config_changed(
+                        existing, assigned_video, assigned_fingerprint, target_rtsp_url
                     ):
                         print(f"[simulated-rtsp] Stream config changed for camera={camera_login_id}. Restarting.", flush=True)
                         stop_stream(camera_login_id, existing)
@@ -232,6 +342,7 @@ def run_simulated_rtsp_publisher(args: argparse.Namespace, repo_root: Path) -> N
                             running_streams[camera_login_id] = {
                                 "process": process,
                                 "video_path": assigned_video,
+                                "video_fingerprint": assigned_fingerprint,
                                 "rtsp_url": target_rtsp_url,
                                 "policy": policy,
                                 "log_path": log_path,
@@ -240,11 +351,22 @@ def run_simulated_rtsp_publisher(args: argparse.Namespace, repo_root: Path) -> N
                         except (OSError, RuntimeError) as exc:
                             print(f"[simulated-rtsp][error] Failed to start ffmpeg for camera={camera_login_id}: {exc}", file=sys.stderr)
 
+                if assignment_history_changed:
+                    try:
+                        save_video_assignments(ASSIGNMENT_STATE_PATH, assignment_history)
+                    except OSError as exc:
+                        print(
+                            f"[simulated-rtsp][warning] Failed to save video assignments: {exc}",
+                            file=sys.stderr,
+                        )
+                pending_pool_changes.clear()
+
                 for camera_login_id in list(running_streams.keys()):
                     if camera_login_id not in current_active_ids:
                         print(f"[simulated-rtsp] Camera={camera_login_id} is no longer active. Stopping stream.", flush=True)
                         stop_stream(camera_login_id, running_streams[camera_login_id])
                         del running_streams[camera_login_id]
+                        session_assignments.pop(camera_login_id, None)
 
             for camera_login_id, stream_info in list(running_streams.items()):
                 process = stream_info["process"]
