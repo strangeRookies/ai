@@ -34,25 +34,6 @@ def _kp_point(keypoints, index, conf_min=_MIN_KEYPOINT_CONF):
     return float(item["x"]), float(item["y"])
 
 
-def _track_ids_match(a, b):
-    if a is None or b is None:
-        return False
-    try:
-        return int(float(str(a))) == int(float(str(b)))
-    except (TypeError, ValueError):
-        return False
-
-
-def _find_track_box(boxes, track_id):
-    """이 프레임의 boxes 리스트에서 target track_id에 해당하는 항목을 찾는다."""
-    if not boxes or track_id is None:
-        return None
-    for box in boxes:
-        if _track_ids_match(box.get("track_id"), track_id):
-            return box
-    return None
-
-
 def _face_box_from_keypoints(box, width, height):
     """1순위: 코/눈/귀 keypoint 기반으로 얼굴 영역만 추정."""
     keypoints = box.get("keypoints") if box else None
@@ -124,50 +105,54 @@ def _blur_region(cv2_module, frame, region):
     frame[y1_px:y2_px, x1_px:x2_px] = cv2_module.GaussianBlur(roi, (ksize, ksize), 0)
 
 
-def _apply_per_frame_face_blur(cv2_module, frames, frame_boxes, track_id, width, height):
-    """프레임마다 얼굴 위치를 다시 계산해서 블러 적용 (전신 고정 블러 대체).
+def _apply_per_frame_face_blur(cv2_module, frames, frame_boxes, width, height):
+    """프레임에 나오는 사람 전원의 얼굴 위치를 매 프레임 다시 계산해서 블러 적용
+    (이벤트를 트리거한 특정 track_id 하나만이 아니라, 화면에 잡히는 모든 사람 대상).
 
-    우선순위: 1) keypoint 기반 얼굴 박스  2) 전신 bbox 상단 일부(상위 %)
-    3) 직전 성공 위치 재사용(최대 _MAX_STALE_FACE_BOX_FRAMES 프레임)  4) 포기(블러 없음)
+    사람마다(=track_id마다) 독립적으로 우선순위 적용:
+    1) keypoint 기반 얼굴 박스  2) 전신 bbox 상단 일부(상위 %)
+    3) 그 사람의 직전 성공 위치 재사용(최대 _MAX_STALE_FACE_BOX_FRAMES 프레임)  4) 포기(블러 없음)
     """
     tier_counts = {"keypoint": 0, "upper_body": 0, "stale_reuse": 0, "skipped": 0}
-    stale_box = None
-    stale_streak = 0
+    stale_by_track = {}  # track_id(또는 임시 키) -> {"box": region, "streak": int}
+    untracked_seq = 0  # track_id가 없는 탐지는 프레임 간 연속성이 없어 재사용 대상에서 제외
 
     for idx, frame in enumerate(frames):
         boxes_for_frame = frame_boxes[idx] if idx < len(frame_boxes) else None
-        matched_box = _find_track_box(boxes_for_frame, track_id)
+        seen_keys = set()
 
-        region = None
-        tier = None
-        if matched_box is not None:
-            region = _face_box_from_keypoints(matched_box, width, height)
-            if region is not None:
-                tier = "keypoint"
-            else:
-                region = _upper_body_fallback_box(matched_box, width, height)
+        for box in (boxes_for_frame or []):
+            track_key = box.get("track_id")
+            if track_key is None:
+                untracked_seq += 1
+                track_key = f"_untracked_{untracked_seq}"
+            seen_keys.add(track_key)
+
+            region = _face_box_from_keypoints(box, width, height)
+            tier = "keypoint" if region is not None else None
+            if region is None:
+                region = _upper_body_fallback_box(box, width, height)
                 if region is not None:
                     tier = "upper_body"
 
-        if region is None:
-            if stale_box is not None and stale_streak < _MAX_STALE_FACE_BOX_FRAMES:
-                region = stale_box
-                tier = "stale_reuse"
-                stale_streak += 1
-            else:
-                # 재사용 한도 초과(또는 재사용할 위치 자체가 없음): 오래된 위치를 계속
-                # 우려먹지 않기 위해 포기. 안 보이는 것보다 낫다고 오판하지 않도록
-                # 여기서 전신 블러로 확대하지 않음(이 프레임은 그대로 둠).
-                stale_box = None
-                stale_streak = 0
-                tier_counts["skipped"] += 1
-                continue
-        else:
-            stale_box = region
-            stale_streak = 0
+            if region is not None:
+                stale_by_track[track_key] = {"box": region, "streak": 0}
+                tier_counts[tier] += 1
+                _blur_region(cv2_module, frame, region)
 
-        tier_counts[tier] += 1
-        _blur_region(cv2_module, frame, region)
+        # 이번 프레임에 안 잡힌 사람들 중, 직전까지 살아있던 track은 잠깐 위치를 재사용
+        for track_key, state in list(stale_by_track.items()):
+            if track_key in seen_keys:
+                continue
+            if state["streak"] < _MAX_STALE_FACE_BOX_FRAMES:
+                _blur_region(cv2_module, frame, state["box"])
+                state["streak"] += 1
+                tier_counts["stale_reuse"] += 1
+            else:
+                # 재사용 한도 초과: 오래된 위치를 계속 우려먹지 않기 위해 포기.
+                # 안 보이는 것보다 낫다고 오판하지 않도록 전신 블러로 확대하지 않음.
+                tier_counts["skipped"] += 1
+                del stale_by_track[track_key]
 
     return tier_counts
 
@@ -274,11 +259,11 @@ def save_clip_to_mp4(task):
         if frames[idx].shape[:2] != (height, width):
             frames[idx] = cv2.resize(frames[idx], (width, height))
 
-    # 2. 인코딩 전에 프레임마다 얼굴 위치를 다시 계산해서 블러 적용(비식별화).
-    # 트리거 시점 1회 고정 bbox가 아니라, 저장된 그 프레임 자체의 keypoint로
-    # 매번 새로 계산하므로 대상이 움직여도 얼굴을 계속 따라가며 가림.
-    track_id = task.metadata.get("track_id") if task.metadata else None
-    blur_tier_counts = _apply_per_frame_face_blur(cv2, frames, frame_boxes, track_id, width, height)
+    # 2. 인코딩 전에 프레임마다 화면에 잡히는 사람 전원의 얼굴 위치를 다시 계산해서
+    # 블러 적용(비식별화). 트리거한 특정 track_id 하나가 아니라 프레임에 있는 모든
+    # 사람이 대상이고, 트리거 시점 1회 고정 bbox가 아니라 저장된 그 프레임 자체의
+    # keypoint로 매번 새로 계산하므로 대상이 움직여도 얼굴을 계속 따라가며 가림.
+    blur_tier_counts = _apply_per_frame_face_blur(cv2, frames, frame_boxes, width, height)
     print(
         f"[clip-worker] face-blur tiers event_type={task.event_type} camera_id={task.camera_id} "
         f"frames={len(frames)} counts={blur_tier_counts}",
