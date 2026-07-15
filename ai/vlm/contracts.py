@@ -115,10 +115,14 @@ def validate_vlm_result(result: Mapping[str, Any]) -> None:
         or frame_count != KEYFRAME_COUNT
     ):
         raise VlmContractError("frame_count must equal 8")
-    if result["provider"] != "mock":
-        raise VlmContractError("provider must be mock")
-    if result["is_mock"] is not True:
-        raise VlmContractError("is_mock must be true")
+    provider = result["provider"]
+    is_mock = result["is_mock"]
+    if provider not in {"mock", "gemini"}:
+        raise VlmContractError("provider must be mock or gemini")
+    if not isinstance(is_mock, bool):
+        raise VlmContractError("is_mock must be a boolean")
+    if (provider == "mock") != is_mock:
+        raise VlmContractError("is_mock must match the selected provider")
 
     event_type = _required_text(result["visual_event_type"], "visual_event_type")
     description = _required_text(result["detailed_description_ko"], "detailed_description_ko")

@@ -13,13 +13,26 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from ai.embedding_sdk import EmbeddingProvider, embed_text, resolve_provider as resolve_embedding_provider  # noqa: E402
 from ai.vlm.contracts import (  # noqa: E402
     VlmContractError,
     validate_keyframes,
     validate_vlm_result,
 )
+from ai.vlm.index_payload import (  # noqa: E402
+    INDEX_PAYLOAD_SCHEMA_VERSION,
+    SearchPayload,
+    VlmIndexPayload,
+)
+from ai.vlm.search_document import build_search_document, canonical_keywords  # noqa: E402
+from ai.vlm.deidentification_contracts import (  # noqa: E402
+    DeidentificationFrameReport,
+    DeidentificationOutcome,
+    DeidentifyFrames,
+)
 from ai.vlm.keyframe_extractor import (  # noqa: E402
     KeyframeExtractionError,
+    ExtractedKeyframe,
     extract_eight_keyframes,
     local_video_source,
 )
@@ -27,6 +40,7 @@ from ai.vlm_sdk import (  # noqa: E402
     VlmAnalyzeRequest,
     VlmAnalyzeResult,
     VlmFramePayload,
+    VlmProvider,
     resolve_vlm_provider,
 )
 
@@ -58,6 +72,7 @@ class ProcessVlmArgs:
     output_urls: tuple[str, ...]
     metadata: MetadataJson
     mock_mode: bool
+    output_mode: str = "vlm"
 
 
 VlmResult = VlmAnalyzeResult
@@ -77,6 +92,12 @@ def parse_args(argv: list[str]) -> ProcessVlmArgs:
     parser.add_argument("--input-url", required=True)
     parser.add_argument("--output-urls", required=True)
     parser.add_argument("--metadata", required=True)
+    parser.add_argument(
+        "--output-mode",
+        choices=("vlm", "index"),
+        default="vlm",
+        help="stdout contract: existing vlm-result-v1 (default) or vlm-index-payload-v1",
+    )
     parsed = parser.parse_args(argv)
     output_urls = tuple(
         url.strip() for url in parsed.output_urls.split(",") if url.strip()
@@ -86,10 +107,70 @@ def parse_args(argv: list[str]) -> ProcessVlmArgs:
         output_urls=output_urls,
         metadata=MetadataJson(parsed.metadata),
         mock_mode=os.getenv("VLM_MOCK_MODE", "true").lower() == "true",
+        output_mode=parsed.output_mode,
     )
 
 
-def process(args: ProcessVlmArgs) -> VlmResult:
+def process(
+    args: ProcessVlmArgs,
+    *,
+    deidentify_frames: DeidentifyFrames | None = None,
+) -> VlmResult:
+    analyzed, _metadata = _analyze_clip(
+        args,
+        deidentify_frames=deidentify_frames,
+    )
+    return analyzed
+
+
+def process_index_payload(
+    args: ProcessVlmArgs,
+    *,
+    deidentify_frames: DeidentifyFrames | None = None,
+    vlm_provider: VlmProvider | None = None,
+    embedding_provider: EmbeddingProvider | None = None,
+) -> VlmIndexPayload:
+    """Run the fail-closed VLM-to-index pipeline without changing ``process``."""
+
+    analyzed, metadata = _analyze_clip(
+        args,
+        deidentify_frames=deidentify_frames,
+        vlm_provider=vlm_provider,
+    )
+    if analyzed.is_mock != args.mock_mode:
+        raise VlmProcessError("configured VLM mode does not match provider result")
+
+    document = build_search_document(analyzed, metadata)
+    captured_at = metadata.get("captured_at")
+    if not isinstance(captured_at, str) or not captured_at.strip():
+        raise VlmProcessError("metadata.captured_at must be a non-empty ISO 8601 timestamp")
+    embedding = embed_text(
+        document,
+        provider=embedding_provider or resolve_embedding_provider(),
+    )
+
+    return VlmIndexPayload(
+        schema_version=INDEX_PAYLOAD_SCHEMA_VERSION,
+        incident_id=_metadata_text(metadata, "incident_id"),
+        camera_login_id=_metadata_text(metadata, "camera_login_id"),
+        captured_at=captured_at.strip(),
+        vlm_result=analyzed,
+        search=SearchPayload(
+            document=document,
+            keywords=canonical_keywords(analyzed.korean_search_keywords),
+            embedding_model=embedding.model,
+            embedding_dimension=embedding.dimension,
+            embedding=tuple(embedding.embedding),
+        ),
+    )
+
+
+def _analyze_clip(
+    args: ProcessVlmArgs,
+    *,
+    deidentify_frames: DeidentifyFrames | None,
+    vlm_provider: VlmProvider | None = None,
+) -> tuple[VlmAnalyzeResult, dict[str, object]]:
     metadata = sanitize_metadata(parse_metadata(args.metadata))
     start_sec, end_sec = validate_clip_metadata(metadata)
     with local_video_source(args.input_url) as video_path:
@@ -99,6 +180,13 @@ def process(args: ProcessVlmArgs) -> VlmResult:
             end_sec=end_sec,
         )
     validate_keyframes(frames)
+    provider = vlm_provider or resolve_vlm_provider()
+    if getattr(provider, "requires_deidentified_frames", False):
+        frames = _deidentify_for_provider(
+            frames,
+            deidentify_frames=deidentify_frames,
+        )
+
     provider_frames = tuple(
         VlmFramePayload(
             index=frame.index,
@@ -107,16 +195,82 @@ def process(args: ProcessVlmArgs) -> VlmResult:
         )
         for frame in frames
     )
-
-    provider = resolve_vlm_provider()
     analyzed = provider.analyze(
         VlmAnalyzeRequest(
             frames=provider_frames,
             metadata=metadata,
         )
     )
+    if not isinstance(analyzed, VlmAnalyzeResult):
+        raise VlmProcessError("VLM provider returned an invalid result")
     validate_vlm_result(analyzed.to_dict())
-    return analyzed
+    if analyzed.incident_id != _metadata_text(metadata, "incident_id"):
+        raise VlmProcessError("VLM result incident_id does not match metadata")
+    return analyzed, metadata
+
+
+def _metadata_text(metadata: dict[str, object], field_name: str) -> str:
+    value = metadata.get(field_name)
+    if not isinstance(value, str) or not value.strip():
+        raise VlmProcessError(f"metadata.{field_name} must be a non-empty string")
+    return value.strip()
+
+
+def _deidentify_for_provider(
+    frames: tuple[ExtractedKeyframe, ...],
+    *,
+    deidentify_frames: DeidentifyFrames | None,
+) -> tuple[ExtractedKeyframe, ...]:
+    if deidentify_frames is None:
+        raise VlmProcessError(
+            "Gemini processing is blocked: no keyframe de-identification API is configured"
+        )
+    try:
+        outcome = deidentify_frames(frames)
+    except Exception as exc:
+        raise VlmProcessError("keyframe de-identification failed") from exc
+    if not isinstance(outcome, DeidentificationOutcome):
+        raise VlmProcessError("de-identification returned an invalid outcome")
+    deidentified = outcome.frames
+    reports = outcome.reports
+    if not isinstance(deidentified, tuple) or len(deidentified) != len(frames):
+        raise VlmProcessError("de-identification returned an invalid frame batch")
+    if not isinstance(reports, tuple) or len(reports) != len(frames):
+        raise VlmProcessError("de-identification must return exactly eight reports")
+
+    for original, processed in zip(frames, deidentified, strict=True):
+        if not isinstance(processed, ExtractedKeyframe):
+            raise VlmProcessError("de-identification returned an invalid frame")
+        if (
+            processed.index != original.index
+            or processed.timestamp_sec != original.timestamp_sec
+            or processed.frame_index != original.frame_index
+        ):
+            raise VlmProcessError("de-identification changed frame ordering")
+
+    try:
+        validate_keyframes(deidentified)
+    except VlmContractError as exc:
+        raise VlmProcessError("de-identification returned invalid keyframes") from exc
+
+    for expected_index, report in enumerate(reports):
+        if not isinstance(report, DeidentificationFrameReport):
+            raise VlmProcessError("de-identification returned an invalid report")
+        if report.index != expected_index:
+            raise VlmProcessError("de-identification reports must be ordered")
+        counts = (report.detected_person_count, report.deidentified_person_count)
+        if any(
+            isinstance(count, bool) or not isinstance(count, int) or count < 0
+            for count in counts
+        ):
+            raise VlmProcessError(
+                "de-identification report counts must be nonnegative integers"
+            )
+        if report.status != "PASS":
+            raise VlmProcessError("de-identification report status must be PASS")
+        if report.deidentified_person_count != report.detected_person_count:
+            raise VlmProcessError("de-identification report counts do not match")
+    return deidentified
 
 
 def parse_metadata(raw: MetadataJson) -> dict[str, object]:
@@ -203,7 +357,7 @@ def sanitize_metadata(metadata: dict[str, object]) -> dict[str, object]:
 def main(argv: list[str]) -> int:
     try:
         args = parse_args(argv)
-        result = process(args)
+        result = process_index_payload(args) if args.output_mode == "index" else process(args)
     except (VlmProcessError, KeyframeExtractionError, VlmContractError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
