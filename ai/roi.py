@@ -107,7 +107,9 @@ def find_boxes_in_hazard_zone(boxes: list, mask: np.ndarray | None) -> set:
         if track_id is None:
             continue
         cx = int((float(box.get("x1", 0)) + float(box.get("x2", 0))) / 2)
-        cy = int((float(box.get("y1", 0)) + float(box.get("y2", 0))) / 2)
+        # 위험구역(Hazard)은 보통 바닥에 그리므로, 사람의 중심(가슴/허리)보다는 발(바운딩 박스 하단)이 닿았는지를 기준으로 합니다.
+        # 박스 하단에서 아주 약간 위쪽(y2의 95% 지점)을 발 위치로 간주합니다.
+        cy = int(float(box.get("y1", 0)) * 0.05 + float(box.get("y2", 0)) * 0.95)
         cx = max(0, min(cx, w - 1))
         cy = max(0, min(cy, h - 1))
         if mask[cy, cx] > 0:
