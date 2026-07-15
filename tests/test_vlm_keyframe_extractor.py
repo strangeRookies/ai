@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import tempfile
 import unittest
 from pathlib import Path
@@ -42,6 +43,16 @@ class KeyframeExtractorTest(unittest.TestCase):
         self.assertTrue(all(frame.width == 48 and frame.height == 32 for frame in first))
         self.assertEqual([frame.timestamp_sec for frame in first], sorted(frame.timestamp_sec for frame in first))
         validate_keyframes(first)
+
+    def test_rejects_sha256_that_does_not_match_jpeg_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            video = Path(tmp) / "sample.avi"
+            _write_video(video, 8)
+            frames = list(extract_eight_keyframes(video))
+
+        frames[0] = replace(frames[0], sha256="0" * 64)
+        with self.assertRaisesRegex(VlmContractError, "does not match"):
+            validate_keyframes(frames)
 
     def test_rejects_video_with_fewer_than_eight_frames(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
