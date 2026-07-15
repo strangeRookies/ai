@@ -7,7 +7,7 @@ import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import NewType
+from typing import Callable, NewType
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -61,6 +61,10 @@ class ProcessVlmArgs:
 
 
 VlmResult = VlmAnalyzeResult
+DeidentifyFrames = Callable[
+    [tuple[VlmFramePayload, ...]],
+    tuple[VlmFramePayload, ...],
+]
 
 
 class VlmProcessError(RuntimeError):
@@ -89,7 +93,11 @@ def parse_args(argv: list[str]) -> ProcessVlmArgs:
     )
 
 
-def process(args: ProcessVlmArgs) -> VlmResult:
+def process(
+    args: ProcessVlmArgs,
+    *,
+    deidentify_frames: DeidentifyFrames | None = None,
+) -> VlmResult:
     metadata = sanitize_metadata(parse_metadata(args.metadata))
     start_sec, end_sec = validate_clip_metadata(metadata)
     with local_video_source(args.input_url) as video_path:
@@ -109,6 +117,11 @@ def process(args: ProcessVlmArgs) -> VlmResult:
     )
 
     provider = resolve_vlm_provider()
+    if getattr(provider, "requires_deidentified_frames", False):
+        provider_frames = _deidentify_for_provider(
+            provider_frames,
+            deidentify_frames=deidentify_frames,
+        )
     analyzed = provider.analyze(
         VlmAnalyzeRequest(
             frames=provider_frames,
@@ -117,6 +130,41 @@ def process(args: ProcessVlmArgs) -> VlmResult:
     )
     validate_vlm_result(analyzed.to_dict())
     return analyzed
+
+
+def _deidentify_for_provider(
+    frames: tuple[VlmFramePayload, ...],
+    *,
+    deidentify_frames: DeidentifyFrames | None,
+) -> tuple[VlmFramePayload, ...]:
+    if deidentify_frames is None:
+        raise VlmProcessError(
+            "Gemini processing is blocked: no keyframe de-identification API is configured"
+        )
+    try:
+        deidentified = deidentify_frames(frames)
+    except Exception as exc:
+        raise VlmProcessError("keyframe de-identification failed") from exc
+    if not isinstance(deidentified, tuple) or len(deidentified) != len(frames):
+        raise VlmProcessError("de-identification returned an invalid frame batch")
+    payloads: set[bytes] = set()
+    for original, processed in zip(frames, deidentified, strict=True):
+        if not isinstance(processed, VlmFramePayload):
+            raise VlmProcessError("de-identification returned an invalid frame")
+        if processed.index != original.index or processed.timestamp_sec != original.timestamp_sec:
+            raise VlmProcessError("de-identification changed frame ordering")
+        if (
+            not isinstance(processed.jpeg_bytes, bytes)
+            or not processed.jpeg_bytes.startswith(b"\xff\xd8")
+            or not processed.jpeg_bytes.endswith(b"\xff\xd9")
+        ):
+            raise VlmProcessError("de-identification returned a non-JPEG frame")
+        if processed.jpeg_bytes == original.jpeg_bytes:
+            raise VlmProcessError("de-identification returned an unchanged frame")
+        if processed.jpeg_bytes in payloads:
+            raise VlmProcessError("de-identification returned duplicate frames")
+        payloads.add(processed.jpeg_bytes)
+    return deidentified
 
 
 def parse_metadata(raw: MetadataJson) -> dict[str, object]:

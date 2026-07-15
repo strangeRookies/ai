@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import math
 import os
-from collections.abc import Mapping
+import socket
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -72,10 +78,13 @@ class VlmAnalyzeResult:
 
 
 class VlmProvider(Protocol):
+    requires_deidentified_frames: bool
+
     def analyze(self, request: VlmAnalyzeRequest) -> VlmAnalyzeResult: ...
 
 
 class MockVlmProvider:
+    requires_deidentified_frames = False
     def analyze(self, request: VlmAnalyzeRequest) -> VlmAnalyzeResult:
         _validate_request(request)
         description = (
@@ -145,23 +154,231 @@ def _incident_id(metadata: Mapping[str, object]) -> str:
     raise ValueError("sanitized metadata must include incident_id")
 
 
-class GeminiVlmProvider:
-    """
-    Placeholder for multimodal Gemini direct SDK calls.
-    Real media download + generateContent wiring is deferred until GPU/API keys are available.
-    """
+class GeminiTransportError(RuntimeError):
+    """Sanitized Gemini transport failure safe to surface without request data."""
 
-    def __init__(self, api_key: str) -> None:
+    def __init__(self, message: str, *, transient: bool) -> None:
+        super().__init__(message)
+        self.transient = transient
+
+
+class GeminiTransport(Protocol):
+    def __call__(
+        self,
+        *,
+        api_key: str,
+        model: str,
+        payload: Mapping[str, object],
+        timeout_sec: float,
+    ) -> Mapping[str, Any]: ...
+
+
+_GEMINI_RESULT_SCHEMA: dict[str, object] = {
+    "type": "OBJECT",
+    "properties": {
+        "schema_version": {"type": "STRING"},
+        "incident_id": {"type": "STRING"},
+        "visual_event_type": {"type": "STRING"},
+        "people_count": {"type": "INTEGER"},
+        "korean_search_keywords": {
+            "type": "ARRAY",
+            "items": {"type": "STRING"},
+        },
+        "detailed_description_ko": {"type": "STRING"},
+        "frame_count": {"type": "INTEGER"},
+        "provider": {"type": "STRING"},
+        "is_mock": {"type": "BOOLEAN"},
+    },
+    "required": sorted(
+        {
+            "schema_version",
+            "incident_id",
+            "visual_event_type",
+            "people_count",
+            "korean_search_keywords",
+            "detailed_description_ko",
+            "frame_count",
+            "provider",
+            "is_mock",
+        }
+    ),
+}
+_SAFE_METADATA_FIELDS = frozenset(
+    {
+        "incident_id",
+        "camera_login_id",
+        "clip_start_sec",
+        "clip_end_sec",
+        "scenario_type",
+        "event_type",
+        "severity",
+        "timestamp",
+    }
+)
+
+
+def _default_gemini_transport(
+    *,
+    api_key: str,
+    model: str,
+    payload: Mapping[str, object],
+    timeout_sec: float,
+) -> Mapping[str, Any]:
+    endpoint = (
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{urllib.parse.quote(model, safe='')}:generateContent"
+    )
+    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    request = urllib.request.Request(
+        endpoint,
+        data=body,
+        headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_sec) as response:
+            raw = response.read(2_000_001)
+    except urllib.error.HTTPError as exc:
+        raise GeminiTransportError(
+            f"Gemini request failed with HTTP {exc.code}",
+            transient=exc.code in {408, 429} or 500 <= exc.code < 600,
+        ) from None
+    except (TimeoutError, socket.timeout):
+        raise GeminiTransportError("Gemini request timed out", transient=True) from None
+    except urllib.error.URLError:
+        raise GeminiTransportError("Gemini network request failed", transient=True) from None
+
+    if len(raw) > 2_000_000:
+        raise GeminiTransportError("Gemini response exceeded size limit", transient=False)
+    try:
+        value = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise GeminiTransportError("Gemini returned malformed JSON", transient=False) from None
+    if not isinstance(value, Mapping):
+        raise GeminiTransportError("Gemini response must be an object", transient=False)
+    return value
+
+
+def _gemini_metadata(metadata: Mapping[str, object]) -> dict[str, object]:
+    """Return the minimal non-secret incident context sent to Gemini."""
+
+    safe: dict[str, object] = {}
+    for key in _SAFE_METADATA_FIELDS:
+        value = metadata.get(key)
+        if isinstance(value, (str, int, float)) and not isinstance(value, bool):
+            safe[key] = value
+    safe["incident_id"] = _incident_id(metadata)
+    return safe
+
+
+def _gemini_payload(request: VlmAnalyzeRequest) -> dict[str, object]:
+    metadata = _gemini_metadata(request.metadata)
+    prompt = (
+        "당신은 CCTV 안전사고 분석 보조자입니다. 제공된 8장의 시간순 JPEG만 근거로 "
+        "관찰 가능한 사실을 한국어로 분석하세요. 신원, 이름, 나이, 성별, 인종, 질병이나 "
+        "의학적 진단을 추론하지 마세요. 보이지 않는 사실은 만들지 마세요. "
+        "schema_version은 vlm-result-v1, incident_id는 입력값, frame_count는 8, "
+        "provider는 gemini, is_mock은 false로 반환하세요. 검색 키워드는 중복 없는 "
+        "한국어 표현으로 작성하세요.\n사고 메타데이터: "
+        + json.dumps(metadata, ensure_ascii=False, separators=(",", ":"))
+    )
+    parts: list[dict[str, object]] = [{"text": prompt}]
+    for frame in request.frames:
+        parts.append(
+            {
+                "inlineData": {
+                    "mimeType": "image/jpeg",
+                    "data": base64.b64encode(frame.jpeg_bytes).decode("ascii"),
+                }
+            }
+        )
+    return {
+        "contents": [{"role": "user", "parts": parts}],
+        "generationConfig": {
+            "responseMimeType": "application/json",
+            "responseSchema": _GEMINI_RESULT_SCHEMA,
+            "temperature": 0.1,
+        },
+    }
+
+
+def _response_result(response: Mapping[str, Any]) -> Mapping[str, Any]:
+    try:
+        candidates = response["candidates"]
+        text = candidates[0]["content"]["parts"][0]["text"]
+    except (KeyError, IndexError, TypeError):
+        raise GeminiTransportError(
+            "Gemini response did not contain structured content",
+            transient=False,
+        ) from None
+    if not isinstance(text, str):
+        raise GeminiTransportError("Gemini structured content must be text", transient=False)
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError:
+        raise GeminiTransportError("Gemini structured content was malformed", transient=False) from None
+    if not isinstance(value, Mapping):
+        raise GeminiTransportError("Gemini structured content must be an object", transient=False)
+    return value
+
+
+class GeminiVlmProvider:
+    requires_deidentified_frames = True
+
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        model: str | None = None,
+        timeout_sec: float | None = None,
+        max_attempts: int = 3,
+        transport: GeminiTransport = _default_gemini_transport,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
         self._api_key = api_key
+        self._model = (model or os.getenv("GEMINI_MODEL", "gemini-2.5-flash")).strip()
+        configured_timeout = (
+            timeout_sec
+            if timeout_sec is not None
+            else float(os.getenv("GEMINI_TIMEOUT_SEC", "30"))
+        )
+        if not math.isfinite(configured_timeout) or configured_timeout <= 0:
+            raise ValueError("Gemini timeout must be a positive finite number")
+        if isinstance(max_attempts, bool) or not isinstance(max_attempts, int) or not 1 <= max_attempts <= 5:
+            raise ValueError("Gemini max_attempts must be between 1 and 5")
+        if not self._model:
+            raise ValueError("Gemini model must not be empty")
+        self._timeout_sec = configured_timeout
+        self._max_attempts = max_attempts
+        self._transport = transport
+        self._sleep = sleep
 
     def analyze(self, request: VlmAnalyzeRequest) -> VlmAnalyzeResult:
         if not self._api_key:
             raise RuntimeError("GEMINI_API_KEY is required for VLM_PROVIDER=gemini")
-        # Intentionally not calling network in scaffold; keep contract stable for callers.
-        raise RuntimeError(
-            "Gemini multimodal VLM is scaffolded only. "
-            "Wire generateContent with the supplied frame payloads when keys/GPU path are ready."
-        )
+        _validate_request(request)
+        payload = _gemini_payload(request)
+        response: Mapping[str, Any] | None = None
+        for attempt in range(self._max_attempts):
+            try:
+                response = self._transport(
+                    api_key=self._api_key,
+                    model=self._model,
+                    payload=payload,
+                    timeout_sec=self._timeout_sec,
+                )
+                break
+            except GeminiTransportError as exc:
+                if not exc.transient or attempt + 1 >= self._max_attempts:
+                    raise
+                self._sleep(0.25 * (2**attempt))
+        if response is None:  # defensive; loop always returns or raises
+            raise GeminiTransportError("Gemini request failed", transient=False)
+
+        result = VlmAnalyzeResult.from_mapping(_response_result(response))
+        if result.incident_id != _incident_id(request.metadata):
+            raise ValueError("Gemini incident_id does not match request")
+        return result
 
 
 def resolve_vlm_provider(
