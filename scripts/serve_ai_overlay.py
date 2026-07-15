@@ -689,6 +689,10 @@ def _process_frame_impl(
 
 
     boxes = normalize_detections(detections)
+    # 클립 블러(얼굴 keypoint 기반)가 프레임별로 이 시점의 boxes를 참조할 수 있도록 노출.
+    # add_frame() 호출은 이 함수 밖(_run 루프)에서 process_frame() 리턴 후 일어나므로
+    # summary(참조로 전달됨)를 통해 넘겨준다.
+    summary["latest_boxes"] = boxes
     frame_keypoint_count = sum(1 for item in detections if item.get("keypoints"))
     active_tracks = len({int(item["track_id"]) for item in detections if item.get("track_id") is not None})
     summary["frames_processed"] += 1
@@ -1029,20 +1033,14 @@ def _process_frame_impl(
                 _record_publish_outcome(summary, "events_publish", attempted=True)
                 print(f"[ai-worker][error] failed to publish event payload for camera={stream_id}: {exc}", file=sys.stderr, flush=True)
         # 낙상 감지 시 10초 스냅샷 버퍼 트리거 작동
+        # 블러 위치는 더 이상 트리거 시점에 1번만 계산하지 않음 — 클립의 매 프레임마다
+        # 그 프레임 자체의 boxes(clip_buffer.add_frame으로 같이 저장됨)에서 track_id를
+        # 다시 찾아 얼굴 keypoint 기반으로 계산함 (clip_worker.save_clip_to_mp4 참고).
         if state is not None and getattr(state, "clip_buffer", None) is not None:
-            target_bbox = []
-            for b in boxes:
-                if b.get("track_id") is not None and int(b["track_id"]) == track_id:
-                    x1, y1, x2, y2 = b.get("x1"), b.get("y1"), b.get("x2"), b.get("y2")
-                    if None not in (x1, y1, x2, y2):
-                        target_bbox = [x1, y1, x2, y2]
-                    break
-            
             task_metadata = {
                 "evidenceId": payload.get("eventId"),
                 "event_timestamp": payload.get("timestamp"),
                 "track_id": track_id,
-                "bbox": target_bbox
             }
             
             clip_triggered = state.clip_buffer.trigger_event(
@@ -1493,10 +1491,6 @@ class OverlayWorker:
             last_frame_id = frame_packet.frame_idx
             last_captured_at_ms = frame_packet.captured_at_ms
 
-            # 매 프레임마다 스냅샷 클립 버퍼에 기록
-            if self.state.clip_buffer is not None:
-                for clip_task in self.state.clip_buffer.add_frame(frame_packet.frame):
-                    enqueue_event_clip(self.state.clip_queue, clip_task)
             if roi_configs:
                 h, w = frame_packet.frame.shape[:2]
                 if cached_roi_mask is None or cached_roi_frame_shape != (h, w):
@@ -1547,6 +1541,13 @@ class OverlayWorker:
                 incident_recovery=incident_recovery,
                 recovery_detect_fn=recovery_detect_fn,
             )
+            # 매 프레임마다 스냅샷 클립 버퍼에 기록 (프레임별 블러 위치 계산을 위해
+            # 이 프레임의 boxes도 같이 저장 — process_frame()이 summary에 남겨둔 값 사용)
+            if self.state.clip_buffer is not None:
+                for clip_task in self.state.clip_buffer.add_frame(
+                    frame_packet.frame, summary.get("latest_boxes")
+                ):
+                    enqueue_event_clip(self.state.clip_queue, clip_task)
             # Analysis path counts: process_frame always runs detector+tracker for this frame.
             self.fps_audit.note_analysis()
             self.fps_audit.note_detector()

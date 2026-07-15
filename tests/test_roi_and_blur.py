@@ -40,9 +40,9 @@ def test_save_clip_to_mp4_with_blur():
     frame = np.ones((100, 100, 3), dtype=np.uint8) * 255
     # 중앙 부분에 검은색 사각형 생성 (이 영역을 블러할 예정)
     frame[40:60, 40:60] = 0
-    
-    # 1. 블러 없이 인플레이스 연산 검증
-    # FFMPEG VideoWriter 에러가 발생하더라도 프레임 픽셀 변환은 그전에 인플레이스로 처리되므로, 
+
+    # 1. 매칭되는 track/box 정보가 없으면 블러 없이 인플레이스 연산 검증
+    # FFMPEG VideoWriter 에러가 발생하더라도 프레임 픽셀 변환은 그전에 인플레이스로 처리되므로,
     # 이를 try-except로 감싸 코덱 오류를 우회하고 알고리즘만 검증합니다.
     frames_no_blur = [frame.copy() for _ in range(5)]
     task_no_blur = EventClipTask(
@@ -51,34 +51,43 @@ def test_save_clip_to_mp4_with_blur():
         frames=frames_no_blur,
         fps=10.0,
         output_dir="tmp_clips_test",
-        metadata={"bbox": []} # bbox가 비어있음
+        metadata={"track_id": 1},  # frame_boxes가 없어 매칭 실패 -> 블러 스킵
     )
-    
+
     try:
         save_clip_to_mp4(task_no_blur)
     except Exception:
         pass
-        
+
     # 블러 처리가 들어가지 않았으므로 중앙 영역은 여전히 완전한 검은색(0)
     assert np.mean(frames_no_blur[0][40:60, 40:60]) == 0.0
-        
-    # 2. 블러 영역 지정하여 인플레이스 연산 검증
+
+    # 2. track_id가 매칭되는 keypoint 기반 얼굴 박스로 인플레이스 연산 검증
     frames_with_blur = [frame.copy() for _ in range(5)]
+    keypoints = [
+        {"x": 50.0, "y": 48.0, "confidence": 0.9},  # 0 코
+        {"x": 45.0, "y": 45.0, "confidence": 0.9},  # 1 왼눈
+        {"x": 55.0, "y": 45.0, "confidence": 0.9},  # 2 오른눈
+        {"x": 42.0, "y": 47.0, "confidence": 0.9},  # 3 왼귀
+        {"x": 58.0, "y": 47.0, "confidence": 0.9},  # 4 오른귀
+    ]
+    box = {"track_id": 1, "x1": 30.0, "y1": 30.0, "x2": 70.0, "y2": 90.0, "keypoints": keypoints}
     task_with_blur = EventClipTask(
         event_type="test_event",
         camera_id="cam_01",
         frames=frames_with_blur,
         fps=10.0,
         output_dir="tmp_clips_test",
-        metadata={"bbox": [35, 35, 65, 65]} # BBox 지정 (검은색 40:60 영역의 경계선 포함)
+        metadata={"track_id": 1},
+        frame_boxes=[[box] for _ in range(5)],
     )
-    
+
     try:
         save_clip_to_mp4(task_with_blur)
     except Exception:
         pass
-        
-    # 인플레이스 블러 필터를 통해 완벽한 검은색(0) 영역 내부가 흰색(255) 픽셀과 Gaussian Blur로 합성되어 
+
+    # 인플레이스 블러 필터를 통해 완벽한 검은색(0) 영역 내부가 흰색(255) 픽셀과 Gaussian Blur로 합성되어
     # 평균 값이 0.0보다 확실히 커졌는지를 검증합니다.
     assert np.mean(frames_with_blur[0][40:60, 40:60]) > 0.0
 
