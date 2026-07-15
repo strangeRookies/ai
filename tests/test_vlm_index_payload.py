@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import hashlib
+import io
+import os
+from contextlib import nullcontext, redirect_stderr, redirect_stdout
+from pathlib import Path
 import json
 import unittest
 from unittest.mock import patch
@@ -16,9 +21,16 @@ from ai.vlm.index_payload import (
     SearchPayload,
     VlmIndexPayload,
 )
+from ai.vlm.keyframe_extractor import ExtractedKeyframe
 from ai.vlm.search_document import SearchDocumentError, build_search_document
 from ai.vlm_sdk import VlmAnalyzeResult
-from scripts.process_vlm import MetadataJson, ProcessVlmArgs, process_index_payload
+from scripts.process_vlm import (
+    MetadataJson,
+    ProcessVlmArgs,
+    main,
+    parse_args,
+    process_index_payload,
+)
 
 
 def _result(*, incident_id: str = "inc-1", is_mock: bool = True) -> VlmAnalyzeResult:
@@ -236,6 +248,104 @@ class ProcessIndexPayloadTest(unittest.TestCase):
             with self.assertRaisesRegex(EmbeddingError, "embedding failed"):
                 process_index_payload(self.args, embedding_provider=FailingEmbedding())
 
+
+class IndexCliModeTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.argv = [
+            "--input-url",
+            "unused",
+            "--output-urls",
+            "https://upload.example/deidentified",
+            "--metadata",
+            json.dumps(
+                {
+                    "incident_id": "inc-1",
+                    "camera_login_id": "lobby-1",
+                    "clip_start_sec": 0,
+                    "clip_end_sec": 8,
+                    "captured_at": "2026-07-15T00:00:00Z",
+                }
+            ),
+        ]
+
+    def test_default_mode_preserves_exact_vlm_stdout(self) -> None:
+        stdout = io.StringIO()
+        with (
+            patch("scripts.process_vlm.process", return_value=_result()) as process_mock,
+            patch("scripts.process_vlm.process_index_payload") as index_mock,
+            redirect_stdout(stdout),
+        ):
+            exit_code = main(self.argv)
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stdout.getvalue(), _result().to_json() + "\n")
+        self.assertEqual(process_mock.call_args.args[0].output_mode, "vlm")
+        index_mock.assert_not_called()
+
+    def test_index_mode_prints_versioned_envelope_and_preserves_output_urls(self) -> None:
+        payload = VlmIndexPayload(
+            INDEX_PAYLOAD_SCHEMA_VERSION,
+            "inc-1",
+            "lobby-1",
+            "2026-07-15T00:00:00Z",
+            _result(),
+            _search(),
+        )
+        stdout = io.StringIO()
+        with (
+            patch("scripts.process_vlm.process") as process_mock,
+            patch("scripts.process_vlm.process_index_payload", return_value=payload) as index_mock,
+            redirect_stdout(stdout),
+        ):
+            exit_code = main([*self.argv, "--output-mode", "index"])
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(json.loads(stdout.getvalue())["schema_version"], INDEX_PAYLOAD_SCHEMA_VERSION)
+        called_args = index_mock.call_args.args[0]
+        self.assertEqual(called_args.output_mode, "index")
+        self.assertEqual(called_args.output_urls, ("https://upload.example/deidentified",))
+        process_mock.assert_not_called()
+
+    def test_invalid_output_mode_is_rejected_by_parser(self) -> None:
+        with redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit) as raised:
+                parse_args([*self.argv, "--output-mode", "unknown"])
+        self.assertEqual(raised.exception.code, 2)
+
+    def test_real_index_mode_without_deidentification_fails_closed(self) -> None:
+        class RecordingGemini:
+            requires_deidentified_frames = True
+            calls = 0
+
+            def analyze(self, request: object) -> VlmAnalyzeResult:
+                self.calls += 1
+                return _result(is_mock=False)
+
+        frames = tuple(
+            ExtractedKeyframe(
+                index=index,
+                timestamp_sec=float(index),
+                frame_index=index,
+                width=1,
+                height=1,
+                jpeg_bytes=(jpeg := b"\xff\xd8" + bytes([index]) + b"\xff\xd9"),
+                sha256=hashlib.sha256(jpeg).hexdigest(),
+            )
+            for index in range(8)
+        )
+        provider = RecordingGemini()
+        stderr = io.StringIO()
+        with (
+            patch.dict(os.environ, {"VLM_MOCK_MODE": "false"}),
+            patch("scripts.process_vlm.local_video_source", return_value=nullcontext(Path("unused"))),
+            patch("scripts.process_vlm.extract_eight_keyframes", return_value=frames),
+            patch("scripts.process_vlm.resolve_vlm_provider", return_value=provider),
+            patch("scripts.process_vlm.resolve_embedding_provider") as embedding_mock,
+            redirect_stderr(stderr),
+        ):
+            exit_code = main([*self.argv, "--output-mode", "index"])
+        self.assertEqual(exit_code, 1)
+        self.assertIn("no keyframe de-identification API is configured", stderr.getvalue())
+        self.assertEqual(provider.calls, 0)
+        embedding_mock.assert_not_called()
 
 if __name__ == "__main__":
     unittest.main()

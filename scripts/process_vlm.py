@@ -72,6 +72,7 @@ class ProcessVlmArgs:
     output_urls: tuple[str, ...]
     metadata: MetadataJson
     mock_mode: bool
+    output_mode: str = "vlm"
 
 
 VlmResult = VlmAnalyzeResult
@@ -91,6 +92,12 @@ def parse_args(argv: list[str]) -> ProcessVlmArgs:
     parser.add_argument("--input-url", required=True)
     parser.add_argument("--output-urls", required=True)
     parser.add_argument("--metadata", required=True)
+    parser.add_argument(
+        "--output-mode",
+        choices=("vlm", "index"),
+        default="vlm",
+        help="stdout contract: existing vlm-result-v1 (default) or vlm-index-payload-v1",
+    )
     parsed = parser.parse_args(argv)
     output_urls = tuple(
         url.strip() for url in parsed.output_urls.split(",") if url.strip()
@@ -100,6 +107,7 @@ def parse_args(argv: list[str]) -> ProcessVlmArgs:
         output_urls=output_urls,
         metadata=MetadataJson(parsed.metadata),
         mock_mode=os.getenv("VLM_MOCK_MODE", "true").lower() == "true",
+        output_mode=parsed.output_mode,
     )
 
 
@@ -349,7 +357,7 @@ def sanitize_metadata(metadata: dict[str, object]) -> dict[str, object]:
 def main(argv: list[str]) -> int:
     try:
         args = parse_args(argv)
-        result = process(args)
+        result = process_index_payload(args) if args.output_mode == "index" else process(args)
     except (VlmProcessError, KeyframeExtractionError, VlmContractError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
