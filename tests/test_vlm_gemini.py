@@ -9,6 +9,10 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
+from ai.vlm.deidentification_contracts import (
+    DeidentificationFrameReport,
+    DeidentificationOutcome,
+)
 from ai.vlm.keyframe_extractor import ExtractedKeyframe
 from ai.vlm_sdk import (
     GeminiTransportError,
@@ -17,14 +21,7 @@ from ai.vlm_sdk import (
     VlmAnalyzeRequest,
     VlmFramePayload,
 )
-from scripts.process_vlm import (
-    DeidentificationFrameReport,
-    DeidentificationOutcome,
-    MetadataJson,
-    ProcessVlmArgs,
-    VlmProcessError,
-    process,
-)
+from scripts.process_vlm import MetadataJson, ProcessVlmArgs, VlmProcessError, process
 
 
 def _provider_frames(count: int = 8) -> tuple[VlmFramePayload, ...]:

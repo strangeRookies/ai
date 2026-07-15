@@ -7,7 +7,7 @@ import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, NewType
+from typing import NewType
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -17,6 +17,11 @@ from ai.vlm.contracts import (  # noqa: E402
     VlmContractError,
     validate_keyframes,
     validate_vlm_result,
+)
+from ai.vlm.deidentification_contracts import (  # noqa: E402
+    DeidentificationFrameReport,
+    DeidentificationOutcome,
+    DeidentifyFrames,
 )
 from ai.vlm.keyframe_extractor import (  # noqa: E402
     KeyframeExtractionError,
@@ -62,26 +67,6 @@ class ProcessVlmArgs:
 
 
 VlmResult = VlmAnalyzeResult
-
-
-@dataclass(frozen=True, slots=True)
-class DeidentificationFrameReport:
-    index: int
-    status: str
-    detected_person_count: int
-    deidentified_person_count: int
-
-
-@dataclass(frozen=True, slots=True)
-class DeidentificationOutcome:
-    frames: tuple[ExtractedKeyframe, ...]
-    reports: tuple[DeidentificationFrameReport, ...]
-
-
-DeidentifyFrames = Callable[
-    [tuple[ExtractedKeyframe, ...]],
-    DeidentificationOutcome,
-]
 
 
 class VlmProcessError(RuntimeError):
