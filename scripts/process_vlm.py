@@ -13,11 +13,18 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from ai.embedding_sdk import EmbeddingProvider, embed_text, resolve_provider as resolve_embedding_provider  # noqa: E402
 from ai.vlm.contracts import (  # noqa: E402
     VlmContractError,
     validate_keyframes,
     validate_vlm_result,
 )
+from ai.vlm.index_payload import (  # noqa: E402
+    INDEX_PAYLOAD_SCHEMA_VERSION,
+    SearchPayload,
+    VlmIndexPayload,
+)
+from ai.vlm.search_document import build_search_document, canonical_keywords  # noqa: E402
 from ai.vlm.deidentification_contracts import (  # noqa: E402
     DeidentificationFrameReport,
     DeidentificationOutcome,
@@ -33,6 +40,7 @@ from ai.vlm_sdk import (  # noqa: E402
     VlmAnalyzeRequest,
     VlmAnalyzeResult,
     VlmFramePayload,
+    VlmProvider,
     resolve_vlm_provider,
 )
 
@@ -100,6 +108,61 @@ def process(
     *,
     deidentify_frames: DeidentifyFrames | None = None,
 ) -> VlmResult:
+    analyzed, _metadata = _analyze_clip(
+        args,
+        deidentify_frames=deidentify_frames,
+    )
+    return analyzed
+
+
+def process_index_payload(
+    args: ProcessVlmArgs,
+    *,
+    deidentify_frames: DeidentifyFrames | None = None,
+    vlm_provider: VlmProvider | None = None,
+    embedding_provider: EmbeddingProvider | None = None,
+) -> VlmIndexPayload:
+    """Run the fail-closed VLM-to-index pipeline without changing ``process``."""
+
+    analyzed, metadata = _analyze_clip(
+        args,
+        deidentify_frames=deidentify_frames,
+        vlm_provider=vlm_provider,
+    )
+    if analyzed.is_mock != args.mock_mode:
+        raise VlmProcessError("configured VLM mode does not match provider result")
+
+    document = build_search_document(analyzed, metadata)
+    captured_at = metadata.get("captured_at")
+    if not isinstance(captured_at, str) or not captured_at.strip():
+        raise VlmProcessError("metadata.captured_at must be a non-empty ISO 8601 timestamp")
+    embedding = embed_text(
+        document,
+        provider=embedding_provider or resolve_embedding_provider(),
+    )
+
+    return VlmIndexPayload(
+        schema_version=INDEX_PAYLOAD_SCHEMA_VERSION,
+        incident_id=_metadata_text(metadata, "incident_id"),
+        camera_login_id=_metadata_text(metadata, "camera_login_id"),
+        captured_at=captured_at.strip(),
+        vlm_result=analyzed,
+        search=SearchPayload(
+            document=document,
+            keywords=canonical_keywords(analyzed.korean_search_keywords),
+            embedding_model=embedding.model,
+            embedding_dimension=embedding.dimension,
+            embedding=tuple(embedding.embedding),
+        ),
+    )
+
+
+def _analyze_clip(
+    args: ProcessVlmArgs,
+    *,
+    deidentify_frames: DeidentifyFrames | None,
+    vlm_provider: VlmProvider | None = None,
+) -> tuple[VlmAnalyzeResult, dict[str, object]]:
     metadata = sanitize_metadata(parse_metadata(args.metadata))
     start_sec, end_sec = validate_clip_metadata(metadata)
     with local_video_source(args.input_url) as video_path:
@@ -109,7 +172,7 @@ def process(
             end_sec=end_sec,
         )
     validate_keyframes(frames)
-    provider = resolve_vlm_provider()
+    provider = vlm_provider or resolve_vlm_provider()
     if getattr(provider, "requires_deidentified_frames", False):
         frames = _deidentify_for_provider(
             frames,
@@ -130,8 +193,19 @@ def process(
             metadata=metadata,
         )
     )
+    if not isinstance(analyzed, VlmAnalyzeResult):
+        raise VlmProcessError("VLM provider returned an invalid result")
     validate_vlm_result(analyzed.to_dict())
-    return analyzed
+    if analyzed.incident_id != _metadata_text(metadata, "incident_id"):
+        raise VlmProcessError("VLM result incident_id does not match metadata")
+    return analyzed, metadata
+
+
+def _metadata_text(metadata: dict[str, object], field_name: str) -> str:
+    value = metadata.get(field_name)
+    if not isinstance(value, str) or not value.strip():
+        raise VlmProcessError(f"metadata.{field_name} must be a non-empty string")
+    return value.strip()
 
 
 def _deidentify_for_provider(
