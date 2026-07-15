@@ -15,11 +15,14 @@ VLM_RESULT_SCHEMA_VERSION = "vlm-result-v1"
 VLM_RESULT_FIELDS = frozenset(
     {
         "schema_version",
+        "incident_id",
         "visual_event_type",
         "people_count",
         "korean_search_keywords",
         "detailed_description_ko",
-        "uncertainty_notes",
+        "frame_count",
+        "provider",
+        "is_mock",
     }
 )
 _FORBIDDEN_INFERENCE = re.compile(
@@ -104,6 +107,19 @@ def validate_vlm_result(result: Mapping[str, Any]) -> None:
     if result["schema_version"] != VLM_RESULT_SCHEMA_VERSION:
         raise VlmContractError("schema_version must be vlm-result-v1")
 
+    _required_text(result["incident_id"], "incident_id")
+    frame_count = result["frame_count"]
+    if (
+        isinstance(frame_count, bool)
+        or not isinstance(frame_count, int)
+        or frame_count != KEYFRAME_COUNT
+    ):
+        raise VlmContractError("frame_count must equal 8")
+    if result["provider"] != "mock":
+        raise VlmContractError("provider must be mock")
+    if result["is_mock"] is not True:
+        raise VlmContractError("is_mock must be true")
+
     event_type = _required_text(result["visual_event_type"], "visual_event_type")
     description = _required_text(result["detailed_description_ko"], "detailed_description_ko")
 
@@ -122,12 +138,6 @@ def validate_vlm_result(result: Mapping[str, Any]) -> None:
         normalized_keywords.append(normalized)
     if len(set(normalized_keywords)) != len(normalized_keywords):
         raise VlmContractError("korean_search_keywords must be unique")
-
-    notes = result["uncertainty_notes"]
-    if isinstance(notes, (str, bytes)) or not isinstance(notes, Sequence) or not notes:
-        raise VlmContractError("uncertainty_notes must be a nonempty array")
-    for note in notes:
-        _required_text(note, "uncertainty_notes item")
 
     inference_text = " ".join([event_type, description, *normalized_keywords])
     if _FORBIDDEN_INFERENCE.search(inference_text):

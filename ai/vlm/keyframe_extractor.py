@@ -36,7 +36,8 @@ class ExtractedKeyframe:
             "index": self.index,
             "timestamp_sec": self.timestamp_sec,
             "frame_index": self.frame_index,
-            "dimensions": {"width": self.width, "height": self.height},
+            "width": self.width,
+            "height": self.height,
             "sha256": self.sha256,
         }
 

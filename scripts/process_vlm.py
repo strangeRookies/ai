@@ -12,7 +12,11 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from ai.vlm.contracts import VlmContractError, validate_vlm_result  # noqa: E402
+from ai.vlm.contracts import (  # noqa: E402
+    VlmContractError,
+    validate_keyframes,
+    validate_vlm_result,
+)
 from ai.vlm.keyframe_extractor import (  # noqa: E402
     KeyframeExtractionError,
     extract_eight_keyframes,
@@ -21,17 +25,28 @@ from ai.vlm.keyframe_extractor import (  # noqa: E402
 from ai.vlm_sdk import (  # noqa: E402
     VlmAnalyzeRequest,
     VlmAnalyzeResult,
+    VlmFramePayload,
     resolve_vlm_provider,
 )
 
 MetadataJson = NewType("MetadataJson", str)
 _REDACTED = "[REDACTED]"
 _SENSITIVE_METADATA_KEYS = {
+    "access_key",
     "api_key",
     "authorization",
+    "client_secret",
     "cookie",
+    "credential",
+    "input_url",
+    "output_url",
+    "output_urls",
     "password",
+    "private_key",
+    "refresh_token",
     "secret",
+    "session_key",
+    "source_url",
     "token",
 }
 
@@ -77,11 +92,20 @@ def process(args: ProcessVlmArgs) -> VlmResult:
     metadata = sanitize_metadata(parse_metadata(args.metadata))
     with local_video_source(args.input_url) as video_path:
         frames = extract_eight_keyframes(video_path)
+    validate_keyframes(frames)
+    provider_frames = tuple(
+        VlmFramePayload(
+            index=frame.index,
+            timestamp_sec=frame.timestamp_sec,
+            jpeg_bytes=frame.jpeg_bytes,
+        )
+        for frame in frames
+    )
 
     provider = resolve_vlm_provider()
     analyzed = provider.analyze(
         VlmAnalyzeRequest(
-            frames=frames,
+            frames=provider_frames,
             metadata=metadata,
         )
     )
@@ -116,7 +140,15 @@ def sanitize_metadata(metadata: dict[str, object]) -> dict[str, object]:
                 sensitive = (
                     normalized in _SENSITIVE_METADATA_KEYS
                     or normalized.endswith(
-                        ("_api_key", "_password", "_secret", "_token")
+                        (
+                            "_access_key",
+                            "_api_key",
+                            "_credential",
+                            "_password",
+                            "_private_key",
+                            "_secret",
+                            "_token",
+                        )
                     )
                 )
                 sanitized[key] = _REDACTED if sensitive else sanitize(item)
@@ -129,6 +161,7 @@ def sanitize_metadata(metadata: dict[str, object]) -> dict[str, object]:
     if not isinstance(sanitized, dict):  # defensive type narrowing
         raise VlmProcessError("metadata must be a JSON object")
     return sanitized
+
 
 def main(argv: list[str]) -> int:
     try:
