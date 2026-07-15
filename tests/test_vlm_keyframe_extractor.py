@@ -43,6 +43,13 @@ class KeyframeExtractorTest(unittest.TestCase):
         self.assertTrue(all(frame.width == 48 and frame.height == 32 for frame in first))
         self.assertEqual([frame.timestamp_sec for frame in first], sorted(frame.timestamp_sec for frame in first))
         validate_keyframes(first)
+        metadata = first[0].metadata()
+        self.assertEqual(
+            set(metadata),
+            {"index", "timestamp_sec", "frame_index", "width", "height", "sha256"},
+        )
+        self.assertEqual(metadata["width"], 48)
+        self.assertEqual(metadata["height"], 32)
 
     def test_rejects_sha256_that_does_not_match_jpeg_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -89,15 +96,32 @@ class VlmResultContractTest(unittest.TestCase):
     def setUp(self) -> None:
         self.valid = {
             "schema_version": "vlm-result-v1",
+            "incident_id": "incident-123",
             "visual_event_type": "person_lying_on_floor",
             "people_count": 1,
             "korean_search_keywords": ["바닥", "쓰러짐"],
             "detailed_description_ko": "한 사람이 바닥 가까이에 있는 장면입니다.",
-            "uncertainty_notes": ["영상만으로 원인을 판단하지 않습니다."],
+            "frame_count": 8,
+            "provider": "mock",
+            "is_mock": True,
         }
 
     def test_accepts_exact_schema(self) -> None:
         validate_vlm_result(self.valid)
+        self.assertEqual(
+            set(self.valid),
+            {
+                "schema_version",
+                "incident_id",
+                "visual_event_type",
+                "people_count",
+                "korean_search_keywords",
+                "detailed_description_ko",
+                "frame_count",
+                "provider",
+                "is_mock",
+            },
+        )
 
     def test_rejects_unknown_missing_and_invalid_numeric_fields(self) -> None:
         for mutation in (
@@ -105,6 +129,11 @@ class VlmResultContractTest(unittest.TestCase):
             {key: value for key, value in self.valid.items() if key != "people_count"},
             {**self.valid, "people_count": -1},
             {**self.valid, "people_count": True},
+            {**self.valid, "frame_count": 7},
+            {**self.valid, "frame_count": True},
+            {**self.valid, "provider": "gemini"},
+            {**self.valid, "is_mock": False},
+            {**self.valid, "uncertainty_notes": []},
         ):
             with self.subTest(mutation=mutation):
                 with self.assertRaises(VlmContractError):

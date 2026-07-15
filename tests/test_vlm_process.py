@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from dataclasses import fields
 from pathlib import Path
 from unittest.mock import patch
 
@@ -67,7 +68,8 @@ class ProcessVlmCliTest(unittest.TestCase):
                 output_urls=("http://dummy-put/0",),
                 metadata=MetadataJson(
                     '{"scenario_type":"FALL_BED","incident":{"id":"inc-1",'
-                    '"flags":[true],"access_token":"do-not-forward"}}'
+                    '"flags":[true],"access_token":"do-not-forward",'
+                    '"source_url":"https://user:password@example.test/clip"}}'
                 ),
                 mock_mode=True,
             )
@@ -75,16 +77,44 @@ class ProcessVlmCliTest(unittest.TestCase):
                 "scripts.process_vlm.resolve_vlm_provider",
                 return_value=provider,
             ):
-                process(args)
+                analyzed = process(args)
 
         self.assertIsNotNone(provider.request)
+        self.assertEqual(analyzed.incident_id, "inc-1")
+        self.assertEqual(analyzed.frame_count, 8)
+        self.assertEqual(analyzed.provider, "mock")
+        self.assertIs(analyzed.is_mock, True)
+        self.assertEqual(
+            {field.name for field in fields(type(provider.request))},
+            {"frames", "metadata"},
+        )
         frames = provider.request.frames
         self.assertEqual(len(frames), 8)
         self.assertEqual([frame.index for frame in frames], list(range(8)))
         self.assertEqual(
-            provider.request.metadata["incident"],
-            {"id": "inc-1", "flags": [True], "access_token": "[REDACTED]"},
+            {field.name for field in fields(type(frames[0]))},
+            {"index", "timestamp_sec", "jpeg_bytes"},
         )
+        for forbidden in (
+            "frame_index",
+            "width",
+            "height",
+            "sha256",
+            "source_url",
+        ):
+            self.assertFalse(hasattr(frames[0], forbidden))
+        self.assertEqual(
+            provider.request.metadata["incident"],
+            {
+                "id": "inc-1",
+                "flags": [True],
+                "access_token": "[REDACTED]",
+                "source_url": "[REDACTED]",
+            },
+        )
+        serialized_metadata = json.dumps(provider.request.metadata)
+        self.assertNotIn("do-not-forward", serialized_metadata)
+        self.assertNotIn("user:password", serialized_metadata)
         self.assertTrue(
             all(frame.jpeg_bytes.startswith(b"\xff\xd8") for frame in frames)
         )
@@ -108,7 +138,7 @@ class ProcessVlmCliTest(unittest.TestCase):
                     "--output-urls",
                     "http://dummy-put/0,http://dummy-put/1",
                     "--metadata",
-                    '{"scenario_type":"FALL_BED","incident":{"id":"inc-1"}}',
+                    '{"scenario_type":"FALL_BED","incident_id":"inc-1"}',
                 ],
                 check=False,
                 capture_output=True,
@@ -121,8 +151,28 @@ class ProcessVlmCliTest(unittest.TestCase):
         self.assertEqual(result.stdout.count("\n"), 1)
         payload = json.loads(result.stdout)
         self.assertEqual(payload["schema_version"], "vlm-result-v1")
+        self.assertEqual(
+            set(payload),
+            {
+                "schema_version",
+                "incident_id",
+                "visual_event_type",
+                "people_count",
+                "korean_search_keywords",
+                "detailed_description_ko",
+                "frame_count",
+                "provider",
+                "is_mock",
+            },
+        )
+        self.assertEqual(payload["incident_id"], "inc-1")
+        self.assertEqual(payload["frame_count"], 8)
+        self.assertEqual(payload["provider"], "mock")
+        self.assertIs(payload["is_mock"], True)
+        self.assertNotIn("uncertainty_notes", payload)
         self.assertEqual(payload["visual_event_type"], "person_lying_on_floor")
         self.assertIn("detailed_description_ko", payload)
+
     def test_invalid_metadata_exits_nonzero_with_stderr(self) -> None:
         env = {**os.environ, "VLM_MOCK_MODE": "true"}
 
