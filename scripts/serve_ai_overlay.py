@@ -760,6 +760,7 @@ def _process_frame_impl(
                     frame_metadata=frame_metadata,
                     published_at_ms=None,
                     dropped_frame_count=dropped_frame_count,
+                    track_id_override=track_id,
                 )
                 topic_settings_exit = mqtt_topic_settings_from_args(args)
                 if publisher is not None:
@@ -782,6 +783,7 @@ def _process_frame_impl(
                     frame_metadata=frame_metadata,
                     published_at_ms=None,
                     dropped_frame_count=dropped_frame_count,
+                    track_id_override=track_id,
                 )
                 topic_settings_hazard = mqtt_topic_settings_from_args(args)
                 if publisher is not None:
