@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import math
 import re
 from collections.abc import Mapping, Sequence
@@ -77,6 +78,8 @@ def validate_keyframes(frames: Sequence[ExtractedKeyframe]) -> None:
             raise VlmContractError("keyframe payload must be JPEG")
         if not isinstance(frame.sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", frame.sha256):
             raise VlmContractError("keyframe SHA-256 is invalid")
+        if frame.sha256 != hashlib.sha256(frame.jpeg_bytes).hexdigest():
+            raise VlmContractError("keyframe SHA-256 does not match JPEG payload")
         if frame.sha256 in hashes:
             raise VlmContractError("keyframe payloads must be unique")
         hashes.add(frame.sha256)
