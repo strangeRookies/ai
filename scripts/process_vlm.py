@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 from dataclasses import dataclass
@@ -90,8 +91,13 @@ def parse_args(argv: list[str]) -> ProcessVlmArgs:
 
 def process(args: ProcessVlmArgs) -> VlmResult:
     metadata = sanitize_metadata(parse_metadata(args.metadata))
+    start_sec, end_sec = validate_clip_metadata(metadata)
     with local_video_source(args.input_url) as video_path:
-        frames = extract_eight_keyframes(video_path)
+        frames = extract_eight_keyframes(
+            video_path,
+            start_sec=start_sec,
+            end_sec=end_sec,
+        )
     validate_keyframes(frames)
     provider_frames = tuple(
         VlmFramePayload(
@@ -124,10 +130,41 @@ def parse_metadata(raw: MetadataJson) -> dict[str, object]:
         )
     except json.JSONDecodeError as exc:
         raise VlmProcessError(f"invalid metadata JSON: {exc.msg}") from exc
+    except ValueError as exc:
+        raise VlmProcessError("invalid metadata JSON") from exc
     if not isinstance(value, dict):
         raise VlmProcessError("metadata must be a JSON object")
     return value
 
+
+def _is_finite_number(value: object) -> bool:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(float(value))
+    except (OverflowError, ValueError):
+        return False
+
+
+def validate_clip_metadata(metadata: dict[str, object]) -> tuple[float, float]:
+    for field_name in ("incident_id", "camera_login_id"):
+        value = metadata.get(field_name)
+        if not isinstance(value, str) or not value.strip():
+            raise VlmProcessError(
+                f"metadata.{field_name} must be a non-empty string"
+            )
+
+    start = metadata.get("clip_start_sec")
+    end = metadata.get("clip_end_sec")
+    if not _is_finite_number(start) or start < 0:
+        raise VlmProcessError(
+            "metadata.clip_start_sec must be a finite nonnegative number"
+        )
+    if not _is_finite_number(end) or end <= start:
+        raise VlmProcessError(
+            "metadata.clip_end_sec must be finite and greater than clip_start_sec"
+        )
+    return float(start), float(end)
 
 def sanitize_metadata(metadata: dict[str, object]) -> dict[str, object]:
     """Copy nested incident metadata while redacting credential-bearing values."""

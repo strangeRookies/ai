@@ -67,7 +67,9 @@ class ProcessVlmCliTest(unittest.TestCase):
                 input_url=video.as_uri(),
                 output_urls=("http://dummy-put/0",),
                 metadata=MetadataJson(
-                    '{"scenario_type":"FALL_BED","incident":{"id":"inc-1",'
+                    '{"incident_id":"inc-1","camera_login_id":"cam-01",'
+                    '"clip_start_sec":0.5,"clip_end_sec":1.5,'
+                    '"scenario_type":"FALL_BED","incident":{"id":"inc-1",'
                     '"flags":[true],"access_token":"do-not-forward",'
                     '"source_url":"https://user:password@example.test/clip"}}'
                 ),
@@ -112,6 +114,9 @@ class ProcessVlmCliTest(unittest.TestCase):
                 "source_url": "[REDACTED]",
             },
         )
+        self.assertEqual(provider.request.metadata["camera_login_id"], "cam-01")
+        self.assertEqual(provider.request.metadata["clip_start_sec"], 0.5)
+        self.assertEqual(provider.request.metadata["clip_end_sec"], 1.5)
         serialized_metadata = json.dumps(provider.request.metadata)
         self.assertNotIn("do-not-forward", serialized_metadata)
         self.assertNotIn("user:password", serialized_metadata)
@@ -122,6 +127,8 @@ class ProcessVlmCliTest(unittest.TestCase):
             [frame.timestamp_sec for frame in frames],
             sorted(frame.timestamp_sec for frame in frames),
         )
+        self.assertGreaterEqual(frames[0].timestamp_sec, 0.5)
+        self.assertLess(frames[-1].timestamp_sec, 1.5)
 
     def test_stdout_is_one_json_line_for_local_clip(self) -> None:
         env = {**os.environ, "VLM_MOCK_MODE": "true"}
@@ -138,7 +145,9 @@ class ProcessVlmCliTest(unittest.TestCase):
                     "--output-urls",
                     "http://dummy-put/0,http://dummy-put/1",
                     "--metadata",
-                    '{"scenario_type":"FALL_BED","incident_id":"inc-1"}',
+                    '{"scenario_type":"FALL_BED","incident_id":"inc-1",'
+                    '"camera_login_id":"cam-01","clip_start_sec":0,'
+                    '"clip_end_sec":2}',
                 ],
                 check=False,
                 capture_output=True,
@@ -172,6 +181,54 @@ class ProcessVlmCliTest(unittest.TestCase):
         self.assertNotIn("uncertainty_notes", payload)
         self.assertEqual(payload["visual_event_type"], "person_lying_on_floor")
         self.assertIn("detailed_description_ko", payload)
+
+    def test_missing_or_invalid_clip_metadata_fails_without_stdout(self) -> None:
+        env = {**os.environ, "VLM_MOCK_MODE": "true"}
+        valid = {
+            "incident_id": "inc-1",
+            "camera_login_id": "cam-01",
+            "clip_start_sec": 0.5,
+            "clip_end_sec": 1.5,
+            "nested": {"preserved": True},
+        }
+        cases = [
+            (
+                {key: value for key, value in valid.items() if key != "incident_id"},
+                "incident_id",
+            ),
+            ({**valid, "camera_login_id": "  "}, "camera_login_id"),
+            ({**valid, "clip_start_sec": True}, "clip_start_sec"),
+            ({**valid, "clip_start_sec": -0.1}, "clip_start_sec"),
+            ({**valid, "clip_start_sec": float("nan")}, "non-finite"),
+            ({**valid, "clip_end_sec": 0.5}, "clip_end_sec"),
+            ({**valid, "clip_end_sec": "1.5"}, "clip_end_sec"),
+        ]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            video = Path(tmp) / "incident.avi"
+            self._write_video(video)
+            for metadata, expected_error in cases:
+                with self.subTest(metadata=metadata):
+                    result = subprocess.run(
+                        [
+                            sys.executable,
+                            str(SCRIPT),
+                            "--input-url",
+                            str(video),
+                            "--output-urls",
+                            "unused",
+                            "--metadata",
+                            json.dumps(metadata),
+                        ],
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                        env=env,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(result.stdout, "")
+                    self.assertIn(expected_error, result.stderr)
+                    self.assertNotIn(str(video), result.stderr)
 
     def test_invalid_metadata_exits_nonzero_with_stderr(self) -> None:
         env = {**os.environ, "VLM_MOCK_MODE": "true"}
