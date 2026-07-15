@@ -333,17 +333,22 @@ class IndexCliModeTest(unittest.TestCase):
         )
         provider = RecordingGemini()
         stderr = io.StringIO()
+
+        def failing_deidentify(_frames):
+            raise RuntimeError("blocked")
+
         with (
             patch.dict(os.environ, {"VLM_MOCK_MODE": "false"}),
             patch("scripts.process_vlm.local_video_source", return_value=nullcontext(Path("unused"))),
             patch("scripts.process_vlm.extract_eight_keyframes", return_value=frames),
             patch("scripts.process_vlm.resolve_vlm_provider", return_value=provider),
+            patch("scripts.process_vlm.build_default_deidentify_frames", return_value=failing_deidentify),
             patch("scripts.process_vlm.resolve_embedding_provider") as embedding_mock,
             redirect_stderr(stderr),
         ):
             exit_code = main([*self.argv, "--output-mode", "index"])
         self.assertEqual(exit_code, 1)
-        self.assertIn("no keyframe de-identification API is configured", stderr.getvalue())
+        self.assertIn("keyframe de-identification failed", stderr.getvalue())
         self.assertEqual(provider.calls, 0)
         embedding_mock.assert_not_called()
 

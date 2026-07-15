@@ -30,12 +30,18 @@ from ai.vlm.deidentification_contracts import (  # noqa: E402
     DeidentificationOutcome,
     DeidentifyFrames,
 )
+from ai.vlm.keyframe_deidentification import (  # noqa: E402
+    KeyframeDeidentificationError,
+    build_default_deidentify_frames,
+)
 from ai.vlm.keyframe_extractor import (  # noqa: E402
     KeyframeExtractionError,
     ExtractedKeyframe,
     extract_eight_keyframes,
     local_video_source,
 )
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 from ai.vlm_sdk import (  # noqa: E402
     VlmAnalyzeRequest,
     VlmAnalyzeResult,
@@ -171,7 +177,9 @@ def _analyze_clip(
     deidentify_frames: DeidentifyFrames | None,
     vlm_provider: VlmProvider | None = None,
 ) -> tuple[VlmAnalyzeResult, dict[str, object]]:
-    metadata = sanitize_metadata(parse_metadata(args.metadata))
+    metadata = normalize_processing_metadata(
+        sanitize_metadata(parse_metadata(args.metadata))
+    )
     start_sec, end_sec = validate_clip_metadata(metadata)
     with local_video_source(args.input_url) as video_path:
         frames = extract_eight_keyframes(
@@ -181,11 +189,15 @@ def _analyze_clip(
         )
     validate_keyframes(frames)
     provider = vlm_provider or resolve_vlm_provider()
+    deidentify = deidentify_frames
+    if deidentify is None and getattr(provider, "requires_deidentified_frames", False):
+        deidentify = build_default_deidentify_frames(metadata)
     if getattr(provider, "requires_deidentified_frames", False):
         frames = _deidentify_for_provider(
             frames,
-            deidentify_frames=deidentify_frames,
+            deidentify_frames=deidentify,
         )
+        _upload_deidentified_keyframes(frames, args.output_urls)
 
     provider_frames = tuple(
         VlmFramePayload(
@@ -207,6 +219,49 @@ def _analyze_clip(
     if analyzed.incident_id != _metadata_text(metadata, "incident_id"):
         raise VlmProcessError("VLM result incident_id does not match metadata")
     return analyzed, metadata
+
+
+def normalize_processing_metadata(metadata: dict[str, object]) -> dict[str, object]:
+    normalized = dict(metadata)
+    incident_id = normalized.get("incident_id")
+    if not isinstance(incident_id, str) or not incident_id.strip():
+        alert_event_id = normalized.get("alert_event_id")
+        if alert_event_id is not None:
+            normalized["incident_id"] = str(alert_event_id).strip()
+    camera_login_id = normalized.get("camera_login_id")
+    if isinstance(camera_login_id, str):
+        normalized["camera_login_id"] = camera_login_id.strip()
+    if "clip_start_sec" not in normalized:
+        normalized["clip_start_sec"] = 0.0
+    captured_at = normalized.get("captured_at")
+    if not isinstance(captured_at, str) or not captured_at.strip():
+        detected_at = normalized.get("detected_at")
+        if isinstance(detected_at, str) and detected_at.strip():
+            normalized["captured_at"] = detected_at.strip()
+    return normalized
+
+
+def _upload_deidentified_keyframes(
+    frames: tuple[ExtractedKeyframe, ...],
+    output_urls: tuple[str, ...],
+) -> None:
+    if not output_urls:
+        return
+    if len(output_urls) != len(frames):
+        raise VlmProcessError("output_urls count must match de-identified keyframe count")
+    for frame, url in zip(frames, output_urls, strict=True):
+        request = Request(
+            url,
+            data=frame.jpeg_bytes,
+            method="PUT",
+            headers={"Content-Type": "image/jpeg"},
+        )
+        try:
+            with urlopen(request, timeout=30.0) as response:
+                if response.status and response.status >= 400:
+                    raise VlmProcessError("failed to upload de-identified keyframe")
+        except (HTTPError, URLError, TimeoutError) as exc:
+            raise VlmProcessError("failed to upload de-identified keyframe") from exc
 
 
 def _metadata_text(metadata: dict[str, object], field_name: str) -> str:
@@ -300,7 +355,7 @@ def _is_finite_number(value: object) -> bool:
         return False
 
 
-def validate_clip_metadata(metadata: dict[str, object]) -> tuple[float, float]:
+def validate_clip_metadata(metadata: dict[str, object]) -> tuple[float, float | None]:
     for field_name in ("incident_id", "camera_login_id"):
         value = metadata.get(field_name)
         if not isinstance(value, str) or not value.strip():
@@ -308,12 +363,14 @@ def validate_clip_metadata(metadata: dict[str, object]) -> tuple[float, float]:
                 f"metadata.{field_name} must be a non-empty string"
             )
 
-    start = metadata.get("clip_start_sec")
-    end = metadata.get("clip_end_sec")
+    start = metadata.get("clip_start_sec", 0.0)
     if not _is_finite_number(start) or start < 0:
         raise VlmProcessError(
             "metadata.clip_start_sec must be a finite nonnegative number"
         )
+    end = metadata.get("clip_end_sec")
+    if end is None:
+        return float(start), None
     if not _is_finite_number(end) or end <= start:
         raise VlmProcessError(
             "metadata.clip_end_sec must be finite and greater than clip_start_sec"
@@ -357,8 +414,20 @@ def sanitize_metadata(metadata: dict[str, object]) -> dict[str, object]:
 def main(argv: list[str]) -> int:
     try:
         args = parse_args(argv)
-        result = process_index_payload(args) if args.output_mode == "index" else process(args)
-    except (VlmProcessError, KeyframeExtractionError, VlmContractError) as exc:
+        deidentify = None
+        if not args.mock_mode:
+            provider = resolve_vlm_provider()
+            if getattr(provider, "requires_deidentified_frames", False):
+                metadata = normalize_processing_metadata(
+                    sanitize_metadata(parse_metadata(args.metadata))
+                )
+                deidentify = build_default_deidentify_frames(metadata)
+        result = (
+            process_index_payload(args, deidentify_frames=deidentify)
+            if args.output_mode == "index"
+            else process(args, deidentify_frames=deidentify)
+        )
+    except (VlmProcessError, KeyframeExtractionError, VlmContractError, KeyframeDeidentificationError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
     except (OSError, RuntimeError, ValueError):
