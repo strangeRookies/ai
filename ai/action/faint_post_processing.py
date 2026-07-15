@@ -614,15 +614,25 @@ class ExitEventPostProcessor:
         self._inside_by_track = {}
 
     def observe(self, camera_id, track_id, *, inside_safe_zone, timestamp):
-        """Emit only after a tracked person crosses from inside to outside."""
+        """Emit only after a tracked person crosses from inside to outside and stays outside for min_consecutive frames."""
         key = f"{camera_id}:track:{track_id}"
-        if inside_safe_zone:
+        
+        if not inside_safe_zone:
+            consecutive = self._consecutive_by_track.get(key, 0) + 1
+            self._consecutive_by_track[key] = consecutive
+            self._inside_by_track[key] = False
+            
+            if consecutive >= self.min_consecutive:
+                cooldown_key = f"{camera_id}:track:{track_id}"
+                last = self._last_event_time.get(cooldown_key)
+                if last is None or (float(timestamp) - last >= self.cooldown_seconds):
+                    self._last_event_time[cooldown_key] = float(timestamp)
+                    return True
+        else:
+            self._consecutive_by_track[key] = 0
             self._inside_by_track[key] = True
-            self.reset_track(camera_id, track_id)
-            return False
-        if not self._inside_by_track.pop(key, False):
-            return False
-        return self.should_trigger(camera_id, track_id, timestamp)
+            
+        return False
     def should_trigger(self, camera_id, track_id, timestamp):
         key = f"{camera_id}:track:{track_id}"
         consecutive = self._consecutive_by_track.get(key, 0) + 1
@@ -659,7 +669,7 @@ class HazardEventPostProcessor:
             self._inside_by_track[key] = True
             self.reset_track(camera_id, track_id)
             return False
-        if not self._inside_by_track.pop(key, False):
+        if not self._inside_by_track.get(key, False):
             return False
         return self.should_trigger(camera_id, track_id, timestamp)
     def should_trigger(self, camera_id, track_id, timestamp):
