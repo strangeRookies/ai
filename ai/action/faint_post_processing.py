@@ -602,7 +602,7 @@ def faint_probability(prediction):
 
 
 DEFAULT_EXIT_MIN_CONSECUTIVE = 2
-DEFAULT_EXIT_COOLDOWN_SECONDS = 15.0
+DEFAULT_EXIT_COOLDOWN_SECONDS = 60.0
 
 
 class ExitEventPostProcessor:
@@ -651,7 +651,7 @@ class ExitEventPostProcessor:
 
 
 DEFAULT_HAZARD_MIN_CONSECUTIVE = 2
-DEFAULT_HAZARD_COOLDOWN_SECONDS = 15.0
+DEFAULT_HAZARD_COOLDOWN_SECONDS = 60.0
 
 
 class HazardEventPostProcessor:
