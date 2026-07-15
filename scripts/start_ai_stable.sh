@@ -101,7 +101,7 @@ echo "[start_ai_stable] Starting start_simulated_rtsp_from_folder.py..."
 nohup env VIDEO_DOMAIN= python scripts/start_simulated_rtsp_from_folder.py \
     --video-dir "$VIDEO_POOL_DIR" \
     --chromakey-video-dir "$CHROMAKEY_VIDEO_DIR" \
-    --backend-url http://safety-backend-alb-eks-1607216893.ap-northeast-2.elb.amazonaws.com \
+    --backend-url http://127.0.0.1:18080 \
     --rtsp-host 127.0.0.1 \
     --rtsp-port 8554 \
     --poll-interval 15 \
@@ -117,7 +117,7 @@ nohup env VIDEO_DOMAIN= \
     SIMPLE_TRACK_NEW_TRACK_THRESH="${SIMPLE_TRACK_NEW_TRACK_THRESH}" \
     NEAR_DUP_SORT_BY_CONF="${NEAR_DUP_SORT_BY_CONF}" \
     python scripts/run_registered_cameras.py \
-    --backend-base-url http://safety-backend-alb-eks-1607216893.ap-northeast-2.elb.amazonaws.com \
+    --backend-base-url http://127.0.0.1:18080 \
     --rtsp-base-url rtsp://127.0.0.1:8554 \
     --video-pool "$VIDEO_POOL_DIR" \
     --overlay-report-enabled \
