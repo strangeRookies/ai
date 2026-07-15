@@ -5,6 +5,7 @@ import json
 import unittest
 import urllib.error
 from contextlib import nullcontext
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -12,10 +13,18 @@ from ai.vlm.keyframe_extractor import ExtractedKeyframe
 from ai.vlm_sdk import (
     GeminiTransportError,
     GeminiVlmProvider,
+    MockVlmProvider,
     VlmAnalyzeRequest,
     VlmFramePayload,
 )
-from scripts.process_vlm import MetadataJson, ProcessVlmArgs, VlmProcessError, process
+from scripts.process_vlm import (
+    DeidentificationFrameReport,
+    DeidentificationOutcome,
+    MetadataJson,
+    ProcessVlmArgs,
+    VlmProcessError,
+    process,
+)
 
 
 def _provider_frames(count: int = 8) -> tuple[VlmFramePayload, ...]:
@@ -44,6 +53,24 @@ def _extracted_frames() -> tuple[ExtractedKeyframe, ...]:
             )
         )
     return tuple(frames)
+
+def _deidentification_outcome(
+    frames: tuple[ExtractedKeyframe, ...],
+    *,
+    detected_person_count: int = 0,
+) -> DeidentificationOutcome:
+    return DeidentificationOutcome(
+        frames=frames,
+        reports=tuple(
+            DeidentificationFrameReport(
+                index=index,
+                status="PASS",
+                detected_person_count=detected_person_count,
+                deidentified_person_count=detected_person_count,
+            )
+            for index in range(8)
+        ),
+    )
 
 
 def _gemini_response(**overrides: object) -> dict[str, object]:
@@ -224,7 +251,7 @@ class ProcessDeidentificationGateTest(unittest.TestCase):
             process(args, deidentify_frames=lambda _frames: (_ for _ in ()).throw(RuntimeError("secret jpeg data")))
         self.assertEqual(provider.calls, 0)
 
-    def test_missing_or_unchanged_deidentification_blocks_gemini(self) -> None:
+    def test_missing_deidentification_blocks_gemini(self) -> None:
         class RecordingGeminiProvider:
             requires_deidentified_frames = True
             calls = 0
@@ -239,16 +266,112 @@ class ProcessDeidentificationGateTest(unittest.TestCase):
             MetadataJson('{"incident_id":"inc-1","camera_login_id":"cam-01","clip_start_sec":0,"clip_end_sec":9}'),
             False,
         )
-        for deidentifier, message in ((None, "no keyframe"), (lambda frames: frames, "unchanged")):
+        provider = RecordingGeminiProvider()
+        with (
+            patch("scripts.process_vlm.local_video_source", return_value=nullcontext(Path("unused"))),
+            patch("scripts.process_vlm.extract_eight_keyframes", return_value=_extracted_frames()),
+            patch("scripts.process_vlm.resolve_vlm_provider", return_value=provider),
+            self.assertRaisesRegex(VlmProcessError, "no keyframe"),
+        ):
+            process(args)
+        self.assertEqual(provider.calls, 0)
+
+    def test_zero_person_unchanged_frames_are_allowed_by_pass_reports(self) -> None:
+        class RecordingGeminiProvider:
+            requires_deidentified_frames = True
+            calls = 0
+            request = None
+
+            def analyze(self, request):
+                self.calls += 1
+                self.request = request
+                return MockVlmProvider().analyze(request)
+
+        extracted = _extracted_frames()
+        provider = RecordingGeminiProvider()
+        args = ProcessVlmArgs(
+            "unused",
+            (),
+            MetadataJson('{"incident_id":"inc-1","camera_login_id":"cam-01","clip_start_sec":0,"clip_end_sec":9}'),
+            False,
+        )
+
+        def deidentify(received):
+            self.assertTrue(all(isinstance(frame, ExtractedKeyframe) for frame in received))
+            return _deidentification_outcome(received)
+
+        with (
+            patch("scripts.process_vlm.local_video_source", return_value=nullcontext(Path("unused"))),
+            patch("scripts.process_vlm.extract_eight_keyframes", return_value=extracted),
+            patch("scripts.process_vlm.resolve_vlm_provider", return_value=provider),
+        ):
+            process(args, deidentify_frames=deidentify)
+
+        self.assertEqual(provider.calls, 1)
+        self.assertEqual(
+            tuple(frame.jpeg_bytes for frame in provider.request.frames),
+            tuple(frame.jpeg_bytes for frame in extracted),
+        )
+
+    def test_invalid_reports_or_transformed_frames_make_zero_provider_calls(self) -> None:
+        class RecordingGeminiProvider:
+            requires_deidentified_frames = True
+            calls = 0
+
+            def analyze(self, _request):
+                self.calls += 1
+                raise AssertionError("provider must not be called")
+
+        frames = _extracted_frames()
+        valid = _deidentification_outcome(frames, detected_person_count=1)
+        invalid_cases = [
+            (replace(valid, reports=valid.reports[:7]), "exactly eight reports"),
+            (
+                replace(
+                    valid,
+                    reports=(replace(valid.reports[0], status="FAIL"), *valid.reports[1:]),
+                ),
+                "status must be PASS",
+            ),
+            (
+                replace(
+                    valid,
+                    reports=(
+                        replace(valid.reports[0], deidentified_person_count=0),
+                        *valid.reports[1:],
+                    ),
+                ),
+                "counts do not match",
+            ),
+            (
+                replace(valid, reports=(valid.reports[1], valid.reports[0], *valid.reports[2:])),
+                "reports must be ordered",
+            ),
+            (
+                replace(valid, frames=(replace(frames[0], frame_index=99), *frames[1:])),
+                "changed frame ordering",
+            ),
+            (
+                replace(valid, frames=(replace(frames[0], sha256="0" * 64), *frames[1:])),
+                "invalid keyframes",
+            ),
+        ]
+        args = ProcessVlmArgs(
+            "unused",
+            (),
+            MetadataJson('{"incident_id":"inc-1","camera_login_id":"cam-01","clip_start_sec":0,"clip_end_sec":9}'),
+            False,
+        )
+        for outcome, message in invalid_cases:
             provider = RecordingGeminiProvider()
             with (
                 self.subTest(message=message),
                 patch("scripts.process_vlm.local_video_source", return_value=nullcontext(Path("unused"))),
-                patch("scripts.process_vlm.extract_eight_keyframes", return_value=_extracted_frames()),
+                patch("scripts.process_vlm.extract_eight_keyframes", return_value=frames),
                 patch("scripts.process_vlm.resolve_vlm_provider", return_value=provider),
                 self.assertRaisesRegex(VlmProcessError, message),
             ):
-                process(args, deidentify_frames=deidentifier)
+                process(args, deidentify_frames=lambda _frames, value=outcome: value)
             self.assertEqual(provider.calls, 0)
 
 

@@ -20,6 +20,7 @@ from ai.vlm.contracts import (  # noqa: E402
 )
 from ai.vlm.keyframe_extractor import (  # noqa: E402
     KeyframeExtractionError,
+    ExtractedKeyframe,
     extract_eight_keyframes,
     local_video_source,
 )
@@ -61,9 +62,25 @@ class ProcessVlmArgs:
 
 
 VlmResult = VlmAnalyzeResult
+
+
+@dataclass(frozen=True, slots=True)
+class DeidentificationFrameReport:
+    index: int
+    status: str
+    detected_person_count: int
+    deidentified_person_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class DeidentificationOutcome:
+    frames: tuple[ExtractedKeyframe, ...]
+    reports: tuple[DeidentificationFrameReport, ...]
+
+
 DeidentifyFrames = Callable[
-    [tuple[VlmFramePayload, ...]],
-    tuple[VlmFramePayload, ...],
+    [tuple[ExtractedKeyframe, ...]],
+    DeidentificationOutcome,
 ]
 
 
@@ -107,6 +124,13 @@ def process(
             end_sec=end_sec,
         )
     validate_keyframes(frames)
+    provider = resolve_vlm_provider()
+    if getattr(provider, "requires_deidentified_frames", False):
+        frames = _deidentify_for_provider(
+            frames,
+            deidentify_frames=deidentify_frames,
+        )
+
     provider_frames = tuple(
         VlmFramePayload(
             index=frame.index,
@@ -115,13 +139,6 @@ def process(
         )
         for frame in frames
     )
-
-    provider = resolve_vlm_provider()
-    if getattr(provider, "requires_deidentified_frames", False):
-        provider_frames = _deidentify_for_provider(
-            provider_frames,
-            deidentify_frames=deidentify_frames,
-        )
     analyzed = provider.analyze(
         VlmAnalyzeRequest(
             frames=provider_frames,
@@ -133,37 +150,59 @@ def process(
 
 
 def _deidentify_for_provider(
-    frames: tuple[VlmFramePayload, ...],
+    frames: tuple[ExtractedKeyframe, ...],
     *,
     deidentify_frames: DeidentifyFrames | None,
-) -> tuple[VlmFramePayload, ...]:
+) -> tuple[ExtractedKeyframe, ...]:
     if deidentify_frames is None:
         raise VlmProcessError(
             "Gemini processing is blocked: no keyframe de-identification API is configured"
         )
     try:
-        deidentified = deidentify_frames(frames)
+        outcome = deidentify_frames(frames)
     except Exception as exc:
         raise VlmProcessError("keyframe de-identification failed") from exc
+    if not isinstance(outcome, DeidentificationOutcome):
+        raise VlmProcessError("de-identification returned an invalid outcome")
+    deidentified = outcome.frames
+    reports = outcome.reports
     if not isinstance(deidentified, tuple) or len(deidentified) != len(frames):
         raise VlmProcessError("de-identification returned an invalid frame batch")
-    payloads: set[bytes] = set()
+    if not isinstance(reports, tuple) or len(reports) != len(frames):
+        raise VlmProcessError("de-identification must return exactly eight reports")
+
     for original, processed in zip(frames, deidentified, strict=True):
-        if not isinstance(processed, VlmFramePayload):
+        if not isinstance(processed, ExtractedKeyframe):
             raise VlmProcessError("de-identification returned an invalid frame")
-        if processed.index != original.index or processed.timestamp_sec != original.timestamp_sec:
-            raise VlmProcessError("de-identification changed frame ordering")
         if (
-            not isinstance(processed.jpeg_bytes, bytes)
-            or not processed.jpeg_bytes.startswith(b"\xff\xd8")
-            or not processed.jpeg_bytes.endswith(b"\xff\xd9")
+            processed.index != original.index
+            or processed.timestamp_sec != original.timestamp_sec
+            or processed.frame_index != original.frame_index
         ):
-            raise VlmProcessError("de-identification returned a non-JPEG frame")
-        if processed.jpeg_bytes == original.jpeg_bytes:
-            raise VlmProcessError("de-identification returned an unchanged frame")
-        if processed.jpeg_bytes in payloads:
-            raise VlmProcessError("de-identification returned duplicate frames")
-        payloads.add(processed.jpeg_bytes)
+            raise VlmProcessError("de-identification changed frame ordering")
+
+    try:
+        validate_keyframes(deidentified)
+    except VlmContractError as exc:
+        raise VlmProcessError("de-identification returned invalid keyframes") from exc
+
+    for expected_index, report in enumerate(reports):
+        if not isinstance(report, DeidentificationFrameReport):
+            raise VlmProcessError("de-identification returned an invalid report")
+        if report.index != expected_index:
+            raise VlmProcessError("de-identification reports must be ordered")
+        counts = (report.detected_person_count, report.deidentified_person_count)
+        if any(
+            isinstance(count, bool) or not isinstance(count, int) or count < 0
+            for count in counts
+        ):
+            raise VlmProcessError(
+                "de-identification report counts must be nonnegative integers"
+            )
+        if report.status != "PASS":
+            raise VlmProcessError("de-identification report status must be PASS")
+        if report.deidentified_person_count != report.detected_person_count:
+            raise VlmProcessError("de-identification report counts do not match")
     return deidentified
 
 
