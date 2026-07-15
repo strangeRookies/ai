@@ -7,6 +7,7 @@
 4) 1~2프레임만 탐지 실패 -> 3순위(직전 프레임 재사용) 정상 동작
 5) 5프레임 초과 연속 탐지 실패 -> 3순위 제한, 최종 포기(스킵)로 전환
 6) 좌->우 빠른 이동 -> 프레임별 블러 위치가 실제 이동을 따라가는지
+7) 프레임에 여러 명이 있을 때 전원 블러 + 한 명의 탐지 누락이 다른 사람에게 안 새는지
 """
 
 import numpy as np
@@ -16,7 +17,6 @@ from ai.events.clip_worker import (
     _MAX_STALE_FACE_BOX_FRAMES,
     _apply_per_frame_face_blur,
     _face_box_from_keypoints,
-    _find_track_box,
     _upper_body_fallback_box,
 )
 
@@ -145,7 +145,7 @@ class TestScenario4ShortDropout:
             [box_a],  # frame 3: 다시 정상 탐지
         ]
 
-        tiers = _apply_per_frame_face_blur(_cv2(), frames, frame_boxes, TRACK_ID, WIDTH, HEIGHT)
+        tiers = _apply_per_frame_face_blur(_cv2(), frames, frame_boxes, WIDTH, HEIGHT)
 
         assert tiers["keypoint"] == 2
         assert tiers["stale_reuse"] == 2
@@ -161,7 +161,7 @@ class TestScenario5LongDropout:
         frames = [np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8) for _ in range(1 + num_missing)]
         frame_boxes = [[box_a]] + [None] * num_missing
 
-        tiers = _apply_per_frame_face_blur(_cv2(), frames, frame_boxes, TRACK_ID, WIDTH, HEIGHT)
+        tiers = _apply_per_frame_face_blur(_cv2(), frames, frame_boxes, WIDTH, HEIGHT)
 
         assert tiers["keypoint"] == 1
         assert tiers["stale_reuse"] == _MAX_STALE_FACE_BOX_FRAMES  # 최대 5프레임까지만 재사용
@@ -181,7 +181,7 @@ class TestScenario6FastMovement:
 
         computed_centers = []
         for idx in range(len(frames)):
-            matched = _find_track_box(frame_boxes[idx], TRACK_ID)
+            matched = frame_boxes[idx][0]
             region = _face_box_from_keypoints(matched, WIDTH, HEIGHT)
             assert region is not None
             x1, y1, x2, y2 = region
@@ -193,6 +193,49 @@ class TestScenario6FastMovement:
 
         # 첫 프레임과 마지막 프레임의 위치 차이가 실제 이동 거리와 비슷한 크기여야 함
         assert (computed_centers[-1] - computed_centers[0]) > 150
+
+
+class TestScenario7MultiplePeople:
+    def test_all_people_in_frame_get_blurred_regardless_of_headcount(self):
+        # 인원 수를 코드에 하드코딩하지 않았음을 보여주기 위해 5명으로 검증
+        # (2명이든 5명이든 boxes 리스트를 그냥 순회하므로 처리 인원에 제한이 없음)
+        num_people = 5
+        boxes = [
+            _box(
+                track_id=i,
+                x1=i * 70, y1=60, x2=i * 70 + 60, y2=350,
+                keypoints=_standing_keypoints(head_x=i * 70 + 30, head_y=80),
+            )
+            for i in range(num_people)
+        ]
+        frame = np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8)
+
+        tiers = _apply_per_frame_face_blur(_cv2(), [frame], [boxes], WIDTH, HEIGHT)
+
+        assert tiers["keypoint"] == num_people  # 5명 전원 블러됨
+
+    def test_one_persons_dropout_does_not_leak_into_anothers_position(self):
+        # 3명 중 가운데 사람만 한 프레임 탐지 누락 -> 그 사람만 자기 직전 위치를 재사용하고
+        # 나머지 둘의 위치에는 영향이 없어야 함
+        boxes = [
+            _box(i, i * 70, 60, i * 70 + 60, 350, _standing_keypoints(head_x=i * 70 + 30, head_y=80))
+            for i in range(3)
+        ]
+        box_0, box_1, box_2 = boxes
+
+        frames = [np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8) for _ in range(3)]
+        frame_boxes = [
+            [box_0, box_1, box_2],  # frame 0: 3명 다 정상 탐지
+            [box_0, box_2],         # frame 1: 가운데(box_1)만 탐지 누락
+            [box_0, box_1, box_2],  # frame 2: 3명 다 다시 정상
+        ]
+
+        tiers = _apply_per_frame_face_blur(_cv2(), frames, frame_boxes, WIDTH, HEIGHT)
+
+        # box_0/box_2는 3프레임 전부 keypoint로 잡히고, box_1만 프레임1에서 자기 직전 위치를 재사용
+        assert tiers["keypoint"] == 8  # 3 + 2 + 3
+        assert tiers["stale_reuse"] == 1
+        assert tiers["skipped"] == 0
 
 
 def _cv2():
