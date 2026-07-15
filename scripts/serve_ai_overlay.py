@@ -764,7 +764,22 @@ def _process_frame_impl(
                 )
                 topic_settings_exit = mqtt_topic_settings_from_args(args)
                 if publisher is not None:
-                    publisher.publish(exit_payload, topic=topic_settings_exit["event_topic"])
+                    _publish_event(publisher, exit_payload, topic_settings_exit["event_topic"])
+                    
+                    if state is not None and getattr(state, "clip_buffer", None) is not None:
+                        task_metadata = {
+                            "evidenceId": exit_payload.get("eventId"),
+                            "event_timestamp": exit_payload.get("timestamp"),
+                            "track_id": track_id,
+                        }
+                        clip_triggered = state.clip_buffer.trigger_event(
+                            event_type=exit_payload.get("type", "exit"),
+                            camera_id=stream_id,
+                            metadata=task_metadata,
+                        )
+                        if clip_triggered:
+                            print(f"[ai-overlay-event] triggered snapshot recording for EXIT camera={stream_id} eventId={exit_payload.get('eventId')}", flush=True)
+
                 print(f"[exit-event] {stream_id} track_id={track_id} frameId={overlay_frame_id}", flush=True)
 
     # HAZARD 위험구역 감지: 트래킹된 박스 center가 위험구역(HAZARD ROI) 안에 있으면 알림
@@ -787,7 +802,22 @@ def _process_frame_impl(
                 )
                 topic_settings_hazard = mqtt_topic_settings_from_args(args)
                 if publisher is not None:
-                    publisher.publish(hazard_payload, topic=topic_settings_hazard["event_topic"])
+                    _publish_event(publisher, hazard_payload, topic_settings_hazard["event_topic"])
+                    
+                    if state is not None and getattr(state, "clip_buffer", None) is not None:
+                        task_metadata = {
+                            "evidenceId": hazard_payload.get("eventId"),
+                            "event_timestamp": hazard_payload.get("timestamp"),
+                            "track_id": track_id,
+                        }
+                        clip_triggered = state.clip_buffer.trigger_event(
+                            event_type=hazard_payload.get("type", "hazard"),
+                            camera_id=stream_id,
+                            metadata=task_metadata,
+                        )
+                        if clip_triggered:
+                            print(f"[ai-overlay-event] triggered snapshot recording for HAZARD camera={stream_id} eventId={hazard_payload.get('eventId')}", flush=True)
+
                 print(f"[hazard-event] {stream_id} track_id={track_id}", flush=True)
 
     # Update display ID mapping so operator labels stay compact (1, 2, 3…)
