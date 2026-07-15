@@ -2,21 +2,54 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import NewType
-from urllib.error import URLError
-from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from ai.vlm_sdk import VlmAnalyzeRequest, resolve_vlm_provider  # noqa: E402
+from ai.vlm.contracts import (  # noqa: E402
+    VlmContractError,
+    validate_keyframes,
+    validate_vlm_result,
+)
+from ai.vlm.keyframe_extractor import (  # noqa: E402
+    KeyframeExtractionError,
+    extract_eight_keyframes,
+    local_video_source,
+)
+from ai.vlm_sdk import (  # noqa: E402
+    VlmAnalyzeRequest,
+    VlmAnalyzeResult,
+    VlmFramePayload,
+    resolve_vlm_provider,
+)
 
 MetadataJson = NewType("MetadataJson", str)
+_REDACTED = "[REDACTED]"
+_SENSITIVE_METADATA_KEYS = {
+    "access_key",
+    "api_key",
+    "authorization",
+    "client_secret",
+    "cookie",
+    "credential",
+    "input_url",
+    "output_url",
+    "output_urls",
+    "password",
+    "private_key",
+    "refresh_token",
+    "secret",
+    "session_key",
+    "source_url",
+    "token",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,27 +60,7 @@ class ProcessVlmArgs:
     mock_mode: bool
 
 
-@dataclass(frozen=True, slots=True)
-class VlmResult:
-    visual_event_type: str
-    people_count: int
-    korean_search_keywords: tuple[str, ...]
-    detailed_description_ko: str
-
-    def to_json(self) -> str:
-        return json.dumps(
-            {
-                "visual_event_type": self.visual_event_type,
-                "people_count": self.people_count,
-                "korean_search_keywords": list(self.korean_search_keywords),
-                "detailed_description_ko": self.detailed_description_ko,
-                "uncertainty_notes": [
-                    "영상만으로 신원, 얼굴 특징, 정확한 나이, 성별, 의학적 원인은 판단하지 않습니다."
-                ],
-            },
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
+VlmResult = VlmAnalyzeResult
 
 
 class VlmProcessError(RuntimeError):
@@ -56,13 +69,18 @@ class VlmProcessError(RuntimeError):
 
 def parse_args(argv: list[str]) -> ProcessVlmArgs:
     parser = argparse.ArgumentParser(
-        description="Process a clip or snapshot with VLM-RAG contract output (direct SDK, no LangChain)."
+        description=(
+            "Process a clip or snapshot with VLM-RAG contract output "
+            "(direct SDK, no LangChain)."
+        )
     )
     parser.add_argument("--input-url", required=True)
     parser.add_argument("--output-urls", required=True)
     parser.add_argument("--metadata", required=True)
     parsed = parser.parse_args(argv)
-    output_urls = tuple(url.strip() for url in parsed.output_urls.split(",") if url.strip())
+    output_urls = tuple(
+        url.strip() for url in parsed.output_urls.split(",") if url.strip()
+    )
     return ProcessVlmArgs(
         input_url=parsed.input_url,
         output_urls=output_urls,
@@ -72,70 +90,125 @@ def parse_args(argv: list[str]) -> ProcessVlmArgs:
 
 
 def process(args: ProcessVlmArgs) -> VlmResult:
-    metadata = parse_metadata(args.metadata)
-    if not args.mock_mode:
-        clip_bytes = download_input(args.input_url)
-        upload_placeholder_keyframes(args.output_urls, clip_bytes)
+    metadata = sanitize_metadata(parse_metadata(args.metadata))
+    start_sec, end_sec = validate_clip_metadata(metadata)
+    with local_video_source(args.input_url) as video_path:
+        frames = extract_eight_keyframes(
+            video_path,
+            start_sec=start_sec,
+            end_sec=end_sec,
+        )
+    validate_keyframes(frames)
+    provider_frames = tuple(
+        VlmFramePayload(
+            index=frame.index,
+            timestamp_sec=frame.timestamp_sec,
+            jpeg_bytes=frame.jpeg_bytes,
+        )
+        for frame in frames
+    )
+
     provider = resolve_vlm_provider()
     analyzed = provider.analyze(
         VlmAnalyzeRequest(
-            input_url=args.input_url,
+            frames=provider_frames,
             metadata=metadata,
-            output_urls=args.output_urls,
         )
     )
-    return VlmResult(
-        visual_event_type=analyzed.visual_event_type,
-        people_count=analyzed.people_count,
-        korean_search_keywords=analyzed.korean_search_keywords,
-        detailed_description_ko=analyzed.detailed_description_ko,
-    )
+    validate_vlm_result(analyzed.to_dict())
+    return analyzed
 
 
-def parse_metadata(raw: MetadataJson) -> dict[str, str]:
+def parse_metadata(raw: MetadataJson) -> dict[str, object]:
+    def reject_nonfinite(_value: str) -> None:
+        raise VlmProcessError("metadata contains a non-finite number")
+
     try:
-        value = json.loads(raw)
+        value = json.loads(
+            raw,
+            parse_constant=reject_nonfinite,
+        )
     except json.JSONDecodeError as exc:
         raise VlmProcessError(f"invalid metadata JSON: {exc.msg}") from exc
+    except ValueError as exc:
+        raise VlmProcessError("invalid metadata JSON") from exc
     if not isinstance(value, dict):
         raise VlmProcessError("metadata must be a JSON object")
-    return {str(key): str(item) for key, item in value.items()}
+    return value
 
 
-def download_input(input_url: str) -> bytes:
+def _is_finite_number(value: object) -> bool:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
     try:
-        with urlopen(input_url, timeout=30) as response:
-            return response.read()
-    except (OSError, URLError) as exc:
-        raise VlmProcessError(f"failed to download input media: {exc}") from exc
+        return math.isfinite(float(value))
+    except (OverflowError, ValueError):
+        return False
 
 
-def upload_placeholder_keyframes(output_urls: tuple[str, ...], clip_bytes: bytes) -> None:
-    if not output_urls:
-        raise VlmProcessError("at least one output URL is required")
-    payload = clip_bytes[:1] or b"\xff\xd8\xff\xd9"
-    for output_url in output_urls:
-        request = Request(
-            output_url,
-            data=payload,
-            method="PUT",
-            headers={"Content-Type": "image/jpeg"},
+def validate_clip_metadata(metadata: dict[str, object]) -> tuple[float, float]:
+    for field_name in ("incident_id", "camera_login_id"):
+        value = metadata.get(field_name)
+        if not isinstance(value, str) or not value.strip():
+            raise VlmProcessError(
+                f"metadata.{field_name} must be a non-empty string"
+            )
+
+    start = metadata.get("clip_start_sec")
+    end = metadata.get("clip_end_sec")
+    if not _is_finite_number(start) or start < 0:
+        raise VlmProcessError(
+            "metadata.clip_start_sec must be a finite nonnegative number"
         )
-        try:
-            with urlopen(request, timeout=30) as response:
-                status = getattr(response, "status", 200)
-        except (OSError, URLError) as exc:
-            raise VlmProcessError(f"failed to upload keyframe: {exc}") from exc
-        if status >= 400:
-            raise VlmProcessError(f"failed to upload keyframe: HTTP {status}")
+    if not _is_finite_number(end) or end <= start:
+        raise VlmProcessError(
+            "metadata.clip_end_sec must be finite and greater than clip_start_sec"
+        )
+    return float(start), float(end)
+
+def sanitize_metadata(metadata: dict[str, object]) -> dict[str, object]:
+    """Copy nested incident metadata while redacting credential-bearing values."""
+
+    def sanitize(value: object) -> object:
+        if isinstance(value, dict):
+            sanitized: dict[str, object] = {}
+            for key, item in value.items():
+                normalized = key.strip().lower().replace("-", "_")
+                sensitive = (
+                    normalized in _SENSITIVE_METADATA_KEYS
+                    or normalized.endswith(
+                        (
+                            "_access_key",
+                            "_api_key",
+                            "_credential",
+                            "_password",
+                            "_private_key",
+                            "_secret",
+                            "_token",
+                        )
+                    )
+                )
+                sanitized[key] = _REDACTED if sensitive else sanitize(item)
+            return sanitized
+        if isinstance(value, list):
+            return [sanitize(item) for item in value]
+        return value
+
+    sanitized = sanitize(metadata)
+    if not isinstance(sanitized, dict):  # defensive type narrowing
+        raise VlmProcessError("metadata must be a JSON object")
+    return sanitized
 
 
 def main(argv: list[str]) -> int:
     try:
         args = parse_args(argv)
         result = process(args)
-    except VlmProcessError as exc:
+    except (VlmProcessError, KeyframeExtractionError, VlmContractError) as exc:
         print(str(exc), file=sys.stderr)
+        return 1
+    except (OSError, RuntimeError, ValueError):
+        print("VLM processing failed", file=sys.stderr)
         return 1
     print(result.to_json())
     return 0
