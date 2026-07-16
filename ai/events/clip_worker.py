@@ -18,7 +18,19 @@ _FFMPEG_ENCODER_CANDIDATES = ("h264_nvenc", "libx264")
 # 얼굴 블러 대상 keypoint (COCO 17포인트: 0=코, 1=왼눈, 2=오른눈, 3=왼귀, 4=오른귀)
 _HEAD_KEYPOINT_INDICES = (0, 1, 2, 3, 4)
 _SHOULDER_KEYPOINT_INDICES = (5, 6)
+_HIP_KEYPOINT_INDICES = (11, 12)  # COCO: 11=왼쪽 골반, 12=오른쪽 골반
 _MIN_KEYPOINT_CONF = 0.3
+_FACE_PAD_RATIO = 0.35
+# 골반->어깨 축을 어깨중점에서 이 비율만큼 더 연장한 지점을 머리 위치로 추정
+# (목+머리 길이가 대략 몸통 길이의 이 정도 비율이라는 근사치).
+_TORSO_HEAD_EXTENSION_RATIO = 0.5
+_TORSO_HEAD_PAD_RATIO = 0.6
+# 어깨중점-골반중점 거리가 이보다 짧으면 축 방향을 못 믿음(거의 겹침) -> 폴백.
+_TORSO_AXIS_MIN_LENGTH = 4.0
+# 입/턱은 COCO 17포인트에 없어서 코/눈/귀 클러스터 아래쪽으로 별도 여유가 더 필요함.
+# 위/옆 padding과 같은 비율만 쓰면(특히 얼굴너비 대비 어깨너비가 좁게 잡히는 자세에서)
+# 입이 블러 영역 밖에 남는 걸 시각 확인으로 발견해서 아래쪽만 크게 늘림.
+_FACE_PAD_BOTTOM_RATIO = 0.85
 # 우선순위 3(직전 프레임 얼굴 위치 재사용) 최대 허용 연속 프레임 수 (~0.17s @30fps).
 # 이보다 오래 재사용하면 사람이 실제로 움직였을 때 옛 위치를 계속 우려먹게 되므로 제한.
 _MAX_STALE_FACE_BOX_FRAMES = 5
@@ -51,6 +63,8 @@ def _face_box_from_keypoints(box, width, height):
     ys = [p[1] for p in points]
     min_x, max_x = min(xs), max(xs)
     min_y, max_y = min(ys), max(ys)
+    head_width = max_x - min_x
+    head_height = max_y - min_y
 
     # keypoint는 점이라 얼굴 전체를 못 덮으므로 padding 필요.
     # 어깨너비를 척도로 써서 padding을 산출하고(사람 크기에 비례), 어깨가 안 잡히면
@@ -58,26 +72,86 @@ def _face_box_from_keypoints(box, width, height):
     shoulder_l = _kp_point(keypoints, _SHOULDER_KEYPOINT_INDICES[0])
     shoulder_r = _kp_point(keypoints, _SHOULDER_KEYPOINT_INDICES[1])
     if shoulder_l is not None and shoulder_r is not None:
-        scale = math.hypot(shoulder_r[0] - shoulder_l[0], shoulder_r[1] - shoulder_l[1])
+        shoulder_scale = math.hypot(shoulder_r[0] - shoulder_l[0], shoulder_r[1] - shoulder_l[1])
     else:
         bx1, by1, bx2, by2 = box.get("x1"), box.get("y1"), box.get("x2"), box.get("y2")
         if None not in (bx1, by1, bx2, by2):
-            scale = min(abs(float(bx2) - float(bx1)), abs(float(by2) - float(by1))) * 0.4
+            shoulder_scale = min(abs(float(bx2) - float(bx1)), abs(float(by2) - float(by1))) * 0.4
         else:
-            scale = max(max_x - min_x, max_y - min_y, 1.0) * 2.0
-    pad = max(scale * 0.35, 8.0)
+            shoulder_scale = max(head_width, head_height, 1.0) * 2.0
+    # 실측 얼굴 폭/높이도 후보에 넣음 -- 어깨가 자세/각도 때문에 실제 얼굴 크기와
+    # 안 맞게 좁게 잡히는 경우(예: 시각 확인에서 재현된 케이스)에도 최소한 감지된
+    # 얼굴 크기만큼은 padding을 확보하기 위함. max()라 기존보다 작아지진 않음.
+    scale = max(head_width, head_height, shoulder_scale)
+    pad = max(scale * _FACE_PAD_RATIO, 8.0)
+    bottom_pad = max(scale * _FACE_PAD_BOTTOM_RATIO, 16.0)
 
     x1_px = int(max(0, min_x - pad))
     y1_px = int(max(0, min_y - pad))
     x2_px = int(min(width, max_x + pad))
-    y2_px = int(min(height, max_y + pad))
+    y2_px = int(min(height, max_y + bottom_pad))
+    if x2_px <= x1_px or y2_px <= y1_px:
+        return None
+    return (x1_px, y1_px, x2_px, y2_px)
+
+
+def _midpoint(a, b):
+    """둘 다 있으면 평균, 한쪽만 있으면(비대칭 가림) 있는 쪽을 그대로 반환."""
+    if a is not None and b is not None:
+        return ((a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0)
+    return a if a is not None else b
+
+
+def _torso_axis_head_box(box, width, height):
+    """2순위: 어깨-골반 keypoint로 몸의 장축을 구해서 그 축의 머리 쪽 끝을 블러.
+
+    "상위 %" 폴백(_upper_body_fallback_box, 3순위로 격하)은 사람이 세로로 서있을
+    때만 유효한 가정이다. 완전히 엎드리거나 옆으로 누운 자세(낙상 직후 가장 흔한
+    자세)에서는 머리-발 축이 가로가 되어, bbox 상단 %가 머리 대신 등/허리를
+    가리킬 수 있다. 골반->어깨 방향은 카메라 상의 회전(서있든 눕든 대각선이든)과
+    무관하게 항상 "머리 쪽"을 가리키는 해부학적으로 불변인 축이라 이를 이용한다.
+    """
+    keypoints = box.get("keypoints") if box else None
+    if not keypoints:
+        return None
+
+    shoulder_l = _kp_point(keypoints, _SHOULDER_KEYPOINT_INDICES[0])
+    shoulder_r = _kp_point(keypoints, _SHOULDER_KEYPOINT_INDICES[1])
+    hip_l = _kp_point(keypoints, _HIP_KEYPOINT_INDICES[0])
+    hip_r = _kp_point(keypoints, _HIP_KEYPOINT_INDICES[1])
+
+    shoulder_mid = _midpoint(shoulder_l, shoulder_r)
+    hip_mid = _midpoint(hip_l, hip_r)
+    if shoulder_mid is None or hip_mid is None:
+        return None
+
+    axis_x = shoulder_mid[0] - hip_mid[0]
+    axis_y = shoulder_mid[1] - hip_mid[1]
+    axis_len = math.hypot(axis_x, axis_y)
+    if axis_len < _TORSO_AXIS_MIN_LENGTH:
+        return None
+
+    head_x = shoulder_mid[0] + axis_x * _TORSO_HEAD_EXTENSION_RATIO
+    head_y = shoulder_mid[1] + axis_y * _TORSO_HEAD_EXTENSION_RATIO
+
+    if shoulder_l is not None and shoulder_r is not None:
+        scale = math.hypot(shoulder_r[0] - shoulder_l[0], shoulder_r[1] - shoulder_l[1])
+    else:
+        # 어깨 한쪽만 잡히면 폭을 직접 잴 수 없으니 축 길이(몸통 길이) 기반으로 대체.
+        scale = axis_len * 0.6
+    pad = max(scale * _TORSO_HEAD_PAD_RATIO, 16.0)
+
+    x1_px = int(max(0, head_x - pad))
+    y1_px = int(max(0, head_y - pad))
+    x2_px = int(min(width, head_x + pad))
+    y2_px = int(min(height, head_y + pad))
     if x2_px <= x1_px or y2_px <= y1_px:
         return None
     return (x1_px, y1_px, x2_px, y2_px)
 
 
 def _upper_body_fallback_box(box, width, height, ratio=0.32):
-    """2순위: keypoint 신뢰도가 낮을 때 전신 bbox 상단 일부를 넓게 블러."""
+    """3순위: 어깨/골반 keypoint조차 없을 때, 전신 bbox 상단 일부를 넓게 블러."""
     if not box:
         return None
     x1, y1, x2, y2 = box.get("x1"), box.get("y1"), box.get("x2"), box.get("y2")
@@ -96,13 +170,39 @@ def _upper_body_fallback_box(box, width, height, ratio=0.32):
     return (x1_px, y1_px, x2_px, y2_px)
 
 
+_MOSAIC_BLOCK_DIVISOR = 8
+_MOSAIC_MIN_BLOCK = 6
+_MOSAIC_FINISH_BLUR_KSIZE = 5
+
+
 def _blur_region(cv2_module, frame, region):
+    """모자이크(다운/업스케일) + 가벼운 마무리 블러.
+
+    순수 Gaussian은 영역이 작을수록(먼 거리의 사람 등) ksize도 같이 작아져서 실제
+    비식별 강도가 약해지는 문제가 있었음. 모자이크는 블록 하한(_MOSAIC_MIN_BLOCK)을
+    둬서 영역 크기와 무관하게 최소 뭉개짐을 보장하고, 정보 파괴(비가역성) 면에서도
+    순수 블러보다 강함.
+    """
     x1_px, y1_px, x2_px, y2_px = region
     roi = frame[y1_px:y2_px, x1_px:x2_px]
-    ksize = max(5, int(min(x2_px - x1_px, y2_px - y1_px) * 0.3))
-    if ksize % 2 == 0:
-        ksize += 1
-    frame[y1_px:y2_px, x1_px:x2_px] = cv2_module.GaussianBlur(roi, (ksize, ksize), 0)
+    h, w = roi.shape[:2]
+    if h <= 0 or w <= 0:
+        return
+
+    block = max(_MOSAIC_MIN_BLOCK, min(h, w) // _MOSAIC_BLOCK_DIVISOR)
+    small_w = max(1, w // block)
+    small_h = max(1, h // block)
+    # 다운스케일은 반드시 INTER_AREA(영역 평균) -- INTER_LINEAR는 다운스케일 시
+    # 블록 전체를 평균내지 않고 특정 좌표만 보간해서 앨리어싱이 생기고, 고주파
+    # 무늬(체크보드 등)가 제대로 안 뭉개짐.
+    mosaic = cv2_module.resize(roi, (small_w, small_h), interpolation=cv2_module.INTER_AREA)
+    mosaic = cv2_module.resize(mosaic, (w, h), interpolation=cv2_module.INTER_NEAREST)
+
+    ksize = _MOSAIC_FINISH_BLUR_KSIZE if _MOSAIC_FINISH_BLUR_KSIZE % 2 else _MOSAIC_FINISH_BLUR_KSIZE + 1
+    if min(h, w) >= ksize:
+        mosaic = cv2_module.GaussianBlur(mosaic, (ksize, ksize), 0)
+
+    frame[y1_px:y2_px, x1_px:x2_px] = mosaic
 
 
 def _apply_per_frame_face_blur(cv2_module, frames, frame_boxes, width, height):
@@ -110,10 +210,11 @@ def _apply_per_frame_face_blur(cv2_module, frames, frame_boxes, width, height):
     (이벤트를 트리거한 특정 track_id 하나만이 아니라, 화면에 잡히는 모든 사람 대상).
 
     사람마다(=track_id마다) 독립적으로 우선순위 적용:
-    1) keypoint 기반 얼굴 박스  2) 전신 bbox 상단 일부(상위 %)
-    3) 그 사람의 직전 성공 위치 재사용(최대 _MAX_STALE_FACE_BOX_FRAMES 프레임)  4) 포기(블러 없음)
+    1) keypoint 기반 얼굴 박스  2) 어깨-골반 장축 기반 머리 위치 추정(누운/엎드린 자세)
+    3) 전신 bbox 상단 일부(상위 %, 어깨/골반 keypoint조차 없을 때의 최후 수단)
+    4) 그 사람의 직전 성공 위치 재사용(최대 _MAX_STALE_FACE_BOX_FRAMES 프레임)  5) 포기(블러 없음)
     """
-    tier_counts = {"keypoint": 0, "upper_body": 0, "stale_reuse": 0, "skipped": 0}
+    tier_counts = {"keypoint": 0, "torso_axis": 0, "upper_body": 0, "stale_reuse": 0, "skipped": 0}
     stale_by_track = {}  # track_id(또는 임시 키) -> {"box": region, "streak": int}
     untracked_seq = 0  # track_id가 없는 탐지는 프레임 간 연속성이 없어 재사용 대상에서 제외
 
@@ -130,6 +231,10 @@ def _apply_per_frame_face_blur(cv2_module, frames, frame_boxes, width, height):
 
             region = _face_box_from_keypoints(box, width, height)
             tier = "keypoint" if region is not None else None
+            if region is None:
+                region = _torso_axis_head_box(box, width, height)
+                if region is not None:
+                    tier = "torso_axis"
             if region is None:
                 region = _upper_body_fallback_box(box, width, height)
                 if region is not None:

@@ -15,8 +15,12 @@ import pytest
 
 from ai.events.clip_worker import (
     _MAX_STALE_FACE_BOX_FRAMES,
+    _MOSAIC_MIN_BLOCK,
     _apply_per_frame_face_blur,
+    _blur_region,
     _face_box_from_keypoints,
+    _midpoint,
+    _torso_axis_head_box,
     _upper_body_fallback_box,
 )
 
@@ -67,6 +71,22 @@ def _low_confidence_head_keypoints(head_x, head_y, conf=0.15):
     return kps
 
 
+def _torso_keypoints(shoulder_l=None, shoulder_r=None, hip_l=None, hip_r=None):
+    """코/눈/귀 없이 어깨/골반만 있는 keypoint 세트 (2순위 폴백 전용 테스트).
+    각 인자를 None으로 두면 그 keypoint는 아예 없는 것으로 취급(비대칭 케이스 재현용)."""
+    kps = [_empty_kp()] * 17
+    kps = list(kps)
+    if shoulder_l is not None:
+        kps[5] = _kp(shoulder_l[0], shoulder_l[1], 0.9)
+    if shoulder_r is not None:
+        kps[6] = _kp(shoulder_r[0], shoulder_r[1], 0.9)
+    if hip_l is not None:
+        kps[11] = _kp(hip_l[0], hip_l[1], 0.7)
+    if hip_r is not None:
+        kps[12] = _kp(hip_r[0], hip_r[1], 0.7)
+    return kps
+
+
 class TestScenario1Standing:
     def test_high_confidence_keypoints_produce_face_box(self):
         keypoints = _standing_keypoints(head_x=200, head_y=80)
@@ -80,6 +100,37 @@ class TestScenario1Standing:
         assert x1 < 200 < x2
         assert y1 < 80 < y2
         assert y2 < 150  # 어깨(120) 근처까지 과도하게 안 내려감
+
+
+class TestFaceBoxCoversMouth:
+    """시각 확인(합성 얼굴 이미지)에서 실제로 재현된 버그: 어깨-머리 비율이 좁게
+    잡히면(shoulder_scale이 실제 얼굴 크기와 안 맞으면) 코/눈/귀 위아래로 똑같은
+    padding만 주는 예전 로직으로는 입이 블러 영역 밖에 남았음. COCO 17포인트엔
+    입/턱이 없어서 항상 코/눈/귀 클러스터 "아래"로 여유를 더 둬야 한다."""
+
+    def test_mouth_below_narrow_shoulders_is_still_covered(self):
+        # 시각 확인 스크립트와 동일한 비율: 머리 폭(귀-귀, 110px)이 어깨 폭(120px)과
+        # 거의 같음 -- 실제 성인 평균(어깨가 머리보다 훨씬 넓음)보다 좁게 잡힌 경우.
+        cx, cy = 200, 165
+        kps = [{"x": 0.0, "y": 0.0, "confidence": 0.0}] * 17
+        kps = list(kps)
+        kps[0] = _kp(cx, cy - 5, 0.9)  # nose
+        kps[1] = _kp(cx - 28, cy - 20, 0.9)  # L eye
+        kps[2] = _kp(cx + 28, cy - 20, 0.9)  # R eye
+        kps[3] = _kp(cx - 55, cy - 10, 0.85)  # L ear
+        kps[4] = _kp(cx + 55, cy - 10, 0.85)  # R ear
+        kps[5] = _kp(cx - 60, cy + 90, 0.9)  # L shoulder
+        kps[6] = _kp(cx + 60, cy + 90, 0.9)  # R shoulder
+        box = _box(TRACK_ID, cx - 90, cy - 110, cx + 90, cy + 200, kps)
+
+        region = _face_box_from_keypoints(box, WIDTH, HEIGHT)
+        assert region is not None
+        x1, y1, x2, y2 = region
+
+        mouth_x, mouth_y = cx, cy + 55  # 입은 코 기준으로 55px 아래
+        print(f"[mouth-coverage] region={region} mouth=({mouth_x},{mouth_y})")
+        assert x1 <= mouth_x <= x2
+        assert y1 <= mouth_y <= y2, "입이 블러 영역 밖에 남으면 안 됨 (회귀 시 여기서 실패)"
 
 
 class TestScenario2LyingOnSide:
@@ -104,6 +155,26 @@ class TestScenario2LyingOnSide:
         # 가로 폭은 bbox 전체라 실제 머리 x좌표는 대개 커버되지만, 세로 밴드는 살짝 벗어날 수 있음
         assert x_covered
         assert y_error <= 10  # 참고용 허용치 -- 실측 오차를 리포트에 남기기 위한 기록성 단언
+
+    def test_torso_axis_available_gives_tighter_head_estimate(self):
+        """2순위(_torso_axis_head_box) 도입 후: 어깨/골반 keypoint가 있으면 위
+        테스트의 "상위 %" 폴백(3순위로 격하됨)까지 갈 필요 없이 훨씬 정확하게
+        머리를 잡는다. 동일한 실제 머리 위치를 기준으로 비교."""
+        actual_head_x, actual_head_y = 110, 224
+        # 몸통이 가로로 누움: 어깨는 머리 쪽에 더 가깝고, 골반은 발 쪽으로 더 멀리.
+        shoulder_l, shoulder_r = (150.0, 218.0), (150.0, 226.0)
+        hip_l, hip_r = (250.0, 222.0), (250.0, 230.0)
+        keypoints = _torso_keypoints(shoulder_l, shoulder_r, hip_l, hip_r)
+        box = _box(TRACK_ID, 100, 200, 300, 260, keypoints)
+
+        assert _face_box_from_keypoints(box, WIDTH, HEIGHT) is None  # 1순위는 여전히 실패(코/눈 없음)
+
+        region = _torso_axis_head_box(box, WIDTH, HEIGHT)
+        assert region is not None
+        x1, y1, x2, y2 = region
+        print(f"[scenario2-torso-axis] region={region} actual_head=({actual_head_x},{actual_head_y})")
+        assert x1 <= actual_head_x <= x2
+        assert y1 <= actual_head_y <= y2
 
 
 class TestScenario3Prone:
@@ -130,6 +201,119 @@ class TestScenario3Prone:
             "예상대로 상위 % 폴백이 가로로 누운 자세에서 머리를 못 잡음 -- "
             "본문 리포트의 '개선 방향' 참고 (자세 인식 기반 밴드 방향 전환 필요)"
         )
+
+    def test_torso_axis_flips_this_to_true_when_shoulder_hip_available(self):
+        """위 테스트가 "예상된 실패"로 고정해둔 바로 그 케이스(완전히 엎드림, 발이
+        왼쪽/머리가 오른쪽)를 어깨/골반 keypoint까지 채워서 다시 태워봄.
+        _torso_axis_head_box()에서는 head_in_region이 True로 뒤집혀야 정상 --
+        이게 오늘 고치려던 그 버그의 의도된 수정 확인."""
+        actual_head_x, actual_head_y = 290, 230
+        shoulder_l, shoulder_r = (250.0, 225.0), (250.0, 235.0)
+        hip_l, hip_r = (150.0, 225.0), (150.0, 235.0)
+        keypoints = _torso_keypoints(shoulder_l, shoulder_r, hip_l, hip_r)
+        box = _box(TRACK_ID, 100, 200, 300, 260, keypoints)
+
+        assert _face_box_from_keypoints(box, WIDTH, HEIGHT) is None  # 1순위는 여전히 실패(코/눈 없음)
+
+        region = _torso_axis_head_box(box, WIDTH, HEIGHT)
+        assert region is not None
+        x1, y1, x2, y2 = region
+        head_in_region = (x1 <= actual_head_x <= x2) and (y1 <= actual_head_y <= y2)
+        print(f"[scenario3-torso-axis] region={region} actual_head=({actual_head_x},{actual_head_y}) "
+              f"head_in_region={head_in_region}")
+
+        assert head_in_region is True, (
+            "장축 폴백이 도입되면 완전히 엎드린 자세에서도 머리를 잡아야 함 -- "
+            "여기서 실패하면 _torso_axis_head_box() 자체가 회귀한 것"
+        )
+
+
+class TestTorsoAxisFallback:
+    """어깨-골반 장축 폴백(_torso_axis_head_box, 2순위) 전용 검증.
+    시나리오2/3 클래스의 위 두 테스트가 "실제 낙상 자세"를 재현한 것이라면,
+    여기는 그 함수 자체의 기하학적 정확성/경계 조건을 별도로 짚는다."""
+
+    def test_diagonal_45_degree_posture_finds_head_direction(self):
+        # 완전히 옆도, 완전히 엎드림도 아닌 대각선 자세: 오른쪽-위가 머리, 왼쪽-아래가 발.
+        shoulder_l, shoulder_r = (255.0, 135.0), (265.0, 145.0)
+        hip_l, hip_r = (135.0, 255.0), (145.0, 265.0)
+        keypoints = _torso_keypoints(shoulder_l, shoulder_r, hip_l, hip_r)
+        box = _box(TRACK_ID, 50, 50, 350, 350, keypoints)
+
+        region = _torso_axis_head_box(box, WIDTH, HEIGHT)
+        assert region is not None
+        x1, y1, x2, y2 = region
+
+        shoulder_mid = _midpoint(shoulder_l, shoulder_r)
+        hip_mid = _midpoint(hip_l, hip_r)
+        expected_head_x = shoulder_mid[0] + (shoulder_mid[0] - hip_mid[0]) * 0.5
+        expected_head_y = shoulder_mid[1] + (shoulder_mid[1] - hip_mid[1]) * 0.5
+        print(f"[diagonal] region={region} expected_head=({expected_head_x:.1f},{expected_head_y:.1f})")
+
+        assert x1 <= expected_head_x <= x2
+        assert y1 <= expected_head_y <= y2
+        # 방향성 검증: 대각선을 세로축으로만 취급하지 않았다는 증거로, 추정 머리
+        # 위치가 어깨중점보다 실제로 더 오른쪽(head 방향)이면서 더 위여야 함.
+        assert expected_head_x > shoulder_mid[0]
+        assert expected_head_y < shoulder_mid[1]
+
+        # "상위 %"였다면 x범위는 그냥 bbox 전체(50~350)였을 것 -- 장축 폴백은
+        # 훨씬 좁고 실제 머리 쪽으로 치우친 박스를 낸다.
+        upper_region = _upper_body_fallback_box(box, WIDTH, HEIGHT)
+        assert (x2 - x1) < (upper_region[2] - upper_region[0])
+
+    def test_asymmetric_single_side_shoulder_and_hip_still_works(self):
+        # 어깨는 왼쪽만, 골반은 오른쪽만 신뢰도 통과 (예: 카메라 반대쪽이 가려짐).
+        shoulder_l = (150.0, 220.0)
+        hip_r = (250.0, 226.0)
+        keypoints = _torso_keypoints(shoulder_l=shoulder_l, hip_r=hip_r)
+        box = _box(TRACK_ID, 100, 200, 300, 260, keypoints)
+
+        region = _torso_axis_head_box(box, WIDTH, HEIGHT)
+        assert region is not None
+        x1, y1, x2, y2 = region
+
+        # _midpoint()가 없는 쪽 없이 있는 점을 그대로 쓰는지 -- 축 계산 자체가
+        # 성립해야(비대칭이라고 None을 반환하면 안 됨) 아래 좌표 비교가 의미 있음.
+        expected_head_x = shoulder_l[0] + (shoulder_l[0] - hip_r[0]) * 0.5
+        expected_head_y = shoulder_l[1] + (shoulder_l[1] - hip_r[1]) * 0.5
+        print(f"[asymmetric] region={region} expected_head=({expected_head_x:.1f},{expected_head_y:.1f})")
+
+        assert x1 <= expected_head_x <= x2
+        assert y1 <= expected_head_y <= y2
+
+    def test_no_shoulder_or_hip_keypoints_returns_none(self):
+        # 코/눈만 있고(낮은 신뢰도) 어깨/골반은 아예 없음 -- 2순위 자체가 성립 불가.
+        keypoints = _low_confidence_head_keypoints(110, 224)
+        box = _box(TRACK_ID, 100, 200, 300, 260, keypoints)
+
+        assert _torso_axis_head_box(box, WIDTH, HEIGHT) is None
+
+    def test_missing_shoulder_and_hip_falls_back_to_upper_body_tier_end_to_end(self):
+        # 위 케이스를 실제 파이프라인(_apply_per_frame_face_blur)으로 태워서
+        # 2순위가 조용히 건너뛰어지고 3순위(상위 %)로 정상 폴백되는지 확인.
+        keypoints = _low_confidence_head_keypoints(110, 224)
+        box = _box(TRACK_ID, 100, 200, 300, 260, keypoints)
+        frame = np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8)
+
+        tiers = _apply_per_frame_face_blur(_cv2(), [frame], [[box]], WIDTH, HEIGHT)
+
+        assert tiers["torso_axis"] == 0
+        assert tiers["upper_body"] == 1
+        assert tiers["keypoint"] == 0
+
+    def test_keypoint_tier_takes_priority_over_torso_axis_when_both_available(self):
+        # _standing_keypoints는 코/눈/귀뿐 아니라 어깨(5,6)/골반(11,12)까지 이미
+        # 포함하므로, 1순위가 성공하면 2순위(_torso_axis_head_box)는 아예 호출조차
+        # 안 돼야 한다(호출됐어도 결과가 같을 수 있으니, 카운터로 "안 쓰였음"을 확인).
+        keypoints = _standing_keypoints(head_x=200, head_y=80)
+        box = _box(TRACK_ID, 150, 60, 250, 350, keypoints)
+        frame = np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8)
+
+        tiers = _apply_per_frame_face_blur(_cv2(), [frame], [[box]], WIDTH, HEIGHT)
+
+        assert tiers["keypoint"] == 1
+        assert tiers["torso_axis"] == 0
 
 
 class TestScenario4ShortDropout:
@@ -236,6 +420,80 @@ class TestScenario7MultiplePeople:
         assert tiers["keypoint"] == 8  # 3 + 2 + 3
         assert tiers["stale_reuse"] == 1
         assert tiers["skipped"] == 0
+
+
+def _checkerboard(size, square=6):
+    img = np.zeros((size, size, 3), dtype=np.uint8)
+    for y in range(0, size, square):
+        for x in range(0, size, square):
+            if ((x // square) + (y // square)) % 2 == 0:
+                img[y : y + square, x : x + square] = 255
+    return img
+
+
+class TestBlurStrength:
+    """모자이크 전환 후 실제로 정보가 파괴되는지 픽셀 레벨로 검증.
+    좌표만 확인하던 기존 시나리오 1~7과 달리, 여기는 _blur_region()이 실제로
+    쓴 픽셀 값을 본다."""
+
+    def test_mosaic_destroys_checkerboard_pattern(self):
+        # 체크보드는 인접 픽셀이 계속 흑/백으로 뒤집혀서 분산이 매우 큼 -- 무늬가
+        # 남아있는지 여부를 분산 하나로 잘 드러내는 합성 패턴.
+        frame = _checkerboard(size=120, square=6)
+        region = (0, 0, 120, 120)
+        original_variance = float(np.var(frame.astype(np.float64)))
+
+        _blur_region(_cv2(), frame, region)
+
+        blurred_variance = float(np.var(frame.astype(np.float64)))
+        print(f"[mosaic] original_variance={original_variance:.1f} blurred_variance={blurred_variance:.1f}")
+
+        assert original_variance > 10000  # sanity check: 체크보드가 실제로 고분산인지
+        assert blurred_variance < original_variance * 0.05  # 95% 이상 정보 파괴
+
+    def test_small_far_away_face_region_still_gets_pixelated(self):
+        # 멀리 있는 사람처럼 얼굴 영역이 작을 때(20x20)도 블록 크기 하한
+        # (_MOSAIC_MIN_BLOCK)이 실제로 걸려서 뭉개지는지 확인.
+        size = 20
+        frame = _checkerboard(size=size, square=2)  # 아주 촘촘한 무늬
+        region = (0, 0, size, size)
+
+        # 하한이 없었다면 block = 20 // 8 = 2 (원본 체커 주기와 같아서 블러 효과가
+        # 거의 없었을 상황) -- 하한(6) 덕분에 실제로는 더 큰 block이 적용돼야 함.
+        assert _MOSAIC_MIN_BLOCK > size // 8
+
+        original_variance = float(np.var(frame.astype(np.float64)))
+        _blur_region(_cv2(), frame, region)
+        blurred_variance = float(np.var(frame.astype(np.float64)))
+        print(f"[small-face] original_variance={original_variance:.1f} blurred_variance={blurred_variance:.1f}")
+
+        assert blurred_variance < original_variance * 0.2
+
+    def test_call_site_end_to_end_still_destroys_detail(self):
+        # _blur_region()의 유일한 두 호출 지점은 _apply_per_frame_face_blur() 내부
+        # (keypoint 성공 경로 / stale-reuse 경로) 뿐 -- 시그니처가 그대로이므로
+        # end-to-end로 호출해도 실제 픽셀까지 정상적으로 바뀌는지 확인.
+        keypoints = _standing_keypoints(head_x=200, head_y=80)
+        box = _box(TRACK_ID, 150, 60, 250, 350, keypoints)
+        region = _face_box_from_keypoints(box, WIDTH, HEIGHT)
+        rx1, ry1, rx2, ry2 = region
+
+        frame = np.full((HEIGHT, WIDTH, 3), 200, dtype=np.uint8)
+        # 랜덤 노이즈를 씀 -- 체크보드 같은 규칙적 무늬는 그 주기가 우연히 모자이크
+        # 블록 크기와 맞아떨어지면(이 얼굴 박스는 작아서 block=6이 나옴) 블록 하나가
+        # 무늬 한 칸을 통째로 담아버려 분산이 잘 안 줄어드는 공진 현상이 생길 수 있음
+        # (실제 얼굴엔 이런 규칙성이 없으므로 문제 아님). 노이즈는 그런 우연이 없음.
+        rng = np.random.default_rng(0)
+        rx_w, ry_h = rx2 - rx1, ry2 - ry1
+        frame[ry1:ry2, rx1:rx2] = rng.integers(0, 256, size=(ry_h, rx_w, 3), dtype=np.uint8)
+        original_variance = float(np.var(frame[ry1:ry2, rx1:rx2].astype(np.float64)))
+
+        tiers = _apply_per_frame_face_blur(_cv2(), [frame], [[box]], WIDTH, HEIGHT)
+
+        assert tiers["keypoint"] == 1
+        blurred_variance = float(np.var(frame[ry1:ry2, rx1:rx2].astype(np.float64)))
+        print(f"[call-site] original_variance={original_variance:.1f} blurred_variance={blurred_variance:.1f}")
+        assert blurred_variance < original_variance * 0.3
 
 
 def _cv2():
