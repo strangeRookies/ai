@@ -44,7 +44,7 @@ if not defined STABLE_ROOT (
 )
 
 set "REMOTE_ROOT=%STABLE_ROOT%"
-set "BRANCH=develop"
+if not defined AI_GIT_BRANCH (set "BRANCH=develop") else set "BRANCH=%AI_GIT_BRANCH%"
 set "MQTT_HOST=15.165.248.37"
 set "MQTT_PORT=1883"
 if not defined MJPEG_TUNNEL_START_PORT set "MJPEG_TUNNEL_START_PORT=8010"
@@ -55,9 +55,9 @@ echo.
 echo ========================================================
 echo [1/5] 사전 상태 점검
 echo ========================================================
-call :LOG "Checking for busy local ports (8888, 8889, 8189, 18080, MJPEG %MJPEG_TUNNEL_START_PORT%-%MJPEG_TUNNEL_END_PORT%)..."
+call :LOG "Checking for busy local ports (8091, 8888, 8889, 8189, 18080, MJPEG %MJPEG_TUNNEL_START_PORT%-%MJPEG_TUNNEL_END_PORT%)..."
 set "BUSY_PORTS="
-for %%P in (8888 8889 8189 18080) do call :CHECK_LOCAL_PORT %%P
+for %%P in (8091 8888 8889 8189 18080) do call :CHECK_LOCAL_PORT %%P
 for /L %%P in (%MJPEG_TUNNEL_START_PORT%,1,%MJPEG_TUNNEL_END_PORT%) do call :CHECK_LOCAL_PORT %%P
 if not defined BUSY_PORTS goto PORTS_FREE
 
@@ -108,7 +108,7 @@ echo ========================================================
 echo [2/5] GPU 서버 코드 동기화
 echo ========================================================
 call :LOG "Syncing GPU stable repo to origin/%BRANCH% and stopping previous AI runtime processes (single SSH connection to avoid MaxStartups)..."
-ssh %GPU_USER%@%GPU_HOST% "cd %REMOTE_ROOT% && git stash push -u -m auto-stash-before-ai-stable-run || true && git fetch origin && git checkout %BRANCH% && git pull --ff-only origin %BRANCH% && (pkill -f 'scripts/run_registered_cameras.py' 2>/dev/null || true; pkill -f 'scripts/start_simulated_rtsp_from_folder.py' 2>/dev/null || true; pkill -f 'scripts/serve_ai_overlay.py' 2>/dev/null || true; pkill -f 'ffmpeg' 2>/dev/null || true; rm -f %REMOTE_ROOT%/runs/camera_worker_registry.json 2>/dev/null || true; docker rm -f mediamtx 2>/dev/null || true)"
+ssh %GPU_USER%@%GPU_HOST% "cd %REMOTE_ROOT% && git stash push -u -m auto-stash-before-ai-stable-run || true && git fetch origin && git checkout %BRANCH% && git pull --ff-only origin %BRANCH% && (pkill -f 'scripts/run_registered_cameras.py' 2>/dev/null || true; pkill -f 'scripts/start_simulated_rtsp_from_folder.py' 2>/dev/null || true; pkill -f 'scripts/serve_ai_overlay.py' 2>/dev/null || true; pkill -f 'ai.internal_vlm_api' 2>/dev/null || true; pkill -f 'ffmpeg' 2>/dev/null || true; rm -f %REMOTE_ROOT%/runs/camera_worker_registry.json 2>/dev/null || true; docker rm -f mediamtx 2>/dev/null || true)"
 if errorlevel 1 (
   set "CURRENT_STEP=[2/5] GPU 서버 코드 동기화 및 기존 프로세스 정리"
   goto FAIL
@@ -124,7 +124,7 @@ call :LOG "Cleaning up stale remote ports and starting SSH tunnel in a new windo
 ssh %GPU_USER%@%GPU_HOST% "fuser -k 18080/tcp 2>/dev/null || true; lsof -ti tcp:18080 2>/dev/null | xargs -r kill -9 2>/dev/null || true; ss -lntp 'sport = :18080' 2>/dev/null || true"
 
 call :LOG "TRACE: BEFORE START SSH WINDOW"
-set "TUNNEL_FORWARDS=-L 8888:127.0.0.1:8888 -L 8889:127.0.0.1:8889 -L 8189:127.0.0.1:8189"
+set "TUNNEL_FORWARDS=-L 8091:127.0.0.1:8091 -L 8888:127.0.0.1:8888 -L 8889:127.0.0.1:8889 -L 8189:127.0.0.1:8189"
 for /L %%P in (%MJPEG_TUNNEL_START_PORT%,1,%MJPEG_TUNNEL_END_PORT%) do set "TUNNEL_FORWARDS=!TUNNEL_FORWARDS! -L %%P:127.0.0.1:%%P"
 call :LOG "MJPEG tunnel ports: %MJPEG_TUNNEL_START_PORT%-%MJPEG_TUNNEL_END_PORT% (cam_01 uses 8010, cam_02 uses 8011, ...)"
 if "%RUN_MODE%"=="tunnel_only" start "AI STABLE SSH Tunnel - keep open" cmd /k ssh -o ExitOnForwardFailure=yes -t %TUNNEL_FORWARDS% %GPU_USER%@%GPU_HOST% "echo ==============================================; echo [SSH TUNNEL ACTIVE] Tunnel established successfully.; echo Keep this window open to maintain streams.; echo ==============================================; tail -f /dev/null"
@@ -203,11 +203,12 @@ if "%RUN_MODE%"=="tunnel_only" call :LOG "SSH Tunnel established. Keep the tunne
 if not "%RUN_MODE%"=="tunnel_only" call :LOG "STABLE runtime started. Keep the tunnel window open."
 echo.
 echo Quick checks after startup:
-echo   GPU: ss -lntup ^| grep -E "8554^|8888^|8889^|8189^|8010^|8011^|8012^|8013^|8014"
+echo   GPU: ss -lntup ^| grep -E "8091^|8554^|8888^|8889^|8189^|8010^|8011^|8012^|8013^|8014"
 echo   GPU: docker ps ^| grep mediamtx
 echo   Local MJPEG cam_01: http://localhost:8010/mjpeg/cam_01
 echo   Local MJPEG cam_05: http://localhost:8014/mjpeg/cam_05
 echo   Forwarded MJPEG range: %MJPEG_TUNNEL_START_PORT%-%MJPEG_TUNNEL_END_PORT%
+echo   Local VLM health: http://localhost:8091/internal/vlm/health
 echo.
 goto SUCCESS
 
@@ -219,7 +220,7 @@ if /i not "%MODE%"=="3" (
 )
 echo.
 call :LOG "Stopping remote AI runtime processes..."
-ssh %GPU_USER%@%GPU_HOST% "pkill -f 'scripts/run_registered_cameras.py' 2>/dev/null || true; pkill -f 'scripts/start_simulated_rtsp_from_folder.py' 2>/dev/null || true; pkill -f 'scripts/serve_ai_overlay.py' 2>/dev/null || true; pkill -f 'ffmpeg' 2>/dev/null || true; rm -f %REMOTE_ROOT%/runs/camera_worker_registry.json 2>/dev/null || true; docker rm -f mediamtx 2>/dev/null || true"
+ssh %GPU_USER%@%GPU_HOST% "pkill -f 'scripts/run_registered_cameras.py' 2>/dev/null || true; pkill -f 'scripts/start_simulated_rtsp_from_folder.py' 2>/dev/null || true; pkill -f 'scripts/serve_ai_overlay.py' 2>/dev/null || true; pkill -f 'ai.internal_vlm_api' 2>/dev/null || true; pkill -f 'ffmpeg' 2>/dev/null || true; rm -f %REMOTE_ROOT%/runs/camera_worker_registry.json 2>/dev/null || true; docker rm -f mediamtx 2>/dev/null || true"
 call :LOG "Remote AI processes stopped."
 goto SUCCESS
 
