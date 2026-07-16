@@ -12,6 +12,7 @@ class RuntimeMetrics:
         self.lstm_samples = 0
         self.max_active_tracks = 0
         self.yolo_ms_samples: list[float] = []
+        self.queue_lag_ms_samples: list[float] = []
         self.warmup_frames = 0
         self._warmup_skip = 0
 
@@ -36,6 +37,9 @@ class RuntimeMetrics:
 
     def add_total_frame_ms(self, value):
         self.total_frame_ms_total += float(value)
+    def add_queue_lag_ms(self, value):
+        self.queue_lag_ms_samples.append(float(value))
+
 
     def observe_active_tracks(self, active_tracks):
         self.max_active_tracks = max(self.max_active_tracks, int(active_tracks))
@@ -66,6 +70,10 @@ class RuntimeMetrics:
             "p95_yolo_inference_ms": latency["p95_infer_ms"],
             "avg_lstm_inference_ms": _avg(self.lstm_ms_total, self.lstm_samples),
             "avg_total_frame_ms": _avg(self.total_frame_ms_total, frames),
+            "avg_queue_lag_ms": _avg_list(self.queue_lag_ms_samples),
+            "p50_queue_lag_ms": percentile(self.queue_lag_ms_samples, 50),
+            "p95_queue_lag_ms": percentile(self.queue_lag_ms_samples, 95),
+            "max_queue_lag_ms": round(max(self.queue_lag_ms_samples), 6) if self.queue_lag_ms_samples else None,
             "bbox_per_frame": _rate(int(bbox_detections), frames),
             "keypoints_per_frame": _rate(int(keypoints_extracted), frames),
             "sequence_per_frame": _rate(int(generated_sequences), frames),
