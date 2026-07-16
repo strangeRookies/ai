@@ -90,7 +90,7 @@ class GeminiEmbeddingProvider:
     def __init__(
         self,
         api_key: str,
-        model: str = "text-embedding-004",
+        model: str = "gemini-embedding-001",
         *,
         timeout_sec: float = 30.0,
         max_attempts: int = 3,
@@ -200,7 +200,7 @@ def resolve_provider(provider_name: str | None = None, api_key: str | None = Non
         raise
     key = api_key if api_key is not None else os.getenv("GEMINI_API_KEY", "")
     if resolved == "gemini":
-        model = os.getenv("GEMINI_EMBEDDING_MODEL", os.getenv("VLM_QUERY_EMBEDDING_MODEL", "text-embedding-004"))
+        model = os.getenv("GEMINI_EMBEDDING_MODEL", os.getenv("VLM_QUERY_EMBEDDING_MODEL", "gemini-embedding-001"))
         timeout = _environment_float("EMBEDDING_TIMEOUT_SEC", 30.0)
         attempts = _environment_int("EMBEDDING_MAX_ATTEMPTS", 3)
         return GeminiEmbeddingProvider(api_key=key, model=model, timeout_sec=timeout, max_attempts=attempts)
