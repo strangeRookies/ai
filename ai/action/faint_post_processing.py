@@ -7,6 +7,8 @@ from ai.action.fall_event_state import FallEventStateMachine, LifecycleDecision,
 DEFAULT_FAINT_THRESHOLD = 0.6
 DEFAULT_MIN_CONSECUTIVE_FAINT = 2
 DEFAULT_CAMERA_COOLDOWN_SECONDS = 10.0
+DEFAULT_SPATIAL_DEDUP_SECONDS = 60.0
+DEFAULT_SPATIAL_DEDUP_DISTANCE_RATIO = 1.0
 DEFAULT_RECOVER_CONSECUTIVE = 4
 DEFAULT_PERSISTENT_DELAY_SEC = 10.0
 DEFAULT_PERSISTENT_REPEAT_SEC = 30.0
@@ -91,9 +93,15 @@ class FaintEventPostProcessor:
         faint_threshold: float | None = None,
         fall_threshold: float | None = None,
         track_lost_grace_sec: float = 3.0,
+        spatial_dedup_enabled: bool = True,
+        spatial_dedup_seconds: float = DEFAULT_SPATIAL_DEDUP_SECONDS,
+        spatial_dedup_distance_ratio: float = DEFAULT_SPATIAL_DEDUP_DISTANCE_RATIO,
     ):
         self.min_consecutive_faint = max(1, int(min_consecutive_faint))
         self.cooldown_seconds = max(0.0, float(cooldown_seconds))
+        self.spatial_dedup_enabled = bool(spatial_dedup_enabled)
+        self.spatial_dedup_seconds = max(0.0, float(spatial_dedup_seconds))
+        self.spatial_dedup_distance_ratio = max(0.0, float(spatial_dedup_distance_ratio))
         self.use_fall_state_machine = bool(use_fall_state_machine)
         self.use_posture_estimator = bool(use_posture_estimator)
         self.require_upright_to_lying = bool(require_upright_to_lying)
@@ -110,6 +118,7 @@ class FaintEventPostProcessor:
         self._consecutive_by_camera = {}
         self._last_event_time_by_camera = {}
         self._last_seen_ts: dict[str, float] = {}
+        self._recent_fall_locations: dict[str, list[dict]] = {}
         self._last_lifecycle_decision = None
         self._last_emit_decision: AlertEmitDecision | None = None
         self._posture_estimator = None
@@ -141,6 +150,7 @@ class FaintEventPostProcessor:
         self._consecutive_by_camera.clear()
         self._last_event_time_by_camera.clear()
         self._last_seen_ts.clear()
+        self._recent_fall_locations.clear()
         self._last_lifecycle_decision = None
         self._last_emit_decision = None
         if self._state_machine is not None:
@@ -218,6 +228,7 @@ class FaintEventPostProcessor:
         )
         movement_level = "unknown"
         estimate = None
+        fall_bbox = _bbox_xyxy_from_detection(detection)
         self.note_track_seen(camera_id, track_id, timestamp)
 
         if detection is not None and self._posture_estimator is not None:
@@ -313,6 +324,24 @@ class FaintEventPostProcessor:
             self._consecutive_by_camera[key] = consecutive
 
             if decision.kind == LifecycleKind.NEW_FALL:
+                if self.spatial_dedup_enabled and fall_bbox is not None:
+                    matched_location = self._find_recent_fall_location(cooldown_key, fall_bbox, float(timestamp))
+                    if matched_location is not None:
+                        # Same physical spot as a fall confirmed recently under a different
+                        # track_id (tracker churn). Do NOT roll back the state machine here —
+                        # only suppress this one alert so confirmed_ts/lying_since_ts stay real
+                        # and the unrecovered/FAINT escalation can still fire on schedule.
+                        matched_location["ts"] = float(timestamp)
+                        matched_location["bbox"] = fall_bbox
+                        out = _context(
+                            emit=False,
+                            kind="none",
+                            lifecycle=decision,
+                            memo_text="new_fall_blocked_by_spatial_dedup",
+                        )
+                        self._last_emit_decision = out
+                        return out
+
                 last_event_time = self._last_event_time_by_camera.get(cooldown_key)
                 if last_event_time is not None and float(timestamp) - float(last_event_time) < self.cooldown_seconds:
                     self._state_machine.revert_confirm_to_candidate(camera_id, track_id)
@@ -325,6 +354,8 @@ class FaintEventPostProcessor:
                     self._last_emit_decision = out
                     return out
                 self._last_event_time_by_camera[cooldown_key] = float(timestamp)
+                if self.spatial_dedup_enabled and fall_bbox is not None:
+                    self._record_fall_location(cooldown_key, fall_bbox, float(timestamp))
                 out = _context(
                     emit=True,
                     kind="new_fall",
@@ -431,6 +462,27 @@ class FaintEventPostProcessor:
 
     def consecutive_count(self, camera_id, track_id=None):
         return int(self._consecutive_by_camera.get(event_state_key(camera_id, track_id), 0))
+
+    def _find_recent_fall_location(self, cooldown_key, bbox, timestamp):
+        """Return the freshest recorded fall location within the dedup window that
+        overlaps ``bbox`` at the same camera, pruning stale entries as a side effect."""
+        locations = self._recent_fall_locations.get(cooldown_key)
+        if not locations:
+            return None
+        window = self.spatial_dedup_seconds
+        kept = []
+        matched = None
+        for loc in locations:
+            if timestamp - loc["ts"] > window:
+                continue
+            kept.append(loc)
+            if matched is None and _same_location(loc["bbox"], bbox, self.spatial_dedup_distance_ratio):
+                matched = loc
+        self._recent_fall_locations[cooldown_key] = kept
+        return matched
+
+    def _record_fall_location(self, cooldown_key, bbox, timestamp):
+        self._recent_fall_locations.setdefault(cooldown_key, []).append({"bbox": bbox, "ts": timestamp})
 
     def cooldown_active(self, camera_id, timestamp, track_id=None):
         key = event_cooldown_key(camera_id)
@@ -557,6 +609,40 @@ def event_cooldown_key(camera_id):
 
 def event_state_key(camera_id, track_id=None):
     return f"{camera_id}:track:{track_id}" if track_id is not None else str(camera_id)
+
+
+def _bbox_xyxy_from_detection(detection):
+    if not detection:
+        return None
+    bbox = detection.get("bbox")
+    if not bbox or len(bbox) < 4:
+        return None
+    try:
+        return (float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3]))
+    except (TypeError, ValueError):
+        return None
+
+
+def _bbox_center(bbox):
+    x1, y1, x2, y2 = bbox
+    return ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
+
+
+def _bbox_diag(bbox):
+    x1, y1, x2, y2 = bbox
+    w = max(1.0, x2 - x1)
+    h = max(1.0, y2 - y1)
+    return (w * w + h * h) ** 0.5
+
+
+def _same_location(bbox_a, bbox_b, distance_ratio):
+    cx_a, cy_a = _bbox_center(bbox_a)
+    cx_b, cy_b = _bbox_center(bbox_b)
+    dist = ((cx_a - cx_b) ** 2 + (cy_a - cy_b) ** 2) ** 0.5
+    scale = max(_bbox_diag(bbox_a), _bbox_diag(bbox_b))
+    if scale <= 0:
+        return False
+    return (dist / scale) <= distance_ratio
 
 
 def is_alert_prediction(prediction, faint_threshold=None, fall_threshold=None):
