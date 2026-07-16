@@ -38,6 +38,7 @@ from ai.inference.rtsp_runtime import (
     update_prediction_counts,
     update_tracking_summary,
     lifecycle_payload_kwargs,
+    snapshot_assist_meta_from_event_payload,
 )
 from ai.inference.rtsp_runtime import (
     log_detection_stage,
@@ -1054,11 +1055,18 @@ def _process_frame_impl(
                 # Single VLM snapshot assist hook (never blocks alert loop)
                 try:
                     from ai.snapshot_assist_upload import submit_frame_snapshot_async
+                    assist_meta = snapshot_assist_meta_from_event_payload(
+                        payload,
+                        track_id=track_id,
+                        prediction=track_prediction,
+                        emit_decision=emit_decision,
+                    )
                     submit_frame_snapshot_async(
-                            event_id=str(payload.get("eventId") or ""),
-                            camera_login_id=str(stream_id),
-                            frame=getattr(frame_packet, "frame", None),
-                        )
+                        event_id=str(payload.get("eventId") or ""),
+                        camera_login_id=str(stream_id),
+                        frame=getattr(frame_packet, "frame", None),
+                        **assist_meta,
+                    )
                 except Exception as snap_exc:
                     print(f"[snapshot-assist][warn] non-fatal upload schedule failed: {snap_exc}", flush=True)
             except Exception as exc:
@@ -2001,6 +2009,14 @@ def main():
                 flush=True,
             )
             webrtc_sync_server = None
+    if os.getenv("AI_INTERNAL_VLM_ENABLED", "").lower() in {"1", "true", "yes", "on"}:
+        try:
+            from ai.internal_vlm_api import start_background_server
+
+            start_background_server()
+            print("[ai-overlay] internal VLM API started (AI_INTERNAL_VLM_ENABLED)", flush=True)
+        except Exception as vlm_exc:
+            print(f"[ai-overlay][warn] internal VLM API failed to start: {vlm_exc}", flush=True)
     worker = OverlayWorker(args, state, sync_sink=webrtc_sync_server)
     server = None
 

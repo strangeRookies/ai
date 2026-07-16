@@ -14,6 +14,8 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Final, Protocol
 
+from ai.vlm.provider_mode import resolve_embedding_provider_name, vlm_force_mock
+
 EMBEDDING_DIMENSION: Final = 768
 
 
@@ -190,15 +192,21 @@ def _extract_embedding(body: Mapping[str, Any]) -> list[float]:
 
 
 def resolve_provider(provider_name: str | None = None, api_key: str | None = None) -> EmbeddingProvider:
-    name = (provider_name or os.getenv("EMBEDDING_PROVIDER", "mock")).strip().lower()
+    try:
+        resolved = resolve_embedding_provider_name(provider_name)
+    except ValueError:
+        if vlm_force_mock():
+            return MockHashEmbeddingProvider()
+        raise
     key = api_key if api_key is not None else os.getenv("GEMINI_API_KEY", "")
-    if name in {"", "mock"}:
-        return MockHashEmbeddingProvider()
-    if name == "gemini":
+    if resolved == "gemini":
+        model = os.getenv("GEMINI_EMBEDDING_MODEL", os.getenv("VLM_QUERY_EMBEDDING_MODEL", "text-embedding-004"))
         timeout = _environment_float("EMBEDDING_TIMEOUT_SEC", 30.0)
         attempts = _environment_int("EMBEDDING_MAX_ATTEMPTS", 3)
-        return GeminiEmbeddingProvider(api_key=key, timeout_sec=timeout, max_attempts=attempts)
-    raise ValueError(f"unsupported EMBEDDING_PROVIDER: {name}")
+        return GeminiEmbeddingProvider(api_key=key, model=model, timeout_sec=timeout, max_attempts=attempts)
+    if resolved == "mock":
+        return MockHashEmbeddingProvider()
+    raise ValueError(f"unsupported EMBEDDING_PROVIDER: {resolved}")
 
 
 def embed_text(text: str, provider: EmbeddingProvider | None = None) -> EmbeddingResult:
