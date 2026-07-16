@@ -18,6 +18,7 @@ from typing import Any, Protocol
 
 from ai.vlm.contracts import VLM_RESULT_SCHEMA_VERSION, validate_vlm_result
 from ai.vlm.keyframe_extractor import KEYFRAME_COUNT
+from ai.vlm.provider_mode import resolve_vlm_provider_name, vlm_force_mock
 
 
 @dataclass(frozen=True, slots=True)
@@ -385,11 +386,15 @@ def resolve_vlm_provider(
     provider_name: str | None = None,
     api_key: str | None = None,
 ) -> VlmProvider:
-    name = (provider_name or os.getenv("VLM_PROVIDER", "mock")).strip().lower()
+    try:
+        resolved = resolve_vlm_provider_name(provider_name)
+    except ValueError:
+        if vlm_force_mock():
+            return MockVlmProvider()
+        raise
     key = api_key if api_key is not None else os.getenv("GEMINI_API_KEY", "")
-    mock_mode = os.getenv("VLM_MOCK_MODE", "true").lower() == "true"
-    if mock_mode or name in {"", "mock"}:
-        return MockVlmProvider()
-    if name == "gemini":
+    if resolved == "gemini":
         return GeminiVlmProvider(api_key=key)
-    raise ValueError(f"unsupported VLM_PROVIDER: {name}")
+    if resolved == "mock":
+        return MockVlmProvider()
+    raise ValueError(f"unsupported VLM_PROVIDER: {resolved}")
