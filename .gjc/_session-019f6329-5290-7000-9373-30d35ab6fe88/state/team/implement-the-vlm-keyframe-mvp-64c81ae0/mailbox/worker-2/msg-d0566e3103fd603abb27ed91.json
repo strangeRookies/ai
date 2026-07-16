@@ -1,0 +1,7 @@
+{
+  "message_id": "msg-d0566e3103fd603abb27ed91",
+  "from_worker": "worker-2",
+  "to_worker": "worker-2",
+  "body": "Task-6 complete in 0941913: required top-level incident_id/camera_login_id and finite non-bool clip_start_sec/clip_end_sec validation; extraction now receives the requested range; nested metadata preserved; invalid metadata fails safely. Tests: process 5 passed/7 subtests, extractor 8/12, incident 11; compileall/diff-check passed. .gjc remains untracked.",
+  "created_at": "2026-07-15T00:59:15.271Z"
+}

@@ -96,7 +96,7 @@ def parse_args(argv: list[str]) -> ProcessVlmArgs:
         )
     )
     parser.add_argument("--input-url", required=True)
-    parser.add_argument("--output-urls", required=True)
+    parser.add_argument("--output-urls", required=False, default="")
     parser.add_argument("--metadata", required=True)
     parser.add_argument(
         "--output-mode",
@@ -115,7 +115,6 @@ def parse_args(argv: list[str]) -> ProcessVlmArgs:
         mock_mode=os.getenv("VLM_MOCK_MODE", "true").lower() == "true",
         output_mode=parsed.output_mode,
     )
-
 
 def process(
     args: ProcessVlmArgs,
@@ -197,8 +196,6 @@ def _analyze_clip(
             frames,
             deidentify_frames=deidentify,
         )
-        _upload_deidentified_keyframes(frames, args.output_urls)
-
     provider_frames = tuple(
         VlmFramePayload(
             index=frame.index,

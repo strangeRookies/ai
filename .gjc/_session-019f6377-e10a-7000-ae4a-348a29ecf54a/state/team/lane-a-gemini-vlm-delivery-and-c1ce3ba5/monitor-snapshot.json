@@ -1,0 +1,12 @@
+{
+  "integration_by_worker": {
+    "worker-1": {
+      "last_leader_head": "cd36a5cc910f379340b41cc8ef3ca97c4aef0161",
+      "last_seen_head": "3b6ecde2b01581e34a680660c08e456639f72272",
+      "last_integrated_head": "3b6ecde2b01581e34a680660c08e456639f72272",
+      "status": "integrated",
+      "updated_at": "2026-07-15T02:44:27.408Z"
+    }
+  },
+  "updated_at": "2026-07-15T02:44:27.592Z"
+}

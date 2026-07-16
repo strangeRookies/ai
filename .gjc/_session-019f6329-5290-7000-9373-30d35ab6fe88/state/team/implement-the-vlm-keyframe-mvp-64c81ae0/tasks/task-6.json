@@ -1,0 +1,64 @@
+{
+  "id": "task-6",
+  "subject": "Wire required incident clip metadata into extraction range",
+  "description": "Fix scripts/process_vlm.py so required top-level metadata incident_id and camera_login_id are non-empty strings, clip_start_sec and clip_end_sec are finite numeric non-bool values with start >= 0 and end > start, while preserving arbitrary nested metadata. Pass start_sec and end_sec into extract_eight_keyframes. Invalid or missing metadata must fail non-zero with no stdout and safe stderr. Add tests proving an interior clip range controls increasing timestamps and missing/invalid required fields fail. Re-run all required suites, compileall, and diff check. Commit tracked changes only and complete with evidence.",
+  "title": "Wire required incident clip metadata into extraction range",
+  "objective": "Fix scripts/process_vlm.py so required top-level metadata incident_id and camera_login_id are non-empty strings, clip_start_sec and clip_end_sec are finite numeric non-bool values with start >= 0 and end > start, while preserving arbitrary nested metadata. Pass start_sec and end_sec into extract_eight_keyframes. Invalid or missing metadata must fail non-zero with no stdout and safe stderr. Add tests proving an interior clip range controls increasing timestamps and missing/invalid required fields fail. Re-run all required suites, compileall, and diff check. Commit tracked changes only and complete with evidence.",
+  "status": "completed",
+  "owner": "worker-2",
+  "lane": "clip-contract-fix",
+  "required_role": "executor",
+  "depends_on": [
+    "task-5"
+  ],
+  "version": 3,
+  "created_at": "2026-07-15T00:56:10.655Z",
+  "updated_at": "2026-07-15T00:59:07.962Z",
+  "assignee": "worker-2",
+  "completed_at": "2026-07-15T00:59:07.962Z",
+  "completion_evidence": {
+    "summary": "Validated required top-level incident/camera/range metadata, wired the finite interior range into extraction, preserved nested metadata, and added safe CLI failure and timestamp-range coverage. Committed as 0941913.",
+    "items": [
+      {
+        "kind": "command",
+        "status": "passed",
+        "summary": "Clip range, nested metadata, and CLI failure contract tests passed.",
+        "command": "python -m pytest tests/test_vlm_process.py -q",
+        "output": "5 passed, 7 subtests passed in 2.63s"
+      },
+      {
+        "kind": "command",
+        "status": "passed",
+        "summary": "Keyframe extraction and result contract regressions passed.",
+        "command": "python -m pytest tests/test_vlm_keyframe_extractor.py -q",
+        "output": "8 passed, 12 subtests passed in 0.75s"
+      },
+      {
+        "kind": "command",
+        "status": "passed",
+        "summary": "Incident VLM pipeline regressions passed.",
+        "command": "python -m pytest tests/test_incident_vlm_pipeline.py -q",
+        "output": "11 passed in 0.07s"
+      },
+      {
+        "kind": "command",
+        "status": "passed",
+        "summary": "Compilation and whitespace validation passed.",
+        "command": "python -m compileall -q ai scripts && git diff --check"
+      },
+      {
+        "kind": "artifact",
+        "status": "verified",
+        "summary": "Tracked task-6 changes committed without .gjc.",
+        "artifact": "git:0941913",
+        "location": "0941913"
+      }
+    ],
+    "recorded_by": "worker-2",
+    "recorded_at": "2026-07-15T00:59:07.962Z",
+    "files": [
+      "scripts/process_vlm.py",
+      "tests/test_vlm_process.py"
+    ]
+  }
+}

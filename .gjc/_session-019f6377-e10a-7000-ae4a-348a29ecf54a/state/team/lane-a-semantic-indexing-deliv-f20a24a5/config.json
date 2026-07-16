@@ -1,0 +1,49 @@
+{
+  "team_name": "lane-a-semantic-indexing-deliv-f20a24a5",
+  "display_name": "lane-a-semantic-indexing-deliv",
+  "requested_name": "lane-a-semantic-indexing-deliv",
+  "task": "### Lane A — Semantic indexing delivery and verification\nImplement the AI-owned Gemini VLM semantic-index payload pipeline in this strange_ai repository. Inspect current code and existing tests first.\n\nOutcome:\nclip -> 8 keyframes -> de-identification gate -> Gemini VLM -> deterministic canonical search document -> embedding -> versioned backend-ready indexing payload.\n\nBoundaries:\n- Modify only this strange_ai repository.\n- Do not touch keyframe_extractor internals or implement/alter the teammate de-identification algorithm.\n- Preserve the exact existing VlmAnalyzeResult schema and process() compatibility.\n- Do not implement pgvector, a search API, LangChain, or an external vector DB.\n- output_urls remain presigned de-identified-keyframe upload URLs, not search storage.\n- No raw-frame fallback, fake success, API key/JPEG/full-vector logging, or secret-bearing errors.\n\nDelivery:\n1. Add ai/vlm/search_document.py with deterministic build_search_document(result, metadata). Stable order: visual_event_type, detailed_description_ko, people_count, unique Korean keywords, event_type, severity. Keep incident/camera/timestamp as envelope metadata rather than repeated semantic text. Reject/limit empty, duplicate, oversized, nonfinite, or sensitive content.\n2. Harden ai/embedding_sdk.py and reuse it: mock and Gemini providers; embed the canonical document exactly once; configurable timeout; bounded retries only for 408/429/5xx and network timeout; no retries for auth/malformed responses; sanitize errors; reject empty, wrong-dimension, NaN, or Infinity vectors.\n3. Add an explicit versioned envelope, schema_version vlm-index-payload-v1, without altering VlmAnalyzeResult. Include incident_id, camera_login_id, captured_at, full vlm_result, and search {document, keywords, embedding_model, embedding_dimension, embedding}. Provide to_dict()/to_json() and strict validation. Require incident IDs to match, camera_login_id, finite vector values, exact dimension, unique keywords, and consistent mock/real VLM+embedding modes.\n4. Keep existing process() return behavior. Add process_index_payload(...) or an equivalently compatible path that executes fail-closed in this order: de-id -> VLM -> VLM validation -> search document -> embedding -> envelope. De-id or VLM failure must cause zero embedding calls; embedding failure must produce no success payload.\n5. Do not wire output_urls as search storage. Preserve its current contract.\n\nTests:\n- deterministic document; stable order; duplicate/oversized/sensitive metadata handling\n- deterministic mock embedding and exact dimension\n- empty/wrong dimension/NaN/Infinity rejection\n- zero downstream calls after de-id or VLM failure\n- no success payload on embedding failure\n- incident mismatch, provider-mode mismatch, duplicate keywords\n- timeout/retry branch coverage\n- serialized JSON excludes API keys, JPEG bytes, and logs do not expose full vectors\n- all existing VLM tests remain green\n\nVerification commands:\npython -m pytest tests/test_vlm*.py tests/test_embedding_sdk.py -q\npython -m compileall -q ai scripts\ngit diff --check\n\nCommit tracked product changes only, excluding .gjc, and record structured completion evidence. Report changed files, final flow, an abbreviated payload example, exact test results, the backend field contract, and explicitly state that pgvector persistence and GET /api/search/semantic remain unimplemented.\n\nRuntime intake limitation: .gjc is runtime-owned and direct context-file mutation is blocked; this task description is the grounded context snapshot. Current branch is codex/vlm-eight-keyframes and is clean except untracked .gjc runtime state.",
+  "agent_type": "executor",
+  "worker_count": 1,
+  "max_workers": 20,
+  "state_root": "C:\\Users\\user\\Documents\\최종 쉴더스\\strange_ai\\.gjc\\_session-019f6377-e10a-7000-ae4a-348a29ecf54a\\state\\team",
+  "worker_command": "'C:\\Users\\user\\.bun\\bin\\bun.exe' 'C:\\Users\\user\\.bun\\install\\global\\node_modules\\@gajae-code\\coding-agent\\bin\\gjc.js'",
+  "worker_cli_plan": [
+    "gjc"
+  ],
+  "tmux_command": "psmux",
+  "tmux_session": "1",
+  "tmux_session_name": "1",
+  "tmux_target": "1:0",
+  "workspace_mode": "worktree",
+  "dry_run": false,
+  "leader": {
+    "session_id": "019f6377-e10a-7000-ae4a-348a29ecf54a",
+    "pane_id": "%1",
+    "cwd": "C:\\Users\\user\\Documents\\최종 쉴더스\\strange_ai"
+  },
+  "leader_cwd": "C:\\Users\\user\\Documents\\최종 쉴더스\\strange_ai",
+  "team_state_root": "C:\\Users\\user\\Documents\\최종 쉴더스\\strange_ai\\.gjc\\_session-019f6377-e10a-7000-ae4a-348a29ecf54a\\state\\team",
+  "workers": [
+    {
+      "id": "worker-1",
+      "name": "worker-1",
+      "index": 1,
+      "agent_type": "executor",
+      "role": "executor",
+      "status": "stopped",
+      "last_heartbeat": "2026-07-15T03:29:01.101Z",
+      "assigned_tasks": [],
+      "team_state_root": "C:\\Users\\user\\Documents\\최종 쉴더스\\strange_ai\\.gjc\\_session-019f6377-e10a-7000-ae4a-348a29ecf54a\\state\\team",
+      "worktree_repo_root": "C:/Users/user/Documents/최종 쉴더스/strange_ai",
+      "worktree_path": "C:\\Users\\user\\.gjc\\wt\\team-7290ae310e20-worker-1",
+      "worktree_branch": null,
+      "worktree_detached": true,
+      "worktree_created": true,
+      "worktree_base_ref": "cd36a5cc910f379340b41cc8ef3ca97c4aef0161",
+      "pane_id": "%6"
+    }
+  ],
+  "created_at": "2026-07-15T03:10:22.629Z",
+  "updated_at": "2026-07-15T03:29:01.101Z"
+}

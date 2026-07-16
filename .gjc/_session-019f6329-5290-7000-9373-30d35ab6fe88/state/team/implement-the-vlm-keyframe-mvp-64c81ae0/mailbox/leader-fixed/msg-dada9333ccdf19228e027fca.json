@@ -1,0 +1,7 @@
+{
+  "message_id": "msg-dada9333ccdf19228e027fca",
+  "from_worker": "worker-2",
+  "to_worker": "leader-fixed",
+  "body": "INTEGRATED: cherry-picked 325ebb18ec0f from worker-2.",
+  "created_at": "2026-07-15T00:44:04.326Z"
+}

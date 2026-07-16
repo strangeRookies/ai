@@ -1,0 +1,28 @@
+{
+  "active": true,
+  "version": 2,
+  "current_phase": "goal-planning",
+  "skill": "ultragoal",
+  "cwd": "C:\\Users\\user\\Documents\\최종 쉴더스\\strange_ai",
+  "updated_at": "2026-07-14T08:17:45.349Z",
+  "session_id": "019f5faf-d869-7000-abbe-d36f814d25d3",
+  "receipt": {
+    "version": 1,
+    "skill": "ultragoal",
+    "owner": "gjc-hook",
+    "command": "gjc-skill-invocation",
+    "state_path": "C:\\Users\\user\\Documents\\최종 쉴더스\\strange_ai\\.gjc\\state\\sessions\\019f5faf-d869-7000-abbe-d36f814d25d3\\skill-active-state.json",
+    "storage_path": "C:\\Users\\user\\Documents\\최종 쉴더스\\strange_ai\\.gjc\\state\\sessions\\019f5faf-d869-7000-abbe-d36f814d25d3\\ultragoal-state.json",
+    "mutated_at": "2026-07-14T08:17:45.353Z",
+    "fresh_until": "2026-07-14T08:47:45.353Z",
+    "status": "fresh",
+    "mutation_id": "ultragoal:2026-07-14T08:17:45.353Z",
+    "content_sha256": {
+      "algorithm": "sha256",
+      "value": "a34a18cc0d2921a7c1477bacb2889a5f9982be266fe6f44debe2dc0598ca00dd",
+      "covered_path": "C:\\Users\\user\\Documents\\최종 쉴더스\\strange_ai\\.gjc\\_session-019f5faf-d869-7000-abbe-d36f814d25d3\\state\\ultragoal-state.json",
+      "computed_at": "2026-07-14T08:17:45.354Z"
+    }
+  },
+  "state_revision": 1
+}

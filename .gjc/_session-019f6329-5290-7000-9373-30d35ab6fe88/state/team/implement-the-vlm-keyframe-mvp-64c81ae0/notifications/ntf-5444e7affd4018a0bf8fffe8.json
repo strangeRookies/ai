@@ -1,0 +1,17 @@
+{
+  "id": "ntf-5444e7affd4018a0bf8fffe8",
+  "kind": "mailbox_message",
+  "team_name": "implement-the-vlm-keyframe-mvp-64c81ae0",
+  "recipient": "worker-1",
+  "source": {
+    "type": "message",
+    "id": "msg-f0352f81ba21f40dba9bc0af"
+  },
+  "delivery_state": "queued",
+  "created_at": "2026-07-15T00:36:54.463Z",
+  "updated_at": "2026-07-15T01:04:38.853Z",
+  "replay_count": 9,
+  "pane_attempt_result": "queued",
+  "pane_attempt_reason": "tmux_delivery_recorded_without_injection",
+  "pane_attempt_at": "2026-07-15T01:04:38.853Z"
+}

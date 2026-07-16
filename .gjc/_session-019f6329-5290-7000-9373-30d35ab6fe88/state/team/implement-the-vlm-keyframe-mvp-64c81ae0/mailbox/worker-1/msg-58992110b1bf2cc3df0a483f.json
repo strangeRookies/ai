@@ -1,0 +1,7 @@
+{
+  "message_id": "msg-58992110b1bf2cc3df0a483f",
+  "from_worker": "worker-2",
+  "to_worker": "worker-1",
+  "body": "Task-5 complete: exact mock output/provider request contracts committed as 27d033d. Result has exactly 9 requested keys; provider frames expose only index/timestamp_sec/jpeg_bytes; incident ID comes from sanitized metadata; extraction metadata width/height flattened. Focused suites: 4 + 8 + 11 passed; compileall/diff-check passed. .gjc untracked.",
+  "created_at": "2026-07-15T00:53:58.750Z"
+}

@@ -1,0 +1,51 @@
+{
+  "id": "task-7",
+  "subject": "Align stale VLM regression tests with final required contract",
+  "description": "Update tests/test_vlm_keyframe_regression.py cases that still use legacy nested-only metadata and uncertainty_notes. Use required top-level incident_id, camera_login_id, clip_start_sec, clip_end_sec and the exact final result keys incident_id/frame_count/provider/is_mock. Preserve the tests' original behavioral intent (provider receives exactly 8, short-video safe failure, strict unknown/invalid/forbidden validation). Run every VLM test file: test_vlm_process, test_incident_vlm_pipeline, keyframe extractor/regression, mock worker, mock adapter; compileall; diff check. Do not weaken production validation. Commit tracked changes only and provide evidence.",
+  "title": "Align stale VLM regression tests with final required contract",
+  "objective": "Update tests/test_vlm_keyframe_regression.py cases that still use legacy nested-only metadata and uncertainty_notes. Use required top-level incident_id, camera_login_id, clip_start_sec, clip_end_sec and the exact final result keys incident_id/frame_count/provider/is_mock. Preserve the tests' original behavioral intent (provider receives exactly 8, short-video safe failure, strict unknown/invalid/forbidden validation). Run every VLM test file: test_vlm_process, test_incident_vlm_pipeline, keyframe extractor/regression, mock worker, mock adapter; compileall; diff check. Do not weaken production validation. Commit tracked changes only and provide evidence.",
+  "status": "completed",
+  "owner": "worker-3",
+  "lane": "final-regression",
+  "required_role": "executor",
+  "depends_on": [
+    "task-6"
+  ],
+  "version": 3,
+  "created_at": "2026-07-15T00:59:50.973Z",
+  "updated_at": "2026-07-15T01:04:05.727Z",
+  "assignee": "worker-3",
+  "completed_at": "2026-07-15T01:04:05.727Z",
+  "completion_evidence": {
+    "summary": "Aligned only stale VLM regression metadata/result expectations with the final required contract and committed the tracked test change.",
+    "items": [
+      {
+        "kind": "command",
+        "status": "passed",
+        "summary": "All requested final VLM suites passed against the task-6 dependency tree plus the aligned regression test.",
+        "command": "python -m pytest tests/test_vlm_process.py tests/test_incident_vlm_pipeline.py tests/test_vlm_keyframe_extractor.py tests/test_vlm_keyframe_regression.py tests/test_vlm_mock_worker.py tests/test_vlm_mock_adapter.py -q",
+        "output": "35 passed, 37 subtests passed in 4.76s"
+      },
+      {
+        "kind": "command",
+        "status": "passed",
+        "summary": "Final AI and script sources compiled and the committed diff passed whitespace validation.",
+        "command": "python -m compileall -q ai scripts && git diff --check HEAD^ HEAD",
+        "output": "Exit 0"
+      },
+      {
+        "kind": "artifact",
+        "status": "verified",
+        "summary": "Commit contains only the tracked regression test alignment.",
+        "artifact": "git:f4567c9",
+        "location": "f4567c9"
+      }
+    ],
+    "recorded_by": "worker-3",
+    "recorded_at": "2026-07-15T01:04:05.727Z",
+    "files": [
+      "tests/test_vlm_keyframe_regression.py"
+    ],
+    "notes": "Untracked .gjc runtime state was intentionally excluded from the commit."
+  }
+}

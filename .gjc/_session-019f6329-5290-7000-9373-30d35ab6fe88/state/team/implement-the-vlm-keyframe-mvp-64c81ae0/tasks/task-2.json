@@ -1,0 +1,49 @@
+{
+  "id": "task-2",
+  "subject": "Lane B — CLI and provider integration",
+  "description": "Lane B — CLI and provider integration\n\nInspect existing scripts/process_vlm.py, ai/vlm_sdk.py, and ai/vlm/incident_pipeline.py. Wire local/file/HTTP input through extraction into MockVlmProvider while preserving nested metadata and one-line JSON stdout behavior. Add focused integration/CLI tests without touching realtime/MQTT paths.",
+  "title": "Lane B — CLI and provider integration",
+  "objective": "Lane B — CLI and provider integration\n\nInspect existing scripts/process_vlm.py, ai/vlm_sdk.py, and ai/vlm/incident_pipeline.py. Wire local/file/HTTP input through extraction into MockVlmProvider while preserving nested metadata and one-line JSON stdout behavior. Add focused integration/CLI tests without touching realtime/MQTT paths.",
+  "status": "completed",
+  "owner": "worker-2",
+  "lane": "lane-b",
+  "required_role": "executor",
+  "version": 5,
+  "created_at": "2026-07-15T00:27:57.989Z",
+  "updated_at": "2026-07-15T00:38:40.552Z",
+  "assignee": "worker-2",
+  "completed_at": "2026-07-15T00:38:40.552Z",
+  "completion_evidence": {
+    "summary": "Wired finalized clips through deterministic eight-frame extraction into MockVlmProvider, preserved and sanitized nested metadata, enforced strict result validation, removed placeholder PUT behavior, and added CLI/provider tests.",
+    "items": [
+      {
+        "kind": "command",
+        "status": "passed",
+        "summary": "CLI integration tests passed with Lane A extractor/contracts staged temporarily.",
+        "command": "python -m pytest tests/test_vlm_process.py -q",
+        "output": "4 passed in 1.33s"
+      },
+      {
+        "kind": "command",
+        "status": "passed",
+        "summary": "Existing incident VLM pipeline regression suite passed.",
+        "command": "python -m pytest tests/test_incident_vlm_pipeline.py -q",
+        "output": "11 passed in 0.08s"
+      },
+      {
+        "kind": "command",
+        "status": "passed",
+        "summary": "Syntax compilation and whitespace checks passed.",
+        "command": "python -m compileall -q ai scripts && git diff --check"
+      }
+    ],
+    "recorded_by": "worker-2",
+    "recorded_at": "2026-07-15T00:38:40.552Z",
+    "files": [
+      "ai/vlm_sdk.py",
+      "scripts/process_vlm.py",
+      "tests/test_vlm_process.py"
+    ],
+    "notes": "Lane B imports ai.vlm.keyframe_extractor and ai.vlm.contracts from Lane A; integrate Lane A first."
+  }
+}

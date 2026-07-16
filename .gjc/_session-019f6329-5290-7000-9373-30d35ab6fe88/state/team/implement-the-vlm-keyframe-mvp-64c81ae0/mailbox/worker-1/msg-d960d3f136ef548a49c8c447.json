@@ -1,0 +1,7 @@
+{
+  "message_id": "msg-d960d3f136ef548a49c8c447",
+  "from_worker": "worker-2",
+  "to_worker": "worker-1",
+  "body": "Lane B committed as 325ebb1 (feat(vlm): wire extracted frames to mock provider). Commit contains only ai/vlm_sdk.py, scripts/process_vlm.py, tests/test_vlm_process.py; .gjc remains untracked.",
+  "created_at": "2026-07-15T00:43:29.476Z"
+}

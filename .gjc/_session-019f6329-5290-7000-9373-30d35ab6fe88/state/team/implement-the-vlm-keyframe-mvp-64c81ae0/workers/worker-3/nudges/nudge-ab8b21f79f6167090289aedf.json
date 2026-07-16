@@ -1,0 +1,12 @@
+{
+  "fingerprint": "nudge-ab8b21f79f6167090289aedf",
+  "worker": "worker-3",
+  "condition": "stale_heartbeat",
+  "severity": "warning",
+  "first_seen_at": "2026-07-15T00:30:11.613Z",
+  "last_seen_at": "2026-07-15T00:59:23.208Z",
+  "cooldown_until": "2026-07-15T00:59:53.208Z",
+  "count": 8,
+  "suggested_action": "Worker worker-3 heartbeat is stale; leader may inspect or relaunch manually.",
+  "auto_action_taken": false
+}

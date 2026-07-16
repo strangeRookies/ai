@@ -1,0 +1,33 @@
+{
+  "skill": "team",
+  "version": 2,
+  "active": false,
+  "current_phase": "complete",
+  "team_name": "implement-the-vlm-keyframe-mvp-64c81ae0",
+  "task_counts": {
+    "pending": 0,
+    "blocked": 0,
+    "in_progress": 0,
+    "completed": 7,
+    "failed": 0
+  },
+  "updated_at": "2026-07-15T01:05:10.350Z",
+  "receipt": {
+    "version": 1,
+    "skill": "team",
+    "owner": "gjc-runtime",
+    "command": "gjc team sync-team-summary",
+    "state_path": "C:\\Users\\user\\Documents\\최종 쉴더스\\strange_ai\\.gjc\\state\\sessions\\019f6329-5290-7000-9373-30d35ab6fe88\\skill-active-state.json",
+    "storage_path": "C:\\Users\\user\\Documents\\최종 쉴더스\\strange_ai\\.gjc\\state\\sessions\\019f6329-5290-7000-9373-30d35ab6fe88\\team-state.json",
+    "mutated_at": "2026-07-15T01:05:10.350Z",
+    "fresh_until": "2026-07-15T01:35:10.350Z",
+    "status": "fresh",
+    "mutation_id": "team:2026-07-15T01:05:10.350Z",
+    "content_sha256": {
+      "algorithm": "sha256",
+      "value": "f40f1d78380aa2ec1b74252dc507c007220676599f2cc072446d79b5d88f6980",
+      "covered_path": "C:\\Users\\user\\Documents\\최종 쉴더스\\strange_ai\\.gjc\\_session-019f6329-5290-7000-9373-30d35ab6fe88\\state\\team-state.json",
+      "computed_at": "2026-07-15T01:05:10.351Z"
+    }
+  }
+}

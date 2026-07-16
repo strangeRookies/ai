@@ -1,0 +1,8 @@
+{
+  "message_id": "msg-b780c1978f1a166e0c9df65a",
+  "from_worker": "worker-2",
+  "to_worker": "worker-3",
+  "body": "Lane B will update tests/test_vlm_process.py for synthetic local/file CLI success and nested metadata/provider integration. Please focus additional extraction/error regressions in a separate test file or coordinate to avoid overlap.",
+  "created_at": "2026-07-15T00:32:33.428Z",
+  "delivered_at": "2026-07-15T00:35:18.649Z"
+}

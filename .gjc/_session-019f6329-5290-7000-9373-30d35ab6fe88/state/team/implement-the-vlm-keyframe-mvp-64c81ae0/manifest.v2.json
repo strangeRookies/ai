@@ -1,0 +1,78 @@
+{
+  "version": 2,
+  "team_name": "implement-the-vlm-keyframe-mvp-64c81ae0",
+  "display_name": "implement-the-vlm-keyframe-mvp",
+  "requested_name": "implement-the-vlm-keyframe-mvp",
+  "tmux_session": "0",
+  "tmux_session_name": "0",
+  "tmux_target": "0:0",
+  "worker_command": "'C:\\Users\\user\\.bun\\bin\\bun.exe' 'C:\\Users\\user\\.bun\\install\\global\\node_modules\\@gajae-code\\coding-agent\\bin\\gjc.js'",
+  "worker_cli_plan": [
+    "gjc",
+    "gjc",
+    "gjc"
+  ],
+  "tmux_command": "psmux",
+  "leader": {
+    "session_id": "019f6329-5290-7000-9373-30d35ab6fe88",
+    "pane_id": "%1",
+    "cwd": "C:\\Users\\user\\Documents\\최종 쉴더스\\strange_ai"
+  },
+  "workers": [
+    {
+      "id": "worker-1",
+      "name": "worker-1",
+      "index": 1,
+      "agent_type": "executor",
+      "role": "executor",
+      "status": "starting",
+      "last_heartbeat": "2026-07-15T00:27:57.988Z",
+      "assigned_tasks": [],
+      "team_state_root": "C:\\Users\\user\\Documents\\최종 쉴더스\\strange_ai\\.gjc\\_session-019f6329-5290-7000-9373-30d35ab6fe88\\state\\team",
+      "worktree_repo_root": "C:/Users/user/Documents/최종 쉴더스/strange_ai",
+      "worktree_path": "C:\\Users\\user\\.gjc\\wt\\team-69ff10fff2f0-worker-1",
+      "worktree_branch": null,
+      "worktree_detached": true,
+      "worktree_created": true,
+      "worktree_base_ref": "a1677444288137216dbe0ba46253d5ffd9049b10"
+    },
+    {
+      "id": "worker-2",
+      "name": "worker-2",
+      "index": 2,
+      "agent_type": "executor",
+      "role": "executor",
+      "status": "starting",
+      "last_heartbeat": "2026-07-15T00:27:57.988Z",
+      "assigned_tasks": [],
+      "team_state_root": "C:\\Users\\user\\Documents\\최종 쉴더스\\strange_ai\\.gjc\\_session-019f6329-5290-7000-9373-30d35ab6fe88\\state\\team",
+      "worktree_repo_root": "C:/Users/user/Documents/최종 쉴더스/strange_ai",
+      "worktree_path": "C:\\Users\\user\\.gjc\\wt\\team-69ff10fff2f0-worker-2",
+      "worktree_branch": null,
+      "worktree_detached": true,
+      "worktree_created": true,
+      "worktree_base_ref": "a1677444288137216dbe0ba46253d5ffd9049b10"
+    },
+    {
+      "id": "worker-3",
+      "name": "worker-3",
+      "index": 3,
+      "agent_type": "executor",
+      "role": "executor",
+      "status": "starting",
+      "last_heartbeat": "2026-07-15T00:27:57.988Z",
+      "assigned_tasks": [],
+      "team_state_root": "C:\\Users\\user\\Documents\\최종 쉴더스\\strange_ai\\.gjc\\_session-019f6329-5290-7000-9373-30d35ab6fe88\\state\\team",
+      "worktree_repo_root": "C:/Users/user/Documents/최종 쉴더스/strange_ai",
+      "worktree_path": "C:\\Users\\user\\.gjc\\wt\\team-69ff10fff2f0-worker-3",
+      "worktree_branch": null,
+      "worktree_detached": true,
+      "worktree_created": true,
+      "worktree_base_ref": "a1677444288137216dbe0ba46253d5ffd9049b10"
+    }
+  ],
+  "workspace_mode": "worktree",
+  "dry_run": false,
+  "created_at": "2026-07-15T00:27:57.844Z",
+  "updated_at": "2026-07-15T00:27:57.844Z"
+}

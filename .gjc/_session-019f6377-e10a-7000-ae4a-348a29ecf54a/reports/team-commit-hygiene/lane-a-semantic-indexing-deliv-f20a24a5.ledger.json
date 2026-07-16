@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "recorded_at": "2026-07-15T03:18:30.084Z",
+      "operation": "integration_merge",
+      "worker_name": "worker-1",
+      "status": "applied",
+      "operational_commit": "59203a48185fd797eda14771ce8475a32fab7d6f",
+      "source_commit": "57f03b88a324f45aefefac594d9939c76ab460fc",
+      "leader_head_before": "cd36a5cc910f379340b41cc8ef3ca97c4aef0161",
+      "leader_head_after": "59203a48185fd797eda14771ce8475a32fab7d6f",
+      "worktree_path": "C:\\Users\\user\\.gjc\\wt\\team-7290ae310e20-worker-1",
+      "detail": "Leader created a runtime merge commit to integrate worker history."
+    },
+    {
+      "recorded_at": "2026-07-15T03:18:30.181Z",
+      "operation": "cross_rebase",
+      "worker_name": "worker-1",
+      "status": "skipped",
+      "leader_head_after": "59203a48185fd797eda14771ce8475a32fab7d6f",
+      "worktree_path": "C:\\Users\\user\\.gjc\\wt\\team-7290ae310e20-worker-1",
+      "detail": "Worker worktree is dirty after integration; automatic cross-rebase skipped."
+    },
+    {
+      "recorded_at": "2026-07-15T03:24:42.644Z",
+      "operation": "integration_cherry_pick",
+      "worker_name": "worker-1",
+      "status": "applied",
+      "operational_commit": "1f635f3c3dddad06316b1fe502a2f54b6ea44631",
+      "source_commit": "9c7a4523f33b5e6fa8426a6785dc0ec4c5f66157",
+      "leader_head_before": "59203a48185fd797eda14771ce8475a32fab7d6f",
+      "leader_head_after": "1f635f3c3dddad06316b1fe502a2f54b6ea44631",
+      "worktree_path": "C:\\Users\\user\\.gjc\\wt\\team-7290ae310e20-worker-1",
+      "detail": "Leader cherry-picked diverged worker history."
+    },
+    {
+      "recorded_at": "2026-07-15T03:24:42.772Z",
+      "operation": "cross_rebase",
+      "worker_name": "worker-1",
+      "status": "skipped",
+      "leader_head_after": "1f635f3c3dddad06316b1fe502a2f54b6ea44631",
+      "worktree_path": "C:\\Users\\user\\.gjc\\wt\\team-7290ae310e20-worker-1",
+      "detail": "Worker worktree is dirty after integration; automatic cross-rebase skipped."
+    }
+  ]
+}

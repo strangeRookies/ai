@@ -1,0 +1,7 @@
+{
+  "message_id": "msg-ac53019e647c27372e1858cf",
+  "from_worker": "worker-2",
+  "to_worker": "leader-fixed",
+  "body": "CONFLICT: cherry-pick failed for worker-2; files: ai/vlm/contracts.py,tests/test_vlm_keyframe_extractor.py. Manual resolution required; runtime aborted the cherry-pick and did not auto-resolve.",
+  "created_at": "2026-07-15T00:54:35.701Z"
+}

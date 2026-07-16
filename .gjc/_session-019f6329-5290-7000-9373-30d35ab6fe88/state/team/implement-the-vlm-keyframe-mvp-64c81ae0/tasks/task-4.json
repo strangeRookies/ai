@@ -1,0 +1,47 @@
+{
+  "id": "task-4",
+  "subject": "Fix keyframe digest validation regression",
+  "description": "Update validate_keyframes so every frame sha256 is checked against hashlib.sha256(frame.jpeg_bytes).hexdigest(), preserving existing strict checks. Run tests/test_vlm_keyframe_regression.py and required VLM suites. Commit tracked changes only and provide completion evidence.",
+  "title": "Fix keyframe digest validation regression",
+  "objective": "Update validate_keyframes so every frame sha256 is checked against hashlib.sha256(frame.jpeg_bytes).hexdigest(), preserving existing strict checks. Run tests/test_vlm_keyframe_regression.py and required VLM suites. Commit tracked changes only and provide completion evidence.",
+  "status": "completed",
+  "owner": "worker-1",
+  "lane": "verification-fix",
+  "required_role": "executor",
+  "depends_on": [
+    "task-1",
+    "task-2",
+    "task-3"
+  ],
+  "version": 3,
+  "created_at": "2026-07-15T00:44:26.985Z",
+  "updated_at": "2026-07-15T00:46:58.827Z",
+  "assignee": "worker-1",
+  "completed_at": "2026-07-15T00:46:58.827Z",
+  "completion_evidence": {
+    "summary": "validate_keyframes now recomputes SHA-256 from each JPEG payload and rejects mismatches; regression coverage added and committed as d194dd8.",
+    "items": [
+      {
+        "kind": "command",
+        "status": "passed",
+        "summary": "Focused digest regression and required local VLM suites passed.",
+        "command": "python -m pytest --import-mode=importlib C:/Users/user/.gjc/wt/team-69ff10fff2f0-worker-3/tests/test_vlm_keyframe_regression.py::VlmKeyframeRegressionTest::test_frame_contract_rejects_non_integer_index_and_digest_mismatch tests/test_vlm_keyframe_extractor.py tests/test_vlm_process.py tests/test_incident_vlm_pipeline.py -q && python -m compileall -q ai scripts && git diff --check",
+        "output": "22 passed, 7 subtests passed"
+      },
+      {
+        "kind": "artifact",
+        "status": "verified",
+        "summary": "Commit contains only the two tracked digest-fix files.",
+        "artifact": "git:d194dd8",
+        "location": "d194dd8"
+      }
+    ],
+    "recorded_by": "worker-1",
+    "recorded_at": "2026-07-15T00:46:58.827Z",
+    "files": [
+      "ai/vlm/contracts.py",
+      "tests/test_vlm_keyframe_extractor.py"
+    ],
+    "notes": "The digest regression plus all VLM suites available in this worktree pass. Full worker-3 regression was also run: 5 passed and 2 unrelated integration tests failed because worker-2 CLI/provider artifacts are not present in worker-1 baseline."
+  }
+}

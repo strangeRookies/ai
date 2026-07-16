@@ -1,0 +1,7 @@
+{
+  "worker": "worker-2",
+  "requested_by": "leader-fixed",
+  "request_id": "shutdown-bcbfe097ccb07dc0cc0adf8c",
+  "mode": "graceful",
+  "requested_at": "2026-07-15T01:05:09.888Z"
+}

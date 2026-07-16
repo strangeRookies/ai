@@ -1,0 +1,44 @@
+{
+  "id": "task-1",
+  "subject": "Lane A — Gemini VLM delivery and verification",
+  "description": "Lane A — Gemini VLM delivery and verification\n\nImplement and verify the Gemini VLM integration only in this strange_ai repository on the current VLM feature branch.\n\nGrounded context: scripts/process_vlm.py currently extracts and validates exactly eight JPEG keyframes before building VlmFramePayload. ai/vlm_sdk.py::GeminiVlmProvider is a placeholder. The teammate owns keyframe extraction and de-identification internals; do not modify those internals and do not add pass-through/fake de-identification. If the teammate de-identification API is absent, preserve a clean explicit integration boundary and report that concrete blocker rather than sending raw frames.\n\nDelivery scope:\n- Implement real multimodal Gemini request logic in ai/vlm_sdk.py: eight JPEGs, sanitized incident metadata and a Korean safety-analysis prompt, structured JSON response, configurable model, timeout, bounded retry for transient failures, parsing, and schema validation.\n- Wire scripts/process_vlm.py so only successfully de-identified frames can reach Gemini. A de-identification exception must produce zero provider calls. Preserve mock mode.\n- Update production result validation if it is currently mock-only, without weakening mock assertions.\n- Never log API keys or image bytes; never fall back to raw frame transmission.\n- Do not touch clip_worker.py, MP4 blur, other repositories, root contracts, or teammate-owned keyframe/de-identification implementation.\n\nVerification scope:\n- Add focused request/response tests with mocked network transport.\n- Cover exactly-eight enforcement, malformed responses, timeout/transient retry behavior, no call on de-identification failure, mock compatibility, and no secret/image-byte leakage.\n- Run the focused VLM test suite and report exact commands and results.\n\nLikely files: ai/vlm_sdk.py, scripts/process_vlm.py, ai/vlm/contracts.py only if needed, and VLM tests under tests/.\n\nRuntime limitation: the required context snapshot could not be persisted through direct agent mutation because .gjc is runtime-owned; this task text is the grounded intake snapshot. Inspect current files before editing and do not guess the teammate API.",
+  "title": "Lane A — Gemini VLM delivery and verification",
+  "objective": "Lane A — Gemini VLM delivery and verification\n\nImplement and verify the Gemini VLM integration only in this strange_ai repository on the current VLM feature branch.\n\nGrounded context: scripts/process_vlm.py currently extracts and validates exactly eight JPEG keyframes before building VlmFramePayload. ai/vlm_sdk.py::GeminiVlmProvider is a placeholder. The teammate owns keyframe extraction and de-identification internals; do not modify those internals and do not add pass-through/fake de-identification. If the teammate de-identification API is absent, preserve a clean explicit integration boundary and report that concrete blocker rather than sending raw frames.\n\nDelivery scope:\n- Implement real multimodal Gemini request logic in ai/vlm_sdk.py: eight JPEGs, sanitized incident metadata and a Korean safety-analysis prompt, structured JSON response, configurable model, timeout, bounded retry for transient failures, parsing, and schema validation.\n- Wire scripts/process_vlm.py so only successfully de-identified frames can reach Gemini. A de-identification exception must produce zero provider calls. Preserve mock mode.\n- Update production result validation if it is currently mock-only, without weakening mock assertions.\n- Never log API keys or image bytes; never fall back to raw frame transmission.\n- Do not touch clip_worker.py, MP4 blur, other repositories, root contracts, or teammate-owned keyframe/de-identification implementation.\n\nVerification scope:\n- Add focused request/response tests with mocked network transport.\n- Cover exactly-eight enforcement, malformed responses, timeout/transient retry behavior, no call on de-identification failure, mock compatibility, and no secret/image-byte leakage.\n- Run the focused VLM test suite and report exact commands and results.\n\nLikely files: ai/vlm_sdk.py, scripts/process_vlm.py, ai/vlm/contracts.py only if needed, and VLM tests under tests/.\n\nRuntime limitation: the required context snapshot could not be persisted through direct agent mutation because .gjc is runtime-owned; this task text is the grounded intake snapshot. Inspect current files before editing and do not guess the teammate API.",
+  "status": "completed",
+  "owner": "worker-1",
+  "lane": "lane-a",
+  "required_role": "executor",
+  "version": 5,
+  "created_at": "2026-07-15T02:22:32.088Z",
+  "updated_at": "2026-07-15T02:28:48.467Z",
+  "assignee": "worker-1",
+  "completed_at": "2026-07-15T02:28:48.467Z",
+  "completion_evidence": {
+    "summary": "Implemented real Gemini multimodal JSON analysis with strict validation, bounded retries, safe metadata, and a fail-closed de-identification boundary; the absent teammate de-identification API remains an explicit production blocker rather than allowing raw frames.",
+    "items": [
+      {
+        "kind": "command",
+        "status": "passed",
+        "summary": "Complete focused VLM suite passed.",
+        "command": "python -m pytest tests/test_vlm*.py -q",
+        "output": "31 passed, 41 subtests passed in 4.07s"
+      },
+      {
+        "kind": "command",
+        "status": "passed",
+        "summary": "Changed modules compile and patch integrity is clean.",
+        "command": "python -m compileall -q ai/vlm_sdk.py ai/vlm/contracts.py scripts/process_vlm.py tests/test_vlm_gemini.py && git diff --check",
+        "output": "exit code 0"
+      }
+    ],
+    "recorded_by": "worker-1",
+    "recorded_at": "2026-07-15T02:28:48.467Z",
+    "files": [
+      "ai/vlm/contracts.py",
+      "ai/vlm_sdk.py",
+      "scripts/process_vlm.py",
+      "tests/test_vlm_gemini.py"
+    ],
+    "notes": "No keyframe/de-identification internals were modified. Gemini CLI execution intentionally fails closed until the teammate supplies a real de-identification callable."
+  }
+}

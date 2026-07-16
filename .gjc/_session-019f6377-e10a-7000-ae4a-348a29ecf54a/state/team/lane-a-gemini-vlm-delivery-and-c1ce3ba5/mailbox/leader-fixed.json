@@ -1,0 +1,88 @@
+{
+  "messages": [
+    {
+      "message_id": "msg-106238d708313f127fbabcb3",
+      "from_worker": "worker-1",
+      "to_worker": "leader-fixed",
+      "body": "INTEGRATION REQUESTED: worker-1 has eligible git changes at 50d43385cc8f.",
+      "created_at": "2026-07-15T02:24:40.609Z"
+    },
+    {
+      "message_id": "msg-03ad15422096fa92060d03cc",
+      "from_worker": "worker-1",
+      "to_worker": "leader-fixed",
+      "body": "INTEGRATION REQUESTED: worker-1 has eligible git changes at 50d43385cc8f.",
+      "created_at": "2026-07-15T02:24:49.493Z"
+    },
+    {
+      "message_id": "msg-1d0514b155c5a0d8d38e4461",
+      "from_worker": "worker-1",
+      "to_worker": "leader-fixed",
+      "body": "INTEGRATION REQUESTED: worker-1 has eligible git changes at 50d43385cc8f.",
+      "created_at": "2026-07-15T02:25:10.474Z"
+    },
+    {
+      "message_id": "msg-36d5db617bc03496eadb4f04",
+      "from_worker": "worker-1",
+      "to_worker": "leader-fixed",
+      "body": "INTEGRATION REQUESTED: worker-1 has eligible git changes at 50d43385cc8f.",
+      "created_at": "2026-07-15T02:26:00.929Z"
+    },
+    {
+      "message_id": "msg-3b68792274aace2b29d52224",
+      "from_worker": "worker-1",
+      "to_worker": "leader-fixed",
+      "body": "INTEGRATED: merged worker-1 14bdafbc5e27 into leader.",
+      "created_at": "2026-07-15T02:32:48.379Z"
+    },
+    {
+      "message_id": "msg-0931ea9f8e3ca559c09f57f9",
+      "from_worker": "worker-1",
+      "to_worker": "leader-fixed",
+      "body": "INTEGRATION REQUESTED: worker-1 has eligible git changes at 14bdafbc5e27.",
+      "created_at": "2026-07-15T02:38:51.793Z"
+    },
+    {
+      "message_id": "msg-1f30ce079822b8fe437b5fa9",
+      "from_worker": "worker-1",
+      "to_worker": "leader-fixed",
+      "body": "INTEGRATION REQUESTED: worker-1 has eligible git changes at 14bdafbc5e27.",
+      "created_at": "2026-07-15T02:39:49.627Z"
+    },
+    {
+      "message_id": "msg-0ff7156ea214fd8efb2c12c2",
+      "from_worker": "worker-1",
+      "to_worker": "leader-fixed",
+      "body": "INTEGRATED: cherry-picked 1f441c59d6ca from worker-1.",
+      "created_at": "2026-07-15T02:41:26.754Z"
+    },
+    {
+      "message_id": "msg-51336ee42b45498d52170d9c",
+      "from_worker": "worker-1",
+      "to_worker": "leader-fixed",
+      "body": "INTEGRATION REQUESTED: worker-1 has eligible git changes at 1f441c59d6ca.",
+      "created_at": "2026-07-15T02:43:15.076Z"
+    },
+    {
+      "message_id": "msg-6cd586fdf5cb74a5e9fb2c56",
+      "from_worker": "worker-1",
+      "to_worker": "leader-fixed",
+      "body": "INTEGRATION REQUESTED: worker-1 has eligible git changes at 1f441c59d6ca.",
+      "created_at": "2026-07-15T02:43:21.247Z"
+    },
+    {
+      "message_id": "msg-e4e49b3621bdd3b0d7146def",
+      "from_worker": "worker-1",
+      "to_worker": "leader-fixed",
+      "body": "INTEGRATION REQUESTED: worker-1 has eligible git changes at 1f441c59d6ca.",
+      "created_at": "2026-07-15T02:43:26.613Z"
+    },
+    {
+      "message_id": "msg-1ad85659614f76dc98e28fef",
+      "from_worker": "worker-1",
+      "to_worker": "leader-fixed",
+      "body": "INTEGRATED: cherry-picked 3b6ecde2b015 from worker-1.",
+      "created_at": "2026-07-15T02:44:27.419Z"
+    }
+  ]
+}
