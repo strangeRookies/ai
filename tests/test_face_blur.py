@@ -19,6 +19,8 @@ from ai.events.clip_worker import (
     _apply_per_frame_face_blur,
     _blur_region,
     _face_box_from_keypoints,
+    _midpoint,
+    _torso_axis_head_box,
     _upper_body_fallback_box,
 )
 
@@ -66,6 +68,22 @@ def _low_confidence_head_keypoints(head_x, head_y, conf=0.15):
     kps[0] = _kp(head_x, head_y, conf)
     kps[1] = _kp(head_x - 4, head_y - 2, conf)
     kps[2] = _kp(head_x + 4, head_y - 2, conf)
+    return kps
+
+
+def _torso_keypoints(shoulder_l=None, shoulder_r=None, hip_l=None, hip_r=None):
+    """코/눈/귀 없이 어깨/골반만 있는 keypoint 세트 (2순위 폴백 전용 테스트).
+    각 인자를 None으로 두면 그 keypoint는 아예 없는 것으로 취급(비대칭 케이스 재현용)."""
+    kps = [_empty_kp()] * 17
+    kps = list(kps)
+    if shoulder_l is not None:
+        kps[5] = _kp(shoulder_l[0], shoulder_l[1], 0.9)
+    if shoulder_r is not None:
+        kps[6] = _kp(shoulder_r[0], shoulder_r[1], 0.9)
+    if hip_l is not None:
+        kps[11] = _kp(hip_l[0], hip_l[1], 0.7)
+    if hip_r is not None:
+        kps[12] = _kp(hip_r[0], hip_r[1], 0.7)
     return kps
 
 
@@ -138,6 +156,26 @@ class TestScenario2LyingOnSide:
         assert x_covered
         assert y_error <= 10  # 참고용 허용치 -- 실측 오차를 리포트에 남기기 위한 기록성 단언
 
+    def test_torso_axis_available_gives_tighter_head_estimate(self):
+        """2순위(_torso_axis_head_box) 도입 후: 어깨/골반 keypoint가 있으면 위
+        테스트의 "상위 %" 폴백(3순위로 격하됨)까지 갈 필요 없이 훨씬 정확하게
+        머리를 잡는다. 동일한 실제 머리 위치를 기준으로 비교."""
+        actual_head_x, actual_head_y = 110, 224
+        # 몸통이 가로로 누움: 어깨는 머리 쪽에 더 가깝고, 골반은 발 쪽으로 더 멀리.
+        shoulder_l, shoulder_r = (150.0, 218.0), (150.0, 226.0)
+        hip_l, hip_r = (250.0, 222.0), (250.0, 230.0)
+        keypoints = _torso_keypoints(shoulder_l, shoulder_r, hip_l, hip_r)
+        box = _box(TRACK_ID, 100, 200, 300, 260, keypoints)
+
+        assert _face_box_from_keypoints(box, WIDTH, HEIGHT) is None  # 1순위는 여전히 실패(코/눈 없음)
+
+        region = _torso_axis_head_box(box, WIDTH, HEIGHT)
+        assert region is not None
+        x1, y1, x2, y2 = region
+        print(f"[scenario2-torso-axis] region={region} actual_head=({actual_head_x},{actual_head_y})")
+        assert x1 <= actual_head_x <= x2
+        assert y1 <= actual_head_y <= y2
+
 
 class TestScenario3Prone:
     def test_upper_band_may_miss_head_when_body_lies_horizontally(self):
@@ -163,6 +201,119 @@ class TestScenario3Prone:
             "예상대로 상위 % 폴백이 가로로 누운 자세에서 머리를 못 잡음 -- "
             "본문 리포트의 '개선 방향' 참고 (자세 인식 기반 밴드 방향 전환 필요)"
         )
+
+    def test_torso_axis_flips_this_to_true_when_shoulder_hip_available(self):
+        """위 테스트가 "예상된 실패"로 고정해둔 바로 그 케이스(완전히 엎드림, 발이
+        왼쪽/머리가 오른쪽)를 어깨/골반 keypoint까지 채워서 다시 태워봄.
+        _torso_axis_head_box()에서는 head_in_region이 True로 뒤집혀야 정상 --
+        이게 오늘 고치려던 그 버그의 의도된 수정 확인."""
+        actual_head_x, actual_head_y = 290, 230
+        shoulder_l, shoulder_r = (250.0, 225.0), (250.0, 235.0)
+        hip_l, hip_r = (150.0, 225.0), (150.0, 235.0)
+        keypoints = _torso_keypoints(shoulder_l, shoulder_r, hip_l, hip_r)
+        box = _box(TRACK_ID, 100, 200, 300, 260, keypoints)
+
+        assert _face_box_from_keypoints(box, WIDTH, HEIGHT) is None  # 1순위는 여전히 실패(코/눈 없음)
+
+        region = _torso_axis_head_box(box, WIDTH, HEIGHT)
+        assert region is not None
+        x1, y1, x2, y2 = region
+        head_in_region = (x1 <= actual_head_x <= x2) and (y1 <= actual_head_y <= y2)
+        print(f"[scenario3-torso-axis] region={region} actual_head=({actual_head_x},{actual_head_y}) "
+              f"head_in_region={head_in_region}")
+
+        assert head_in_region is True, (
+            "장축 폴백이 도입되면 완전히 엎드린 자세에서도 머리를 잡아야 함 -- "
+            "여기서 실패하면 _torso_axis_head_box() 자체가 회귀한 것"
+        )
+
+
+class TestTorsoAxisFallback:
+    """어깨-골반 장축 폴백(_torso_axis_head_box, 2순위) 전용 검증.
+    시나리오2/3 클래스의 위 두 테스트가 "실제 낙상 자세"를 재현한 것이라면,
+    여기는 그 함수 자체의 기하학적 정확성/경계 조건을 별도로 짚는다."""
+
+    def test_diagonal_45_degree_posture_finds_head_direction(self):
+        # 완전히 옆도, 완전히 엎드림도 아닌 대각선 자세: 오른쪽-위가 머리, 왼쪽-아래가 발.
+        shoulder_l, shoulder_r = (255.0, 135.0), (265.0, 145.0)
+        hip_l, hip_r = (135.0, 255.0), (145.0, 265.0)
+        keypoints = _torso_keypoints(shoulder_l, shoulder_r, hip_l, hip_r)
+        box = _box(TRACK_ID, 50, 50, 350, 350, keypoints)
+
+        region = _torso_axis_head_box(box, WIDTH, HEIGHT)
+        assert region is not None
+        x1, y1, x2, y2 = region
+
+        shoulder_mid = _midpoint(shoulder_l, shoulder_r)
+        hip_mid = _midpoint(hip_l, hip_r)
+        expected_head_x = shoulder_mid[0] + (shoulder_mid[0] - hip_mid[0]) * 0.5
+        expected_head_y = shoulder_mid[1] + (shoulder_mid[1] - hip_mid[1]) * 0.5
+        print(f"[diagonal] region={region} expected_head=({expected_head_x:.1f},{expected_head_y:.1f})")
+
+        assert x1 <= expected_head_x <= x2
+        assert y1 <= expected_head_y <= y2
+        # 방향성 검증: 대각선을 세로축으로만 취급하지 않았다는 증거로, 추정 머리
+        # 위치가 어깨중점보다 실제로 더 오른쪽(head 방향)이면서 더 위여야 함.
+        assert expected_head_x > shoulder_mid[0]
+        assert expected_head_y < shoulder_mid[1]
+
+        # "상위 %"였다면 x범위는 그냥 bbox 전체(50~350)였을 것 -- 장축 폴백은
+        # 훨씬 좁고 실제 머리 쪽으로 치우친 박스를 낸다.
+        upper_region = _upper_body_fallback_box(box, WIDTH, HEIGHT)
+        assert (x2 - x1) < (upper_region[2] - upper_region[0])
+
+    def test_asymmetric_single_side_shoulder_and_hip_still_works(self):
+        # 어깨는 왼쪽만, 골반은 오른쪽만 신뢰도 통과 (예: 카메라 반대쪽이 가려짐).
+        shoulder_l = (150.0, 220.0)
+        hip_r = (250.0, 226.0)
+        keypoints = _torso_keypoints(shoulder_l=shoulder_l, hip_r=hip_r)
+        box = _box(TRACK_ID, 100, 200, 300, 260, keypoints)
+
+        region = _torso_axis_head_box(box, WIDTH, HEIGHT)
+        assert region is not None
+        x1, y1, x2, y2 = region
+
+        # _midpoint()가 없는 쪽 없이 있는 점을 그대로 쓰는지 -- 축 계산 자체가
+        # 성립해야(비대칭이라고 None을 반환하면 안 됨) 아래 좌표 비교가 의미 있음.
+        expected_head_x = shoulder_l[0] + (shoulder_l[0] - hip_r[0]) * 0.5
+        expected_head_y = shoulder_l[1] + (shoulder_l[1] - hip_r[1]) * 0.5
+        print(f"[asymmetric] region={region} expected_head=({expected_head_x:.1f},{expected_head_y:.1f})")
+
+        assert x1 <= expected_head_x <= x2
+        assert y1 <= expected_head_y <= y2
+
+    def test_no_shoulder_or_hip_keypoints_returns_none(self):
+        # 코/눈만 있고(낮은 신뢰도) 어깨/골반은 아예 없음 -- 2순위 자체가 성립 불가.
+        keypoints = _low_confidence_head_keypoints(110, 224)
+        box = _box(TRACK_ID, 100, 200, 300, 260, keypoints)
+
+        assert _torso_axis_head_box(box, WIDTH, HEIGHT) is None
+
+    def test_missing_shoulder_and_hip_falls_back_to_upper_body_tier_end_to_end(self):
+        # 위 케이스를 실제 파이프라인(_apply_per_frame_face_blur)으로 태워서
+        # 2순위가 조용히 건너뛰어지고 3순위(상위 %)로 정상 폴백되는지 확인.
+        keypoints = _low_confidence_head_keypoints(110, 224)
+        box = _box(TRACK_ID, 100, 200, 300, 260, keypoints)
+        frame = np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8)
+
+        tiers = _apply_per_frame_face_blur(_cv2(), [frame], [[box]], WIDTH, HEIGHT)
+
+        assert tiers["torso_axis"] == 0
+        assert tiers["upper_body"] == 1
+        assert tiers["keypoint"] == 0
+
+    def test_keypoint_tier_takes_priority_over_torso_axis_when_both_available(self):
+        # _standing_keypoints는 코/눈/귀뿐 아니라 어깨(5,6)/골반(11,12)까지 이미
+        # 포함하므로, 1순위가 성공하면 2순위(_torso_axis_head_box)는 아예 호출조차
+        # 안 돼야 한다(호출됐어도 결과가 같을 수 있으니, 카운터로 "안 쓰였음"을 확인).
+        keypoints = _standing_keypoints(head_x=200, head_y=80)
+        box = _box(TRACK_ID, 150, 60, 250, 350, keypoints)
+        frame = np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8)
+
+        tiers = _apply_per_frame_face_blur(_cv2(), [frame], [[box]], WIDTH, HEIGHT)
+
+        assert tiers["keypoint"] == 1
+        assert tiers["torso_axis"] == 0
 
 
 class TestScenario4ShortDropout:
