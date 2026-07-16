@@ -84,12 +84,20 @@ class SpatialFallDedupTest(unittest.TestCase):
         self.assertTrue(d_unrec_b.emit, "B must still escalate to an unrecovered/FAINT alert")
         self.assertEqual(d_unrec_b.kind, "unrecovered")
 
+        # Lineage: B's escalation must point back to A's ACTUALLY-PUBLISHED NEW_FALL
+        # event_id, not B's own internal (never-published) confirm id.
+        self.assertEqual(
+            d_unrec_b.original_event_id,
+            d_confirm_a.event_id,
+            "unrecovered original_event_id should chain back to the alert that was actually published",
+        )
+
     def test_no_confirm_revert_loop_confirmed_ts_stays_stable(self):
         """Regression guard for the reviewed bug: B's internal confirmed_ts must be set
         once and never reset by repeated spatial-dedup suppression."""
         p = make_processor()
         p.evaluate("cam_01", {"label": "Faint"}, 1.0, track_id="A", detection=detection(LOCATION_A))
-        p.evaluate("cam_01", {"label": "Faint"}, 2.0, track_id="A", detection=detection(LOCATION_A))
+        d_confirm_a = p.evaluate("cam_01", {"label": "Faint"}, 2.0, track_id="A", detection=detection(LOCATION_A))
 
         p.evaluate("cam_01", {"label": "Faint"}, 3.0, track_id="B", detection=detection(LOCATION_A_JITTERED))
         d_confirm_b = p.evaluate("cam_01", {"label": "Faint"}, 4.0, track_id="B", detection=detection(LOCATION_A_JITTERED))
@@ -99,6 +107,11 @@ class SpatialFallDedupTest(unittest.TestCase):
         self.assertIsNotNone(track_b_state)
         first_confirmed_ts = track_b_state.confirmed_ts
         self.assertIsNotNone(first_confirmed_ts, "B must have a real confirmed_ts, not wiped by revert")
+        self.assertEqual(
+            track_b_state.last_event_id,
+            d_confirm_a.event_id,
+            "lineage rewrite should point B's last_event_id at A's published event, not touch confirmed_ts",
+        )
 
         # Several more frames of continued alert at the same spot: if confirm/revert were
         # looping, confirmed_ts would keep flipping to None and back; it must stay fixed,
@@ -144,6 +157,100 @@ class SpatialFallDedupTest(unittest.TestCase):
         p.evaluate("cam_01", {"label": "Faint"}, 8.0, track_id="B", detection=detection(LOCATION_A))
         d_confirm_b = p.evaluate("cam_01", {"label": "Faint"}, 9.0, track_id="B", detection=detection(LOCATION_A))
         self.assertTrue(d_confirm_b.emit)
+
+    def test_chain_of_three_suppressions_keeps_original_event_id(self):
+        """A confirms+publishes, then B, C both get suppressed in turn (B never
+        confirms either — it's dropped before D), and D is the one that finally
+        survives long enough to escalate. original_event_id must chain all the way
+        back to A at every step, never drift to B or C along the way."""
+        p = make_processor()
+
+        p.evaluate("cam_01", {"label": "Faint"}, 1.0, track_id="A", detection=detection(LOCATION_A))
+        d_confirm_a = p.evaluate("cam_01", {"label": "Faint"}, 2.0, track_id="A", detection=detection(LOCATION_A))
+        self.assertTrue(d_confirm_a.emit)
+        self.assertEqual(d_confirm_a.kind, "new_fall")
+
+        p.evaluate("cam_01", {"label": "Faint"}, 3.0, track_id="B", detection=detection(LOCATION_A_JITTERED))
+        d_confirm_b = p.evaluate("cam_01", {"label": "Faint"}, 4.0, track_id="B", detection=detection(LOCATION_A_JITTERED))
+        self.assertFalse(d_confirm_b.emit)
+        self.assertEqual(
+            p._state_machine.get_track("cam_01", "B").last_event_id,
+            d_confirm_a.event_id,
+        )
+
+        p.evaluate("cam_01", {"label": "Faint"}, 5.0, track_id="C", detection=detection(LOCATION_A_JITTERED))
+        d_confirm_c = p.evaluate("cam_01", {"label": "Faint"}, 6.0, track_id="C", detection=detection(LOCATION_A_JITTERED))
+        self.assertFalse(d_confirm_c.emit)
+        self.assertEqual(
+            p._state_machine.get_track("cam_01", "C").last_event_id,
+            d_confirm_a.event_id,
+            "C must still chain back to A, not to B's (never-published) event_id",
+        )
+        # The stored location record itself must not have drifted to B or C either.
+        self.assertEqual(
+            p._recent_fall_locations["cam_01"][0]["event_id"],
+            d_confirm_a.event_id,
+        )
+
+        p.evaluate("cam_01", {"label": "Faint"}, 7.0, track_id="D", detection=detection(LOCATION_A_JITTERED))
+        d_confirm_d = p.evaluate("cam_01", {"label": "Faint"}, 8.0, track_id="D", detection=detection(LOCATION_A_JITTERED))
+        self.assertFalse(d_confirm_d.emit)
+        self.assertEqual(
+            p._state_machine.get_track("cam_01", "D").last_event_id,
+            d_confirm_a.event_id,
+        )
+
+        # D survives (no further churn) long enough to escalate.
+        d_unrec_d = p.evaluate("cam_01", {"label": "Faint"}, 18.5, track_id="D", detection=detection(LOCATION_A_JITTERED))
+        self.assertTrue(d_unrec_d.emit)
+        self.assertEqual(d_unrec_d.kind, "unrecovered")
+        self.assertEqual(
+            d_unrec_d.original_event_id,
+            d_confirm_a.event_id,
+            "after a 3-hop chain (A->B->C->D), the unrecovered alert must still cite A",
+        )
+
+    def test_expired_location_does_not_leak_stale_event_id_to_unrelated_fall(self):
+        """After the dedup window elapses, the old location entry (and its event_id)
+        must be gone — a later, unrelated confirm at the same spot must get its OWN
+        fresh event_id, not silently inherit the expired one."""
+        p = make_processor(spatial_dedup_seconds=60.0)
+
+        p.evaluate("cam_01", {"label": "Faint"}, 1.0, track_id="A", detection=detection(LOCATION_A))
+        d_confirm_a = p.evaluate("cam_01", {"label": "Faint"}, 2.0, track_id="A", detection=detection(LOCATION_A))
+        self.assertTrue(d_confirm_a.emit)
+
+        # Past both the camera cooldown and the 60s dedup window: a fresh incident at
+        # the same physical spot must publish independently, with its own event_id.
+        p.evaluate("cam_01", {"label": "Faint"}, 70.0, track_id="E", detection=detection(LOCATION_A))
+        d_confirm_e = p.evaluate("cam_01", {"label": "Faint"}, 71.0, track_id="E", detection=detection(LOCATION_A))
+        self.assertTrue(d_confirm_e.emit)
+        self.assertEqual(d_confirm_e.kind, "new_fall")
+        self.assertNotEqual(
+            d_confirm_e.event_id,
+            d_confirm_a.event_id,
+            "E is a genuinely new incident and must not inherit A's stale event_id",
+        )
+
+        # The location table must hold only E's fresh record now, not a leftover
+        # A entry sitting alongside it.
+        locations = p._recent_fall_locations["cam_01"]
+        self.assertEqual(len(locations), 1, "the expired A entry must have been pruned, not accumulated")
+        self.assertEqual(locations[0]["event_id"], d_confirm_e.event_id)
+
+        # A later track landing on the same spot shortly after E must now chain to E,
+        # proving the lineage genuinely moved on and isn't still anchored to stale A.
+        p.evaluate("cam_01", {"label": "Faint"}, 72.0, track_id="F", detection=detection(LOCATION_A_JITTERED))
+        d_confirm_f = p.evaluate("cam_01", {"label": "Faint"}, 73.0, track_id="F", detection=detection(LOCATION_A_JITTERED))
+        self.assertFalse(d_confirm_f.emit)
+        self.assertEqual(
+            p._state_machine.get_track("cam_01", "F").last_event_id,
+            d_confirm_e.event_id,
+        )
+        self.assertNotEqual(
+            p._state_machine.get_track("cam_01", "F").last_event_id,
+            d_confirm_a.event_id,
+        )
 
 
 if __name__ == "__main__":

@@ -333,6 +333,9 @@ class FaintEventPostProcessor:
                         # and the unrecovered/FAINT escalation can still fire on schedule.
                         matched_location["ts"] = float(timestamp)
                         matched_location["bbox"] = fall_bbox
+                        original_event_id = matched_location.get("event_id")
+                        if original_event_id:
+                            self._state_machine.set_last_event_id(camera_id, track_id, original_event_id)
                         out = _context(
                             emit=False,
                             kind="none",
@@ -355,7 +358,7 @@ class FaintEventPostProcessor:
                     return out
                 self._last_event_time_by_camera[cooldown_key] = float(timestamp)
                 if self.spatial_dedup_enabled and fall_bbox is not None:
-                    self._record_fall_location(cooldown_key, fall_bbox, float(timestamp))
+                    self._record_fall_location(cooldown_key, fall_bbox, float(timestamp), event_id=decision.event_id)
                 out = _context(
                     emit=True,
                     kind="new_fall",
@@ -481,8 +484,10 @@ class FaintEventPostProcessor:
         self._recent_fall_locations[cooldown_key] = kept
         return matched
 
-    def _record_fall_location(self, cooldown_key, bbox, timestamp):
-        self._recent_fall_locations.setdefault(cooldown_key, []).append({"bbox": bbox, "ts": timestamp})
+    def _record_fall_location(self, cooldown_key, bbox, timestamp, event_id=None):
+        self._recent_fall_locations.setdefault(cooldown_key, []).append(
+            {"bbox": bbox, "ts": timestamp, "event_id": event_id}
+        )
 
     def cooldown_active(self, camera_id, timestamp, track_id=None):
         key = event_cooldown_key(camera_id)

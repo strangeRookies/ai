@@ -161,6 +161,19 @@ class FallEventStateMachine:
         self._tracks[new_key] = self._tracks.pop(old_key)
         return True
 
+    def set_last_event_id(self, camera_id: str, track_id: Any | None, event_id: str) -> None:
+        """Rewrite last_event_id only (lineage rewrite for spatial dedup).
+
+        Does not touch state/confirmed_ts/lying_since_ts — the track's own lifecycle
+        keeps progressing normally; this only makes future SUPPRESS_NEW_FALL/UNRECOVERED
+        decisions report the originally-published event as their original_event_id
+        instead of an event_id that was never actually published.
+        """
+        st = self._tracks.get(track_state_key(camera_id, track_id))
+        if st is None:
+            return
+        st.last_event_id = event_id
+
     def revert_confirm_to_candidate(self, camera_id: str, track_id: Any | None = None) -> None:
         """If NEW_FALL was decided but camera cooldown blocked publish, roll back."""
         st = self._tracks.get(track_state_key(camera_id, track_id))
