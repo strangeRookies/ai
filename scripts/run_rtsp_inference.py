@@ -289,13 +289,26 @@ def run(args):
                 break
             
             drop_stale = not is_offline_video
+            queue_depth_before_get = queue.size()
             frame_packet = queue.get_latest(drop_stale=drop_stale)
             if frame_packet is None:
                 if reader_exited.is_set() and queue.size() == 0:
                     break
                 time.sleep(0.005)
                 continue
-                
+
+            dequeued_at_ms = time.time_ns() // 1_000_000
+            queue_lag_ms = max(
+                0,
+                int(dequeued_at_ms) - int(frame_packet.captured_at_ms),
+            )
+            metrics.add_queue_lag_ms(queue_lag_ms)
+            summary["latest_queue_lag_ms"] = queue_lag_ms
+            summary["max_queue_depth"] = max(
+                int(summary.get("max_queue_depth", 0)),
+                int(queue_depth_before_get),
+            )
+
             if summary["frames_processed"] == 0:
                 source_fps = getattr(frame_packet, "fps", None)
                 detection_postprocessor, postprocessing_mode = create_detection_postprocessor(args, source_fps=source_fps)
