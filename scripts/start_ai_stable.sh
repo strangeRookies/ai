@@ -40,6 +40,22 @@ if [ -f .env ]; then
     export $(grep -v '^#' .env | xargs)
 fi
 
+INTERNAL_VLM_REQUESTED="${AI_INTERNAL_VLM_ENABLED:-}"
+if [ -z "$INTERNAL_VLM_REQUESTED" ] && [ -n "${GEMINI_API_KEY:-}" ]; then
+    INTERNAL_VLM_REQUESTED=true
+fi
+if [ "$INTERNAL_VLM_REQUESTED" = "true" ] || [ "$INTERNAL_VLM_REQUESTED" = "1" ]; then
+    echo "[start_ai_stable] Starting one internal VLM worker on ${AI_INTERNAL_VLM_HOST:-0.0.0.0}:${AI_INTERNAL_VLM_PORT:-8091}..."
+    pkill -f 'ai.internal_vlm_api' 2>/dev/null || true
+    nohup python -c 'import os; from ai.internal_vlm_api import serve_forever; serve_forever(os.getenv("AI_INTERNAL_VLM_HOST", "0.0.0.0"), int(os.getenv("AI_INTERNAL_VLM_PORT", "8091")))' \
+        > internal_vlm_api.log 2>&1 </dev/null &
+    # run_registered_cameras spawns one overlay process per camera; do not let each
+    # child compete for the same 8091 listener.
+    export AI_INTERNAL_VLM_ENABLED=false
+else
+    echo "[start_ai_stable] Internal VLM worker disabled (set GEMINI_API_KEY or AI_INTERNAL_VLM_ENABLED=true)."
+fi
+
 # Tracking association production defaults (offline A/B + cam_03 canary, 2026-07).
 # Rollback: scripts/rollback_tracking_suppression.sh (none + 0.25).
 export NEAR_DUP_SUPPRESS_MODE="${NEAR_DUP_SUPPRESS_MODE:-hybrid_kp}"

@@ -338,6 +338,55 @@ def lifecycle_payload_kwargs(emit_decision) -> dict:
         "track_id_override": getattr(emit_decision, "track_id", None),
     }
 
+def snapshot_assist_meta_from_event_payload(
+    payload: dict,
+    *,
+    track_id: int | None = None,
+    prediction: dict | None = None,
+    emit_decision=None,
+) -> dict:
+    """Map MQTT event payload → snapshot_assist_upload **meta (form field names)."""
+    events = payload.get("events") or []
+    first = events[0] if events else {}
+    faint_prob = first.get("faint_probability")
+    if faint_prob is None and prediction is not None:
+        faint_prob = prediction.get("score") or (prediction.get("probabilities") or {}).get("faint")
+    bbox = payload.get("bbox") or first.get("bbox") or payload.get("boundingBox")
+    keypoints = first.get("keypoints")
+    tid = track_id
+    if tid is None:
+        raw = payload.get("trackingId") or payload.get("track_id") or first.get("trackingId")
+        if raw is not None:
+            try:
+                tid = int(float(str(raw)))
+            except (TypeError, ValueError):
+                tid = None
+    captured_ms = payload.get("capturedAtMs")
+    captured_at = None
+    if captured_ms is not None:
+        try:
+            captured_at = _time.strftime("%Y-%m-%dT%H:%M:%S", _time.gmtime(int(captured_ms) / 1000.0)) + "Z"
+        except (TypeError, ValueError):
+            captured_at = None
+    consecutive = None
+    if emit_decision is not None:
+        consecutive = getattr(emit_decision, "consecutive_count", None)
+    meta = {
+        "eventType": payload.get("type") or payload.get("event_type"),
+        "trackId": str(tid) if tid is not None else None,
+        "confidence": payload.get("confidence"),
+        "faintProbability": faint_prob,
+        "lifecycleState": payload.get("lifecycleState") or payload.get("state"),
+        "consecutiveCount": consecutive,
+        "detectorReason": payload.get("memoText") or payload.get("message"),
+        "capturedAt": captured_at,
+    }
+    if bbox is not None:
+        meta["bbox"] = bbox
+    if keypoints is not None:
+        meta["keypoints"] = keypoints
+    return {k: v for k, v in meta.items() if v is not None}
+
 
 def sequence_metadata(sequence, args):
     if not sequence:

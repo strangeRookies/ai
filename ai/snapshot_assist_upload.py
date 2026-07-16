@@ -229,4 +229,7 @@ def submit_snapshot(
         with request.urlopen(req, timeout=30) as resp:
             return int(resp.status)
     except error.HTTPError as exc:
-        return int(exc.code)
+        try:
+            return int(exc.code)
+        finally:
+            exc.close()

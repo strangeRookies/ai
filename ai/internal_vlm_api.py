@@ -67,6 +67,17 @@ class _VlmHandler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args) -> None:  # noqa: A003
         logger.info("internal-vlm %s - %s", self.address_string(), format % args)
 
+    def do_GET(self) -> None:  # noqa: N802
+        parsed = urlparse(self.path)
+        if parsed.path != "/internal/vlm/health":
+            self._json_response(404, {"error": "not_found"})
+            return
+        provider = "mock" if vlm_force_mock() else ("gemini" if gemini_api_key() else "unconfigured")
+        self._json_response(200, {
+            "status": "UP",
+            "provider": provider,
+            "serviceTokenConfigured": bool(_service_token()),
+        })
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         if parsed.path != "/internal/vlm/jobs":
