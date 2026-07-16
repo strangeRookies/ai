@@ -1,7 +1,4 @@
-"""Async post-event JPEG upload for VLM snapshot assist (side-channel).
-
-Does not create or mutate primary safety alerts. Failures are logged only.
-"""
+"""Async post-event JPEG upload for VLM snapshot assist (side-channel)."""
 
 from __future__ import annotations
 
@@ -15,43 +12,73 @@ from urllib import error, request
 
 logger = logging.getLogger(__name__)
 
-# Bounded queue (maxsize=50) and lock for daemon uploader thread.
-_UPLOAD_QUEUE: queue.Queue[tuple[str, str, bytes, float]] = queue.Queue(maxsize=50)
-_FRAME_QUEUE: queue.Queue[tuple[str, str, Any, int]] = queue.Queue(maxsize=50)
+_UPLOAD_QUEUE: queue.Queue[tuple[str, str, bytes, dict[str, Any]]] = queue.Queue(maxsize=50)
+_FRAME_QUEUE: queue.Queue[tuple[str, str, Any, int, dict[str, Any]]] = queue.Queue(maxsize=50)
 _FRAME_WORKER_STARTED = False
 _FRAME_WORKER_THREAD: threading.Thread | None = None
 _FRAME_STOP = threading.Event()
+
+_WORKER_STARTED = False
+_QUEUE_LOCK = threading.Lock()
+_SENT_EVENTS: set[str] = set()
+_SENT_EVENTS_LOCK = threading.Lock()
 
 
 def _frame_worker_loop() -> None:
     while not _FRAME_STOP.is_set():
         try:
-            event_id, camera_login_id, frame, quality = _FRAME_QUEUE.get(timeout=0.05)
+            event_id, camera_login_id, frame, quality, meta = _FRAME_QUEUE.get(timeout=0.5)
         except queue.Empty:
             continue
         try:
-            jpeg = encode_frame_jpeg(frame, quality=quality)
+            from ai.snapshot_face_blur import deidentify_event_frame  # noqa: PLC0415
+
+            blurred = deidentify_event_frame(
+                frame,
+                bbox=meta.get("bbox"),
+                keypoints=meta.get("keypoints"),
+            )
+            jpeg = encode_frame_jpeg(blurred, quality=quality)
             if jpeg:
-                submit_snapshot_async(event_id=event_id, camera_login_id=camera_login_id, jpeg_bytes=jpeg)
+                upload_fields = {k: v for k, v in meta.items() if k not in {"bbox", "keypoints"}}
+                submit_snapshot_async(
+                    event_id=event_id,
+                    camera_login_id=camera_login_id,
+                    jpeg_bytes=jpeg,
+                    **upload_fields,
+                )
+        except Exception as exc:
+            logger.warning("snapshot assist frame worker failed eventId=%s: %s", event_id, exc)
         finally:
             _FRAME_QUEUE.task_done()
 
 
-def submit_frame_snapshot_async(event_id: str, camera_login_id: str, frame: Any, quality: int = 85) -> bool:
+def submit_frame_snapshot_async(
+    event_id: str,
+    camera_login_id: str,
+    frame: Any,
+    quality: int = 85,
+    **meta: Any,
+) -> bool:
     global _FRAME_WORKER_STARTED, _FRAME_WORKER_THREAD
     if not snapshot_assist_enabled() or frame is None:
         return False
     try:
         frame_copy = frame.copy()
-        _FRAME_QUEUE.put_nowait((event_id, camera_login_id, frame_copy, quality))
-    except queue.Full:
-        logger.warning("snapshot assist frame queue full eventId=%s", event_id)
+    except Exception:
         return False
     if not _FRAME_WORKER_STARTED:
         _FRAME_STOP.clear()
         _FRAME_WORKER_STARTED = True
-        _FRAME_WORKER_THREAD = threading.Thread(target=_frame_worker_loop, name="snapshot-assist-encoder", daemon=True)
+        _FRAME_WORKER_THREAD = threading.Thread(
+            target=_frame_worker_loop, name="snapshot-assist-encoder", daemon=True
+        )
         _FRAME_WORKER_THREAD.start()
+    try:
+        _FRAME_QUEUE.put_nowait((event_id, camera_login_id, frame_copy, quality, dict(meta)))
+    except queue.Full:
+        logger.warning("snapshot assist frame queue full eventId=%s", event_id)
+        return False
     return True
 
 
@@ -63,16 +90,13 @@ def stop_snapshot_assist_worker(timeout: float = 2.0) -> None:
     _FRAME_WORKER_STARTED = False
 
 
-_WORKER_STARTED = False
-_QUEUE_LOCK = threading.Lock()
-
-# Process-local deduplication set to prevent duplicate uploads for the same eventId.
-_SENT_EVENTS: set[str] = set()
-_SENT_EVENTS_LOCK = threading.Lock()
-
-
 def snapshot_assist_enabled() -> bool:
-    return os.getenv("VLM_SNAPSHOT_ASSIST_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+    try:
+        from ai.vlm.provider_mode import snapshot_assist_should_run  # noqa: PLC0415
+
+        return snapshot_assist_should_run()
+    except Exception:
+        return os.getenv("VLM_SNAPSHOT_ASSIST_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
 
 
 def snapshot_assist_url() -> str:
@@ -82,42 +106,33 @@ def snapshot_assist_url() -> str:
 
 def service_token() -> str:
     return (
-        os.getenv("VLM_SNAPSHOT_ASSIST_SERVICE_TOKEN")
-        or os.getenv("AI_SERVICE_TOKEN")
+        os.getenv("AI_SERVICE_TOKEN")
+        or os.getenv("VLM_SNAPSHOT_ASSIST_SERVICE_TOKEN")
         or ""
-    )
+    ).strip()
 
 
 def encode_frame_jpeg(frame: Any, quality: int = 85) -> bytes | None:
-    """Encode BGR ndarray to JPEG bytes. Returns None if opencv unavailable or encode fails."""
     try:
-        import cv2
+        import cv2  # noqa: PLC0415
     except ImportError:
-        logger.warning("snapshot assist: cv2 not available; skip JPEG encode")
         return None
-    if frame is None or not hasattr(frame, "shape"):
-        return None
-    ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), int(quality)])
+    ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
     if not ok:
         return None
     return buf.tobytes()
 
 
-def _upload_worker_loop():
+def _upload_worker_loop() -> None:
     while True:
         try:
-            event_id, camera_login_id, jpeg_bytes, timeout_sec = _UPLOAD_QUEUE.get()
-            try:
-                submit_snapshot(
-                    event_id=event_id,
-                    camera_login_id=camera_login_id,
-                    jpeg_bytes=jpeg_bytes,
-                    timeout_sec=timeout_sec,
-                )
-            except Exception as exc:
-                logger.warning("snapshot assist upload failed eventId=%s: %s", event_id, exc)
-            finally:
-                _UPLOAD_QUEUE.task_done()
+            event_id, camera_login_id, jpeg_bytes, fields = _UPLOAD_QUEUE.get()
+            submit_snapshot(
+                event_id=event_id,
+                camera_login_id=camera_login_id,
+                jpeg_bytes=jpeg_bytes,
+                **fields,
+            )
         except Exception as loop_exc:
             logger.error("Snapshot assist upload worker loop error: %s", loop_exc)
 
@@ -127,47 +142,32 @@ def submit_snapshot_async(
     event_id: str,
     camera_login_id: str,
     jpeg_bytes: bytes,
-    timeout_sec: float = 10.0,
+    base_url: str | None = None,
+    token: str | None = None,
+    **fields: Any,
 ) -> None:
-    """Fire-and-forget HTTP upload via a bounded background queue. Never raises."""
     if not snapshot_assist_enabled():
         return
-    token = service_token()
+    token = token or service_token()
     if not token:
-        logger.warning("snapshot assist: service token missing; skip upload eventId=%s", event_id)
-        return
-    if not jpeg_bytes:
-        return
-    if not event_id or not event_id.strip():
-        logger.warning("snapshot assist: eventId is empty; reject upload")
+        logger.warning("snapshot assist: missing service token; skip eventId=%s", event_id)
         return
     if not camera_login_id or not camera_login_id.strip():
         logger.warning("snapshot assist: cameraLoginId is empty; reject upload eventId=%s", event_id)
         return
-
-    # Enforce process-local deduplication check (never upload same eventId twice)
     with _SENT_EVENTS_LOCK:
         if event_id in _SENT_EVENTS:
-            logger.info("snapshot assist: duplicate upload request for eventId=%s dropped", event_id)
             return
         _SENT_EVENTS.add(event_id)
-        # Keep deduplication set small (limit to last 1000 events)
-        if len(_SENT_EVENTS) > 1000:
-            _SENT_EVENTS.clear()
-            _SENT_EVENTS.add(event_id)
-
     global _WORKER_STARTED
     with _QUEUE_LOCK:
         if not _WORKER_STARTED:
-            t = threading.Thread(target=_upload_worker_loop, name="snapshot-assist-uploader", daemon=True)
-            t.start()
             _WORKER_STARTED = True
-
+            threading.Thread(target=_upload_worker_loop, daemon=True, name="snapshot-assist-upload").start()
     try:
-        # non-blocking put to bounded queue; drops if queue is full (protects inference thread)
-        _UPLOAD_QUEUE.put_nowait((event_id, camera_login_id, jpeg_bytes, timeout_sec))
+        _UPLOAD_QUEUE.put_nowait((event_id, camera_login_id, jpeg_bytes, dict(fields)))
     except queue.Full:
-        logger.warning("snapshot assist upload queue is full (maxsize=50); dropping request eventId=%s", event_id)
+        logger.warning("snapshot assist upload queue full; drop eventId=%s", event_id)
 
 
 def submit_snapshot(
@@ -175,21 +175,42 @@ def submit_snapshot(
     event_id: str,
     camera_login_id: str,
     jpeg_bytes: bytes,
-    timeout_sec: float = 10.0,
     base_url: str | None = None,
     token: str | None = None,
+    **fields: Any,
 ) -> int:
-    """Synchronous multipart POST. Returns HTTP status code."""
-    token = token if token is not None else service_token()
+    token = token or service_token()
     if not token:
         raise RuntimeError("service token required")
     url = (base_url or snapshot_assist_url()).rstrip("/") + f"/{event_id}"
     boundary = f"----StrangeBoundary{uuid.uuid4().hex}"
-    cam = camera_login_id or ""
     body = b""
-    body += f"--{boundary}\r\n".encode()
-    body += b'Content-Disposition: form-data; name="cameraLoginId"\r\n\r\n'
-    body += cam.encode("utf-8") + b"\r\n"
+
+    def add_field(name: str, value: Any) -> None:
+        nonlocal body
+        if value is None:
+            return
+        text = str(value).strip()
+        if not text:
+            return
+        body += f"--{boundary}\r\n".encode()
+        body += f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode()
+        body += text.encode("utf-8") + b"\r\n"
+
+    add_field("cameraLoginId", camera_login_id)
+    for key in (
+        "eventType",
+        "trackId",
+        "confidence",
+        "faintProbability",
+        "lifecycleState",
+        "consecutiveCount",
+        "detectorReason",
+        "capturedAt",
+    ):
+        if key in fields:
+            add_field(key, fields[key])
+
     body += f"--{boundary}\r\n".encode()
     body += b'Content-Disposition: form-data; name="file"; filename="snapshot.jpg"\r\n'
     body += b"Content-Type: image/jpeg\r\n\r\n"
@@ -205,7 +226,7 @@ def submit_snapshot(
         },
     )
     try:
-        with request.urlopen(req, timeout=timeout_sec) as resp:
+        with request.urlopen(req, timeout=30) as resp:
             return int(resp.status)
     except error.HTTPError as exc:
         return int(exc.code)
