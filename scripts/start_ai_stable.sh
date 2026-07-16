@@ -37,14 +37,34 @@ fi
 
 if [ -f .env ]; then
     echo "[start_ai_stable] Loading environment variables from .env..."
-    export $(grep -v '^#' .env | xargs)
+    while IFS= read -r ENV_LINE || [ -n "$ENV_LINE" ]; do
+        ENV_LINE="${ENV_LINE%$'\r'}"
+        case "$ENV_LINE" in
+            ''|'#'*) continue ;;
+        esac
+        if [[ "$ENV_LINE" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
+            ENV_KEY="${ENV_LINE%%=*}"
+            ENV_VALUE="${ENV_LINE#*=}"
+            if [[ "$ENV_VALUE" == \"*\" && "$ENV_VALUE" == *\" ]]; then
+                ENV_VALUE="${ENV_VALUE:1:${#ENV_VALUE}-2}"
+            elif [[ "$ENV_VALUE" == \'*\' && "$ENV_VALUE" == *\' ]]; then
+                ENV_VALUE="${ENV_VALUE:1:${#ENV_VALUE}-2}"
+            fi
+            export "$ENV_KEY=$ENV_VALUE"
+        else
+            echo "[start_ai_stable][warning] Ignoring invalid .env line."
+        fi
+    done < .env
 fi
 
 INTERNAL_VLM_REQUESTED="${AI_INTERNAL_VLM_ENABLED:-}"
+INTERNAL_VLM_REQUESTED="${INTERNAL_VLM_REQUESTED%$'\r'}"
+INTERNAL_VLM_REQUESTED="${INTERNAL_VLM_REQUESTED,,}"
 if [ -z "$INTERNAL_VLM_REQUESTED" ] && [ -n "${GEMINI_API_KEY:-}" ]; then
     INTERNAL_VLM_REQUESTED=true
 fi
-if [ "$INTERNAL_VLM_REQUESTED" = "true" ] || [ "$INTERNAL_VLM_REQUESTED" = "1" ]; then
+echo "[start_ai_stable] VLM config detected: GEMINI_API_KEY=$([ -n "${GEMINI_API_KEY:-}" ] && echo set || echo missing) AI_INTERNAL_VLM_ENABLED=${INTERNAL_VLM_REQUESTED:-auto}"
+if [ "$INTERNAL_VLM_REQUESTED" = "true" ] || [ "$INTERNAL_VLM_REQUESTED" = "1" ] || [ "$INTERNAL_VLM_REQUESTED" = "yes" ] || [ "$INTERNAL_VLM_REQUESTED" = "on" ]; then
     echo "[start_ai_stable] Starting one internal VLM worker on ${AI_INTERNAL_VLM_HOST:-0.0.0.0}:${AI_INTERNAL_VLM_PORT:-8091}..."
     pkill -f 'ai.internal_vlm_api' 2>/dev/null || true
     nohup python -c 'import os; from ai.internal_vlm_api import serve_forever; serve_forever(os.getenv("AI_INTERNAL_VLM_HOST", "0.0.0.0"), int(os.getenv("AI_INTERNAL_VLM_PORT", "8091")))' \
@@ -64,8 +84,14 @@ export NEAR_DUP_SORT_BY_CONF="${NEAR_DUP_SORT_BY_CONF:-1}"
 echo "[start_ai_stable] Tracking defaults: NEAR_DUP_SUPPRESS_MODE=$NEAR_DUP_SUPPRESS_MODE SIMPLE_TRACK_NEW_TRACK_THRESH=$SIMPLE_TRACK_NEW_TRACK_THRESH"
 
 if [ ! -f "$ACTION_MODEL" ]; then
-    echo "[start_ai_stable][error] ACTION_MODEL checkpoint not found: $ACTION_MODEL"
-    exit 1
+    if [ "$ACTION_MODEL" != "$DEFAULT_ACTION_MODEL" ] && [ -f "$DEFAULT_ACTION_MODEL" ]; then
+        echo "[start_ai_stable][warning] Configured ACTION_MODEL not found: $ACTION_MODEL"
+        echo "[start_ai_stable][warning] Falling back to: $DEFAULT_ACTION_MODEL"
+        ACTION_MODEL="$DEFAULT_ACTION_MODEL"
+    else
+        echo "[start_ai_stable][error] ACTION_MODEL checkpoint not found: $ACTION_MODEL"
+        exit 1
+    fi
 fi
 
 if [ ! -f "$YOLO_MODEL" ]; then
