@@ -15,7 +15,9 @@ import pytest
 
 from ai.events.clip_worker import (
     _MAX_STALE_FACE_BOX_FRAMES,
+    _MOSAIC_MIN_BLOCK,
     _apply_per_frame_face_blur,
+    _blur_region,
     _face_box_from_keypoints,
     _upper_body_fallback_box,
 )
@@ -80,6 +82,37 @@ class TestScenario1Standing:
         assert x1 < 200 < x2
         assert y1 < 80 < y2
         assert y2 < 150  # 어깨(120) 근처까지 과도하게 안 내려감
+
+
+class TestFaceBoxCoversMouth:
+    """시각 확인(합성 얼굴 이미지)에서 실제로 재현된 버그: 어깨-머리 비율이 좁게
+    잡히면(shoulder_scale이 실제 얼굴 크기와 안 맞으면) 코/눈/귀 위아래로 똑같은
+    padding만 주는 예전 로직으로는 입이 블러 영역 밖에 남았음. COCO 17포인트엔
+    입/턱이 없어서 항상 코/눈/귀 클러스터 "아래"로 여유를 더 둬야 한다."""
+
+    def test_mouth_below_narrow_shoulders_is_still_covered(self):
+        # 시각 확인 스크립트와 동일한 비율: 머리 폭(귀-귀, 110px)이 어깨 폭(120px)과
+        # 거의 같음 -- 실제 성인 평균(어깨가 머리보다 훨씬 넓음)보다 좁게 잡힌 경우.
+        cx, cy = 200, 165
+        kps = [{"x": 0.0, "y": 0.0, "confidence": 0.0}] * 17
+        kps = list(kps)
+        kps[0] = _kp(cx, cy - 5, 0.9)  # nose
+        kps[1] = _kp(cx - 28, cy - 20, 0.9)  # L eye
+        kps[2] = _kp(cx + 28, cy - 20, 0.9)  # R eye
+        kps[3] = _kp(cx - 55, cy - 10, 0.85)  # L ear
+        kps[4] = _kp(cx + 55, cy - 10, 0.85)  # R ear
+        kps[5] = _kp(cx - 60, cy + 90, 0.9)  # L shoulder
+        kps[6] = _kp(cx + 60, cy + 90, 0.9)  # R shoulder
+        box = _box(TRACK_ID, cx - 90, cy - 110, cx + 90, cy + 200, kps)
+
+        region = _face_box_from_keypoints(box, WIDTH, HEIGHT)
+        assert region is not None
+        x1, y1, x2, y2 = region
+
+        mouth_x, mouth_y = cx, cy + 55  # 입은 코 기준으로 55px 아래
+        print(f"[mouth-coverage] region={region} mouth=({mouth_x},{mouth_y})")
+        assert x1 <= mouth_x <= x2
+        assert y1 <= mouth_y <= y2, "입이 블러 영역 밖에 남으면 안 됨 (회귀 시 여기서 실패)"
 
 
 class TestScenario2LyingOnSide:
@@ -236,6 +269,80 @@ class TestScenario7MultiplePeople:
         assert tiers["keypoint"] == 8  # 3 + 2 + 3
         assert tiers["stale_reuse"] == 1
         assert tiers["skipped"] == 0
+
+
+def _checkerboard(size, square=6):
+    img = np.zeros((size, size, 3), dtype=np.uint8)
+    for y in range(0, size, square):
+        for x in range(0, size, square):
+            if ((x // square) + (y // square)) % 2 == 0:
+                img[y : y + square, x : x + square] = 255
+    return img
+
+
+class TestBlurStrength:
+    """모자이크 전환 후 실제로 정보가 파괴되는지 픽셀 레벨로 검증.
+    좌표만 확인하던 기존 시나리오 1~7과 달리, 여기는 _blur_region()이 실제로
+    쓴 픽셀 값을 본다."""
+
+    def test_mosaic_destroys_checkerboard_pattern(self):
+        # 체크보드는 인접 픽셀이 계속 흑/백으로 뒤집혀서 분산이 매우 큼 -- 무늬가
+        # 남아있는지 여부를 분산 하나로 잘 드러내는 합성 패턴.
+        frame = _checkerboard(size=120, square=6)
+        region = (0, 0, 120, 120)
+        original_variance = float(np.var(frame.astype(np.float64)))
+
+        _blur_region(_cv2(), frame, region)
+
+        blurred_variance = float(np.var(frame.astype(np.float64)))
+        print(f"[mosaic] original_variance={original_variance:.1f} blurred_variance={blurred_variance:.1f}")
+
+        assert original_variance > 10000  # sanity check: 체크보드가 실제로 고분산인지
+        assert blurred_variance < original_variance * 0.05  # 95% 이상 정보 파괴
+
+    def test_small_far_away_face_region_still_gets_pixelated(self):
+        # 멀리 있는 사람처럼 얼굴 영역이 작을 때(20x20)도 블록 크기 하한
+        # (_MOSAIC_MIN_BLOCK)이 실제로 걸려서 뭉개지는지 확인.
+        size = 20
+        frame = _checkerboard(size=size, square=2)  # 아주 촘촘한 무늬
+        region = (0, 0, size, size)
+
+        # 하한이 없었다면 block = 20 // 8 = 2 (원본 체커 주기와 같아서 블러 효과가
+        # 거의 없었을 상황) -- 하한(6) 덕분에 실제로는 더 큰 block이 적용돼야 함.
+        assert _MOSAIC_MIN_BLOCK > size // 8
+
+        original_variance = float(np.var(frame.astype(np.float64)))
+        _blur_region(_cv2(), frame, region)
+        blurred_variance = float(np.var(frame.astype(np.float64)))
+        print(f"[small-face] original_variance={original_variance:.1f} blurred_variance={blurred_variance:.1f}")
+
+        assert blurred_variance < original_variance * 0.2
+
+    def test_call_site_end_to_end_still_destroys_detail(self):
+        # _blur_region()의 유일한 두 호출 지점은 _apply_per_frame_face_blur() 내부
+        # (keypoint 성공 경로 / stale-reuse 경로) 뿐 -- 시그니처가 그대로이므로
+        # end-to-end로 호출해도 실제 픽셀까지 정상적으로 바뀌는지 확인.
+        keypoints = _standing_keypoints(head_x=200, head_y=80)
+        box = _box(TRACK_ID, 150, 60, 250, 350, keypoints)
+        region = _face_box_from_keypoints(box, WIDTH, HEIGHT)
+        rx1, ry1, rx2, ry2 = region
+
+        frame = np.full((HEIGHT, WIDTH, 3), 200, dtype=np.uint8)
+        # 랜덤 노이즈를 씀 -- 체크보드 같은 규칙적 무늬는 그 주기가 우연히 모자이크
+        # 블록 크기와 맞아떨어지면(이 얼굴 박스는 작아서 block=6이 나옴) 블록 하나가
+        # 무늬 한 칸을 통째로 담아버려 분산이 잘 안 줄어드는 공진 현상이 생길 수 있음
+        # (실제 얼굴엔 이런 규칙성이 없으므로 문제 아님). 노이즈는 그런 우연이 없음.
+        rng = np.random.default_rng(0)
+        rx_w, ry_h = rx2 - rx1, ry2 - ry1
+        frame[ry1:ry2, rx1:rx2] = rng.integers(0, 256, size=(ry_h, rx_w, 3), dtype=np.uint8)
+        original_variance = float(np.var(frame[ry1:ry2, rx1:rx2].astype(np.float64)))
+
+        tiers = _apply_per_frame_face_blur(_cv2(), [frame], [[box]], WIDTH, HEIGHT)
+
+        assert tiers["keypoint"] == 1
+        blurred_variance = float(np.var(frame[ry1:ry2, rx1:rx2].astype(np.float64)))
+        print(f"[call-site] original_variance={original_variance:.1f} blurred_variance={blurred_variance:.1f}")
+        assert blurred_variance < original_variance * 0.3
 
 
 def _cv2():

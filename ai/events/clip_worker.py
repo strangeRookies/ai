@@ -19,6 +19,11 @@ _FFMPEG_ENCODER_CANDIDATES = ("h264_nvenc", "libx264")
 _HEAD_KEYPOINT_INDICES = (0, 1, 2, 3, 4)
 _SHOULDER_KEYPOINT_INDICES = (5, 6)
 _MIN_KEYPOINT_CONF = 0.3
+_FACE_PAD_RATIO = 0.35
+# 입/턱은 COCO 17포인트에 없어서 코/눈/귀 클러스터 아래쪽으로 별도 여유가 더 필요함.
+# 위/옆 padding과 같은 비율만 쓰면(특히 얼굴너비 대비 어깨너비가 좁게 잡히는 자세에서)
+# 입이 블러 영역 밖에 남는 걸 시각 확인으로 발견해서 아래쪽만 크게 늘림.
+_FACE_PAD_BOTTOM_RATIO = 0.85
 # 우선순위 3(직전 프레임 얼굴 위치 재사용) 최대 허용 연속 프레임 수 (~0.17s @30fps).
 # 이보다 오래 재사용하면 사람이 실제로 움직였을 때 옛 위치를 계속 우려먹게 되므로 제한.
 _MAX_STALE_FACE_BOX_FRAMES = 5
@@ -51,6 +56,8 @@ def _face_box_from_keypoints(box, width, height):
     ys = [p[1] for p in points]
     min_x, max_x = min(xs), max(xs)
     min_y, max_y = min(ys), max(ys)
+    head_width = max_x - min_x
+    head_height = max_y - min_y
 
     # keypoint는 점이라 얼굴 전체를 못 덮으므로 padding 필요.
     # 어깨너비를 척도로 써서 padding을 산출하고(사람 크기에 비례), 어깨가 안 잡히면
@@ -58,19 +65,24 @@ def _face_box_from_keypoints(box, width, height):
     shoulder_l = _kp_point(keypoints, _SHOULDER_KEYPOINT_INDICES[0])
     shoulder_r = _kp_point(keypoints, _SHOULDER_KEYPOINT_INDICES[1])
     if shoulder_l is not None and shoulder_r is not None:
-        scale = math.hypot(shoulder_r[0] - shoulder_l[0], shoulder_r[1] - shoulder_l[1])
+        shoulder_scale = math.hypot(shoulder_r[0] - shoulder_l[0], shoulder_r[1] - shoulder_l[1])
     else:
         bx1, by1, bx2, by2 = box.get("x1"), box.get("y1"), box.get("x2"), box.get("y2")
         if None not in (bx1, by1, bx2, by2):
-            scale = min(abs(float(bx2) - float(bx1)), abs(float(by2) - float(by1))) * 0.4
+            shoulder_scale = min(abs(float(bx2) - float(bx1)), abs(float(by2) - float(by1))) * 0.4
         else:
-            scale = max(max_x - min_x, max_y - min_y, 1.0) * 2.0
-    pad = max(scale * 0.35, 8.0)
+            shoulder_scale = max(head_width, head_height, 1.0) * 2.0
+    # 실측 얼굴 폭/높이도 후보에 넣음 -- 어깨가 자세/각도 때문에 실제 얼굴 크기와
+    # 안 맞게 좁게 잡히는 경우(예: 시각 확인에서 재현된 케이스)에도 최소한 감지된
+    # 얼굴 크기만큼은 padding을 확보하기 위함. max()라 기존보다 작아지진 않음.
+    scale = max(head_width, head_height, shoulder_scale)
+    pad = max(scale * _FACE_PAD_RATIO, 8.0)
+    bottom_pad = max(scale * _FACE_PAD_BOTTOM_RATIO, 16.0)
 
     x1_px = int(max(0, min_x - pad))
     y1_px = int(max(0, min_y - pad))
     x2_px = int(min(width, max_x + pad))
-    y2_px = int(min(height, max_y + pad))
+    y2_px = int(min(height, max_y + bottom_pad))
     if x2_px <= x1_px or y2_px <= y1_px:
         return None
     return (x1_px, y1_px, x2_px, y2_px)
@@ -96,13 +108,39 @@ def _upper_body_fallback_box(box, width, height, ratio=0.32):
     return (x1_px, y1_px, x2_px, y2_px)
 
 
+_MOSAIC_BLOCK_DIVISOR = 8
+_MOSAIC_MIN_BLOCK = 6
+_MOSAIC_FINISH_BLUR_KSIZE = 5
+
+
 def _blur_region(cv2_module, frame, region):
+    """모자이크(다운/업스케일) + 가벼운 마무리 블러.
+
+    순수 Gaussian은 영역이 작을수록(먼 거리의 사람 등) ksize도 같이 작아져서 실제
+    비식별 강도가 약해지는 문제가 있었음. 모자이크는 블록 하한(_MOSAIC_MIN_BLOCK)을
+    둬서 영역 크기와 무관하게 최소 뭉개짐을 보장하고, 정보 파괴(비가역성) 면에서도
+    순수 블러보다 강함.
+    """
     x1_px, y1_px, x2_px, y2_px = region
     roi = frame[y1_px:y2_px, x1_px:x2_px]
-    ksize = max(5, int(min(x2_px - x1_px, y2_px - y1_px) * 0.3))
-    if ksize % 2 == 0:
-        ksize += 1
-    frame[y1_px:y2_px, x1_px:x2_px] = cv2_module.GaussianBlur(roi, (ksize, ksize), 0)
+    h, w = roi.shape[:2]
+    if h <= 0 or w <= 0:
+        return
+
+    block = max(_MOSAIC_MIN_BLOCK, min(h, w) // _MOSAIC_BLOCK_DIVISOR)
+    small_w = max(1, w // block)
+    small_h = max(1, h // block)
+    # 다운스케일은 반드시 INTER_AREA(영역 평균) -- INTER_LINEAR는 다운스케일 시
+    # 블록 전체를 평균내지 않고 특정 좌표만 보간해서 앨리어싱이 생기고, 고주파
+    # 무늬(체크보드 등)가 제대로 안 뭉개짐.
+    mosaic = cv2_module.resize(roi, (small_w, small_h), interpolation=cv2_module.INTER_AREA)
+    mosaic = cv2_module.resize(mosaic, (w, h), interpolation=cv2_module.INTER_NEAREST)
+
+    ksize = _MOSAIC_FINISH_BLUR_KSIZE if _MOSAIC_FINISH_BLUR_KSIZE % 2 else _MOSAIC_FINISH_BLUR_KSIZE + 1
+    if min(h, w) >= ksize:
+        mosaic = cv2_module.GaussianBlur(mosaic, (ksize, ksize), 0)
+
+    frame[y1_px:y2_px, x1_px:x2_px] = mosaic
 
 
 def _apply_per_frame_face_blur(cv2_module, frames, frame_boxes, width, height):
