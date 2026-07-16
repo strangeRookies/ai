@@ -1,0 +1,63 @@
+{
+  "id": "task-2",
+  "subject": "Expose backward-compatible indexing CLI mode",
+  "description": "The indexing function is implemented but scripts/process_vlm.py main still always calls process(), so a Java ProcessBuilder cannot request the backend-ready envelope. Add an explicit backward-compatible CLI output mode (for example --output-mode vlm|index, default vlm). In index mode call process_index_payload and print its JSON; default behavior must remain the existing exact VLM JSON. Do not reinterpret output_urls. Add focused CLI tests for default compatibility, mock index-envelope stdout, invalid mode, and fail-closed real mode without de-identification. Run the full requested VLM/embedding suite, compileall, and diff check; commit excluding .gjc and record evidence.",
+  "title": "Expose backward-compatible indexing CLI mode",
+  "objective": "The indexing function is implemented but scripts/process_vlm.py main still always calls process(), so a Java ProcessBuilder cannot request the backend-ready envelope. Add an explicit backward-compatible CLI output mode (for example --output-mode vlm|index, default vlm). In index mode call process_index_payload and print its JSON; default behavior must remain the existing exact VLM JSON. Do not reinterpret output_urls. Add focused CLI tests for default compatibility, mock index-envelope stdout, invalid mode, and fail-closed real mode without de-identification. Run the full requested VLM/embedding suite, compileall, and diff check; commit excluding .gjc and record evidence.",
+  "status": "completed",
+  "owner": "worker-1",
+  "lane": "integration-fix",
+  "required_role": "executor",
+  "depends_on": [
+    "task-1"
+  ],
+  "version": 3,
+  "created_at": "2026-07-15T03:21:53.196Z",
+  "updated_at": "2026-07-15T03:24:26.631Z",
+  "assignee": "worker-1",
+  "completed_at": "2026-07-15T03:24:26.631Z",
+  "completion_evidence": {
+    "summary": "Added backward-compatible --output-mode vlm|index CLI dispatch with vlm as the unchanged default, versioned index JSON output, parser validation, and fail-closed real-mode coverage without changing output_urls semantics.",
+    "items": [
+      {
+        "kind": "command",
+        "status": "passed",
+        "summary": "Focused indexing CLI tests passed.",
+        "command": "python -m pytest tests/test_vlm_index_payload.py -q",
+        "output": "12 passed, 4 subtests passed in 0.26s"
+      },
+      {
+        "kind": "command",
+        "status": "passed",
+        "summary": "Full requested VLM and embedding suite passed.",
+        "command": "python -m pytest tests/test_vlm*.py tests/test_embedding_sdk.py -q",
+        "output": "48 passed, 49 subtests passed in 6.18s"
+      },
+      {
+        "kind": "command",
+        "status": "passed",
+        "summary": "Python source compilation passed.",
+        "command": "python -m compileall -q ai scripts"
+      },
+      {
+        "kind": "command",
+        "status": "passed",
+        "summary": "Git whitespace validation passed.",
+        "command": "git diff --check"
+      },
+      {
+        "kind": "artifact",
+        "status": "verified",
+        "summary": "Tracked CLI changes committed without .gjc runtime state.",
+        "artifact": "git commit 9c7a452",
+        "location": "9c7a452"
+      }
+    ],
+    "recorded_by": "worker-1",
+    "recorded_at": "2026-07-15T03:24:26.631Z",
+    "files": [
+      "scripts/process_vlm.py",
+      "tests/test_vlm_index_payload.py"
+    ]
+  }
+}

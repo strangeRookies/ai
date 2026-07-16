@@ -345,6 +345,7 @@ class ClipWriterWorker:
                             "source": "edge-ai",
                             "eventId": meta.get("evidenceId") or meta.get("event_timestamp"),
                             "track_id": str(meta.get("track_id", "")),
+                            "clip_object_key": upload_result.get("s3_key"),
                             "clip_url": s3_url,
                             "clip_path": str(output_path)
                         }

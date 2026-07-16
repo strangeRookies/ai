@@ -1,0 +1,17 @@
+{
+  "id": "ntf-ec2bb614120d00a65aaec70b",
+  "kind": "worker_lifecycle",
+  "team_name": "implement-the-vlm-keyframe-mvp-64c81ae0",
+  "recipient": "leader-fixed",
+  "source": {
+    "type": "worker",
+    "id": "worker-2"
+  },
+  "delivery_state": "queued",
+  "created_at": "2026-07-15T00:30:11.448Z",
+  "updated_at": "2026-07-15T01:04:39.163Z",
+  "replay_count": 9,
+  "pane_attempt_result": "queued",
+  "pane_attempt_reason": "tmux_delivery_recorded_without_injection",
+  "pane_attempt_at": "2026-07-15T01:04:39.071Z"
+}

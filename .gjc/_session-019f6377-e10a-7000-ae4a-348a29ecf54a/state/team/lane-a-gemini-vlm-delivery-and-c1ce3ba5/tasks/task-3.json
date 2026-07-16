@@ -1,0 +1,53 @@
+{
+  "id": "task-3",
+  "subject": "Extract shared de-identification contract module",
+  "description": "Remove the reverse dependency that would force the teammate deidentifier to import scripts/process_vlm.py. Move DeidentificationFrameReport, DeidentificationOutcome, and the callable protocol/type into a small import-safe AI module such as ai/vlm/deidentification_contracts.py. Have process_vlm import the shared contract. Keep implementation absent and fail closed. Update tests/imports, run python -m pytest tests/test_vlm*.py -q plus compileall and git diff --check, then commit excluding .gjc and record evidence.",
+  "title": "Extract shared de-identification contract module",
+  "objective": "Remove the reverse dependency that would force the teammate deidentifier to import scripts/process_vlm.py. Move DeidentificationFrameReport, DeidentificationOutcome, and the callable protocol/type into a small import-safe AI module such as ai/vlm/deidentification_contracts.py. Have process_vlm import the shared contract. Keep implementation absent and fail closed. Update tests/imports, run python -m pytest tests/test_vlm*.py -q plus compileall and git diff --check, then commit excluding .gjc and record evidence.",
+  "status": "completed",
+  "owner": "worker-1",
+  "lane": "architecture-fix",
+  "required_role": "executor",
+  "depends_on": [
+    "task-2"
+  ],
+  "version": 3,
+  "created_at": "2026-07-15T02:41:59.954Z",
+  "updated_at": "2026-07-15T02:44:09.517Z",
+  "assignee": "worker-1",
+  "completed_at": "2026-07-15T02:44:09.517Z",
+  "completion_evidence": {
+    "summary": "Extracted the de-identification frame report, outcome, and callable DTO boundary into import-safe ai/vlm/deidentification_contracts.py; process_vlm and tests now consume the shared module while preserving fail-closed behavior.",
+    "items": [
+      {
+        "kind": "command",
+        "status": "passed",
+        "summary": "Focused VLM suite, compileall, and diff integrity passed.",
+        "command": "python -m pytest tests/test_vlm*.py -q && python -m compileall -q ai/vlm scripts/process_vlm.py tests/test_vlm_gemini.py && git diff --check",
+        "output": "33 passed, 45 subtests passed in 4.22s; remaining commands exited 0"
+      },
+      {
+        "kind": "command",
+        "status": "passed",
+        "summary": "Shared contract imports without loading the process script.",
+        "command": "python -c \"import sys; import ai.vlm.deidentification_contracts as c; assert scripts.process_vlm not in sys.modules; assert c.DeidentifyFrames\"",
+        "output": "exit code 0"
+      },
+      {
+        "kind": "artifact",
+        "status": "verified",
+        "summary": "Changes committed without .gjc runtime state.",
+        "artifact": "git commit 3b6ecde2b01581e34a680660c08e456639f72272",
+        "location": "ai/vlm/deidentification_contracts.py; scripts/process_vlm.py; tests/test_vlm_gemini.py"
+      }
+    ],
+    "recorded_by": "worker-1",
+    "recorded_at": "2026-07-15T02:44:09.517Z",
+    "files": [
+      "ai/vlm/deidentification_contracts.py",
+      "scripts/process_vlm.py",
+      "tests/test_vlm_gemini.py"
+    ],
+    "notes": "No de-identification implementation or no-op fallback was added; only the shared DTO/callable contract was relocated."
+  }
+}

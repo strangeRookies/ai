@@ -1,0 +1,45 @@
+{
+  "id": "task-2",
+  "subject": "Align de-identification boundary with shared contract",
+  "description": "Correct process_vlm integration to match the agreed teammate contract: de-identification receives tuple[ExtractedKeyframe, ...] before conversion to VlmFramePayload and returns an outcome exposing transformed frames plus per-frame reports. Validate exactly eight reports, preserved ordering/timestamps/frame indexes, valid JPEG/hash via validate_keyframes, and PASS status/count consistency. Do not require every JPEG byte sequence to change because a frame with zero people may legitimately remain unchanged; rely on the report contract and fail closed. Keep the teammate implementation absent/injected and do not add a no-op. Update focused tests and rerun python -m pytest tests/test_vlm*.py -q.",
+  "title": "Align de-identification boundary with shared contract",
+  "objective": "Correct process_vlm integration to match the agreed teammate contract: de-identification receives tuple[ExtractedKeyframe, ...] before conversion to VlmFramePayload and returns an outcome exposing transformed frames plus per-frame reports. Validate exactly eight reports, preserved ordering/timestamps/frame indexes, valid JPEG/hash via validate_keyframes, and PASS status/count consistency. Do not require every JPEG byte sequence to change because a frame with zero people may legitimately remain unchanged; rely on the report contract and fail closed. Keep the teammate implementation absent/injected and do not add a no-op. Update focused tests and rerun python -m pytest tests/test_vlm*.py -q.",
+  "status": "completed",
+  "owner": "worker-1",
+  "lane": "verification-fix",
+  "required_role": "executor",
+  "depends_on": [
+    "task-1"
+  ],
+  "version": 3,
+  "created_at": "2026-07-15T02:37:11.119Z",
+  "updated_at": "2026-07-15T02:41:14.559Z",
+  "assignee": "worker-1",
+  "completed_at": "2026-07-15T02:41:14.559Z",
+  "completion_evidence": {
+    "summary": "Aligned Gemini de-identification with the ExtractedKeyframe outcome/report boundary, validating transformed keyframe integrity, preserved ordering metadata, exactly eight ordered PASS reports, and detected/de-identified count consistency while allowing valid unchanged zero-person frames.",
+    "items": [
+      {
+        "kind": "command",
+        "status": "passed",
+        "summary": "Focused VLM suite passed after the committed contract alignment.",
+        "command": "python -m pytest tests/test_vlm*.py -q",
+        "output": "33 passed, 45 subtests passed in 4.19s"
+      },
+      {
+        "kind": "artifact",
+        "status": "verified",
+        "summary": "Product changes committed without .gjc runtime state.",
+        "artifact": "git commit 1f441c59d6ca4cd5ffea4b43747d7f8ef66a88eb",
+        "location": "scripts/process_vlm.py; tests/test_vlm_gemini.py"
+      }
+    ],
+    "recorded_by": "worker-1",
+    "recorded_at": "2026-07-15T02:41:14.559Z",
+    "files": [
+      "scripts/process_vlm.py",
+      "tests/test_vlm_gemini.py"
+    ],
+    "notes": "The de-identification implementation remains injected and absent; no pass-through implementation was added. Only .gjc remains untracked."
+  }
+}

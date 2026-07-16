@@ -1,0 +1,35 @@
+{
+  "id": "task-1",
+  "subject": "Lane A — Extraction and contracts",
+  "description": "Lane A — Extraction and contracts\n\nInspect existing VLM code/tests first. Implement deterministic eight-frame extraction and strict frame/result contracts with focused unit coverage. Keep raw frames in memory and clean temporary downloads in finally paths.",
+  "title": "Lane A — Extraction and contracts",
+  "objective": "Lane A — Extraction and contracts\n\nInspect existing VLM code/tests first. Implement deterministic eight-frame extraction and strict frame/result contracts with focused unit coverage. Keep raw frames in memory and clean temporary downloads in finally paths.",
+  "status": "completed",
+  "owner": "worker-1",
+  "lane": "lane-a",
+  "required_role": "executor",
+  "version": 5,
+  "created_at": "2026-07-15T00:27:57.989Z",
+  "updated_at": "2026-07-15T00:34:10.703Z",
+  "assignee": "worker-1",
+  "completed_at": "2026-07-15T00:34:10.703Z",
+  "completion_evidence": {
+    "summary": "Implemented deterministic eight-frame OpenCV extraction, safe local/file/HTTP source handling, strict keyframe and vlm-result-v1 validation, and focused synthetic-video contract tests.",
+    "items": [
+      {
+        "kind": "command",
+        "status": "passed",
+        "summary": "Extraction, contract, and incident regression tests passed.",
+        "command": "python -m compileall -q ai/vlm && python -m pytest tests/test_incident_vlm_pipeline.py tests/test_vlm_keyframe_extractor.py -q && git diff --check",
+        "output": "18 passed, 7 subtests passed"
+      }
+    ],
+    "recorded_by": "worker-1",
+    "recorded_at": "2026-07-15T00:34:10.703Z",
+    "files": [
+      "ai/vlm/contracts.py",
+      "ai/vlm/keyframe_extractor.py",
+      "tests/test_vlm_keyframe_extractor.py"
+    ]
+  }
+}

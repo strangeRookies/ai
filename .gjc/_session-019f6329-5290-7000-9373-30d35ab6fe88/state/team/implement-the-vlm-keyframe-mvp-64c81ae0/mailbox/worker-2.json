@@ -1,0 +1,60 @@
+{
+  "messages": [
+    {
+      "message_id": "msg-04f245d95c9a061b6d23b9d3",
+      "from_worker": "worker-3",
+      "to_worker": "worker-2",
+      "body": "undefined",
+      "created_at": "2026-07-15T00:29:21.629Z"
+    },
+    {
+      "message_id": "msg-b746989eec05828e5a72f695",
+      "from_worker": "worker-1",
+      "to_worker": "worker-2",
+      "body": "Lane A API is ready in shared worktree: ai.vlm.keyframe_extractor.local_video_source(input_url) context manager; extract_eight_keyframes(path, start_sec=0.0, end_sec=None) -> tuple[ExtractedKeyframe,...] exactly 8; each has jpeg_bytes plus metadata() with index/timestamp_sec/frame_index/dimensions/sha256. ai.vlm.contracts.validate_keyframes(frames) and validate_vlm_result(mapping), strict schema_version vlm-result-v1. Focused tests pass.",
+      "created_at": "2026-07-15T00:33:30.217Z"
+    },
+    {
+      "message_id": "msg-09f93ed3946fa45d0a17f3af",
+      "from_worker": "worker-3",
+      "to_worker": "worker-2",
+      "body": "undefined",
+      "created_at": "2026-07-15T00:34:44.214Z"
+    },
+    {
+      "message_id": "msg-f1a62b07628caef01429908a",
+      "from_worker": "worker-2",
+      "to_worker": "worker-2",
+      "body": "Lane B complete in worker-2 worktree: ai/vlm_sdk.py, scripts/process_vlm.py, tests/test_vlm_process.py. Depends on Lane A extractor/contracts; integrate Lane A first. Combined verification: test_vlm_process 4 passed; incident pipeline 11 passed; compileall and diff-check passed.",
+      "created_at": "2026-07-15T00:37:20.648Z"
+    },
+    {
+      "message_id": "msg-8f91b93399cd4445766ef400",
+      "from_worker": "worker-2",
+      "to_worker": "worker-2",
+      "body": "Lane B committed as 325ebb1 (feat(vlm): wire extracted frames to mock provider). Commit contains only ai/vlm_sdk.py, scripts/process_vlm.py, tests/test_vlm_process.py; .gjc remains untracked.",
+      "created_at": "2026-07-15T00:43:29.473Z"
+    },
+    {
+      "message_id": "msg-405211884f499e852c43224b",
+      "from_worker": "worker-2",
+      "to_worker": "worker-2",
+      "body": "Task-5 complete: exact mock output/provider request contracts committed as 27d033d. Result has exactly 9 requested keys; provider frames expose only index/timestamp_sec/jpeg_bytes; incident ID comes from sanitized metadata; extraction metadata width/height flattened. Focused suites: 4 + 8 + 11 passed; compileall/diff-check passed. .gjc untracked.",
+      "created_at": "2026-07-15T00:53:58.753Z"
+    },
+    {
+      "message_id": "msg-a1aa23c1d4dd55b4e8c7a1c8",
+      "from_worker": "leader-fixed",
+      "to_worker": "worker-2",
+      "body": "CONFLICT: cherry-pick failed for worker-2; files: ai/vlm/contracts.py,tests/test_vlm_keyframe_extractor.py. Manual resolution required; runtime aborted the cherry-pick and did not auto-resolve.",
+      "created_at": "2026-07-15T00:54:35.702Z"
+    },
+    {
+      "message_id": "msg-d0566e3103fd603abb27ed91",
+      "from_worker": "worker-2",
+      "to_worker": "worker-2",
+      "body": "Task-6 complete in 0941913: required top-level incident_id/camera_login_id and finite non-bool clip_start_sec/clip_end_sec validation; extraction now receives the requested range; nested metadata preserved; invalid metadata fails safely. Tests: process 5 passed/7 subtests, extractor 8/12, incident 11; compileall/diff-check passed. .gjc remains untracked.",
+      "created_at": "2026-07-15T00:59:15.271Z"
+    }
+  ]
+}

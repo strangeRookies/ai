@@ -1,0 +1,68 @@
+{
+  "id": "task-5",
+  "subject": "Align exact public Mock VLM output and frame metadata contracts",
+  "description": "Correct the implementation to the user's exact contract. VlmAnalyzeResult/strict validation/output must allow exactly schema_version, incident_id, visual_event_type, people_count, korean_search_keywords, detailed_description_ko, frame_count, provider, is_mock; frame_count must equal 8, provider mock, is_mock true, incident_id from sanitized metadata. Do not require or emit uncertainty_notes. ExtractedKeyframe.metadata must expose top-level width and height (not dimensions). Ensure the provider-facing request exposes only ordered JPEG bytes, frame order/index, timestamp, and sanitized incident metadata; do not leak source URL, secrets, frame hashes/dimensions/frame_index unless needed internally before constructing provider request. Add tests asserting exact keys and requested example semantics; run all focused suites, compileall, diff check. Commit tracked changes only and provide evidence.",
+  "title": "Align exact public Mock VLM output and frame metadata contracts",
+  "objective": "Correct the implementation to the user's exact contract. VlmAnalyzeResult/strict validation/output must allow exactly schema_version, incident_id, visual_event_type, people_count, korean_search_keywords, detailed_description_ko, frame_count, provider, is_mock; frame_count must equal 8, provider mock, is_mock true, incident_id from sanitized metadata. Do not require or emit uncertainty_notes. ExtractedKeyframe.metadata must expose top-level width and height (not dimensions). Ensure the provider-facing request exposes only ordered JPEG bytes, frame order/index, timestamp, and sanitized incident metadata; do not leak source URL, secrets, frame hashes/dimensions/frame_index unless needed internally before constructing provider request. Add tests asserting exact keys and requested example semantics; run all focused suites, compileall, diff check. Commit tracked changes only and provide evidence.",
+  "status": "completed",
+  "owner": "worker-2",
+  "lane": "contract-correction",
+  "required_role": "executor",
+  "depends_on": [
+    "task-4"
+  ],
+  "version": 3,
+  "created_at": "2026-07-15T00:48:30.534Z",
+  "updated_at": "2026-07-15T00:53:50.473Z",
+  "assignee": "worker-2",
+  "completed_at": "2026-07-15T00:53:50.473Z",
+  "completion_evidence": {
+    "summary": "Aligned the exact nine-field mock result schema, isolated provider frame payloads from internal extraction metadata, propagated sanitized incident IDs, flattened extraction width/height metadata, and added exact-contract tests. Committed as 27d033d.",
+    "items": [
+      {
+        "kind": "command",
+        "status": "passed",
+        "summary": "CLI output and provider request contract tests passed.",
+        "command": "python -m pytest tests/test_vlm_process.py -q",
+        "output": "4 passed in 1.25s"
+      },
+      {
+        "kind": "command",
+        "status": "passed",
+        "summary": "Extraction metadata and strict result contract tests passed.",
+        "command": "python -m pytest tests/test_vlm_keyframe_extractor.py -q",
+        "output": "8 passed, 12 subtests passed in 0.83s"
+      },
+      {
+        "kind": "command",
+        "status": "passed",
+        "summary": "Incident pipeline regressions passed.",
+        "command": "python -m pytest tests/test_incident_vlm_pipeline.py -q",
+        "output": "11 passed in 0.11s"
+      },
+      {
+        "kind": "command",
+        "status": "passed",
+        "summary": "Compilation and whitespace validation passed.",
+        "command": "python -m compileall -q ai scripts && git diff --check"
+      },
+      {
+        "kind": "artifact",
+        "status": "verified",
+        "summary": "Tracked contract correction commit created without .gjc.",
+        "artifact": "git:27d033d",
+        "location": "27d033d"
+      }
+    ],
+    "recorded_by": "worker-2",
+    "recorded_at": "2026-07-15T00:53:50.473Z",
+    "files": [
+      "ai/vlm/contracts.py",
+      "ai/vlm/keyframe_extractor.py",
+      "ai/vlm_sdk.py",
+      "scripts/process_vlm.py",
+      "tests/test_vlm_keyframe_extractor.py",
+      "tests/test_vlm_process.py"
+    ]
+  }
+}

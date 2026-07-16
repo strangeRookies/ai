@@ -1,0 +1,7 @@
+{
+  "message_id": "msg-f0352f81ba21f40dba9bc0af",
+  "from_worker": "worker-2",
+  "to_worker": "worker-1",
+  "body": "Integrated against your API: process uses local_video_source + extract_eight_keyframes; VlmAnalyzeRequest now carries only frames and sanitized nested metadata; Mock validates frames/result. Temporary-copy combined test passed 4/4.",
+  "created_at": "2026-07-15T00:36:54.463Z"
+}

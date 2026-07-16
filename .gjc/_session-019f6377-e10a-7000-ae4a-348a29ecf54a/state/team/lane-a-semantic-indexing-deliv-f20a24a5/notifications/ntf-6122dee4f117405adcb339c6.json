@@ -1,0 +1,17 @@
+{
+  "id": "ntf-6122dee4f117405adcb339c6",
+  "kind": "mailbox_message",
+  "team_name": "lane-a-semantic-indexing-deliv-f20a24a5",
+  "recipient": "leader-fixed",
+  "source": {
+    "type": "message",
+    "id": "msg-cd64405677e4108e27cce3ab"
+  },
+  "delivery_state": "queued",
+  "created_at": "2026-07-15T03:24:42.556Z",
+  "updated_at": "2026-07-15T03:24:42.956Z",
+  "replay_count": 1,
+  "pane_attempt_result": "queued",
+  "pane_attempt_reason": "tmux_delivery_recorded_without_injection",
+  "pane_attempt_at": "2026-07-15T03:24:42.956Z"
+}

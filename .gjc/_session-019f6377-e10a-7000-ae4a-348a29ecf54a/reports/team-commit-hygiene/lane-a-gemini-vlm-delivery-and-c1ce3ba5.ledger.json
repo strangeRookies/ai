@@ -1,0 +1,68 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "recorded_at": "2026-07-15T02:32:48.430Z",
+      "operation": "integration_merge",
+      "worker_name": "worker-1",
+      "status": "applied",
+      "operational_commit": "adcf40b8ed169cd2f7dfd2dba8839d800c038a15",
+      "source_commit": "14bdafbc5e27d1d183398f24d380030a500dca6b",
+      "leader_head_before": "50d43385cc8f55341a2bd212b68c66f4b4ce0674",
+      "leader_head_after": "adcf40b8ed169cd2f7dfd2dba8839d800c038a15",
+      "worktree_path": "C:\\Users\\user\\.gjc\\wt\\team-7bbfdefb1004-worker-1",
+      "detail": "Leader created a runtime merge commit to integrate worker history."
+    },
+    {
+      "recorded_at": "2026-07-15T02:32:48.552Z",
+      "operation": "cross_rebase",
+      "worker_name": "worker-1",
+      "status": "skipped",
+      "leader_head_after": "adcf40b8ed169cd2f7dfd2dba8839d800c038a15",
+      "worktree_path": "C:\\Users\\user\\.gjc\\wt\\team-7bbfdefb1004-worker-1",
+      "detail": "Worker worktree is dirty after integration; automatic cross-rebase skipped."
+    },
+    {
+      "recorded_at": "2026-07-15T02:41:26.803Z",
+      "operation": "integration_cherry_pick",
+      "worker_name": "worker-1",
+      "status": "applied",
+      "operational_commit": "913d3e4c68b6a326a4768a2f98419134abdbbb51",
+      "source_commit": "1f441c59d6ca4cd5ffea4b43747d7f8ef66a88eb",
+      "leader_head_before": "adcf40b8ed169cd2f7dfd2dba8839d800c038a15",
+      "leader_head_after": "913d3e4c68b6a326a4768a2f98419134abdbbb51",
+      "worktree_path": "C:\\Users\\user\\.gjc\\wt\\team-7bbfdefb1004-worker-1",
+      "detail": "Leader cherry-picked diverged worker history."
+    },
+    {
+      "recorded_at": "2026-07-15T02:41:26.910Z",
+      "operation": "cross_rebase",
+      "worker_name": "worker-1",
+      "status": "skipped",
+      "leader_head_after": "913d3e4c68b6a326a4768a2f98419134abdbbb51",
+      "worktree_path": "C:\\Users\\user\\.gjc\\wt\\team-7bbfdefb1004-worker-1",
+      "detail": "Worker worktree is dirty after integration; automatic cross-rebase skipped."
+    },
+    {
+      "recorded_at": "2026-07-15T02:44:27.470Z",
+      "operation": "integration_cherry_pick",
+      "worker_name": "worker-1",
+      "status": "applied",
+      "operational_commit": "cd36a5cc910f379340b41cc8ef3ca97c4aef0161",
+      "source_commit": "3b6ecde2b01581e34a680660c08e456639f72272",
+      "leader_head_before": "913d3e4c68b6a326a4768a2f98419134abdbbb51",
+      "leader_head_after": "cd36a5cc910f379340b41cc8ef3ca97c4aef0161",
+      "worktree_path": "C:\\Users\\user\\.gjc\\wt\\team-7bbfdefb1004-worker-1",
+      "detail": "Leader cherry-picked diverged worker history."
+    },
+    {
+      "recorded_at": "2026-07-15T02:44:27.586Z",
+      "operation": "cross_rebase",
+      "worker_name": "worker-1",
+      "status": "skipped",
+      "leader_head_after": "cd36a5cc910f379340b41cc8ef3ca97c4aef0161",
+      "worktree_path": "C:\\Users\\user\\.gjc\\wt\\team-7bbfdefb1004-worker-1",
+      "detail": "Worker worktree is dirty after integration; automatic cross-rebase skipped."
+    }
+  ]
+}

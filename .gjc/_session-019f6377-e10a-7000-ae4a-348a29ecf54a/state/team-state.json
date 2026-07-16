@@ -1,0 +1,33 @@
+{
+  "skill": "team",
+  "version": 2,
+  "active": false,
+  "current_phase": "complete",
+  "team_name": "lane-a-semantic-indexing-deliv-f20a24a5",
+  "task_counts": {
+    "pending": 0,
+    "blocked": 0,
+    "in_progress": 0,
+    "completed": 2,
+    "failed": 0
+  },
+  "updated_at": "2026-07-15T03:29:01.290Z",
+  "receipt": {
+    "version": 1,
+    "skill": "team",
+    "owner": "gjc-runtime",
+    "command": "gjc team sync-team-summary",
+    "state_path": "C:\\Users\\user\\Documents\\최종 쉴더스\\strange_ai\\.gjc\\state\\sessions\\019f6377-e10a-7000-ae4a-348a29ecf54a\\skill-active-state.json",
+    "storage_path": "C:\\Users\\user\\Documents\\최종 쉴더스\\strange_ai\\.gjc\\state\\sessions\\019f6377-e10a-7000-ae4a-348a29ecf54a\\team-state.json",
+    "mutated_at": "2026-07-15T03:29:01.290Z",
+    "fresh_until": "2026-07-15T03:59:01.290Z",
+    "status": "fresh",
+    "mutation_id": "team:2026-07-15T03:29:01.290Z",
+    "content_sha256": {
+      "algorithm": "sha256",
+      "value": "b09e556d4eecfd377a15e624a7ff2fa0b93b5d76614e6f2757426a9ddea265a6",
+      "covered_path": "C:\\Users\\user\\Documents\\최종 쉴더스\\strange_ai\\.gjc\\_session-019f6377-e10a-7000-ae4a-348a29ecf54a\\state\\team-state.json",
+      "computed_at": "2026-07-15T03:29:01.292Z"
+    }
+  }
+}

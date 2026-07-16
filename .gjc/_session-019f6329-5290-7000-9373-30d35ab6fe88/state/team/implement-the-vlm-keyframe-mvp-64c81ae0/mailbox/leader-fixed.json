@@ -1,0 +1,214 @@
+{
+  "messages": [
+    {
+      "message_id": "msg-f905b8cd6757a7f0c8a114ce",
+      "from_worker": "worker-1",
+      "to_worker": "leader-fixed",
+      "body": "INTEGRATION REQUESTED: worker-1 has eligible git changes at a16774442881.",
+      "created_at": "2026-07-15T00:30:21.843Z"
+    },
+    {
+      "message_id": "msg-3cadbff28436445241c58678",
+      "from_worker": "worker-1",
+      "to_worker": "leader-fixed",
+      "body": "INTEGRATION REQUESTED: worker-1 has eligible git changes at a16774442881.",
+      "created_at": "2026-07-15T00:30:49.007Z"
+    },
+    {
+      "message_id": "msg-78eef9dd86c4a5dbac8229dc",
+      "from_worker": "worker-1",
+      "to_worker": "leader-fixed",
+      "body": "INTEGRATION REQUESTED: worker-1 has eligible git changes at a16774442881.",
+      "created_at": "2026-07-15T00:31:18.627Z"
+    },
+    {
+      "message_id": "msg-b0ca30337315c374d53c5668",
+      "from_worker": "worker-3",
+      "to_worker": "leader-fixed",
+      "body": "undefined",
+      "created_at": "2026-07-15T00:31:43.355Z"
+    },
+    {
+      "message_id": "msg-81f1b22b0f37f0463b38d55b",
+      "from_worker": "worker-2",
+      "to_worker": "leader-fixed",
+      "body": "INTEGRATION REQUESTED: worker-2 has eligible git changes at a16774442881.",
+      "created_at": "2026-07-15T00:32:03.761Z"
+    },
+    {
+      "message_id": "msg-fa0f821ff2a7112881ae1141",
+      "from_worker": "worker-3",
+      "to_worker": "leader-fixed",
+      "body": "INTEGRATION REQUESTED: worker-3 has eligible git changes at a16774442881.",
+      "created_at": "2026-07-15T00:32:20.331Z"
+    },
+    {
+      "message_id": "msg-1d220b8cbc96ed4d810d4a3e",
+      "from_worker": "worker-2",
+      "to_worker": "leader-fixed",
+      "body": "INTEGRATION REQUESTED: worker-2 has eligible git changes at a16774442881.",
+      "created_at": "2026-07-15T00:32:21.497Z"
+    },
+    {
+      "message_id": "msg-b1e5555d3a278359640780e9",
+      "from_worker": "worker-2",
+      "to_worker": "leader-fixed",
+      "body": "INTEGRATION REQUESTED: worker-2 has eligible git changes at a16774442881.",
+      "created_at": "2026-07-15T00:32:52.121Z"
+    },
+    {
+      "message_id": "msg-587e4af108f9997f9e8793a7",
+      "from_worker": "worker-1",
+      "to_worker": "leader-fixed",
+      "body": "Task-1 completed. Added ai/vlm/keyframe_extractor.py, ai/vlm/contracts.py, tests/test_vlm_keyframe_extractor.py. Deterministic 8 segment-center JPEGs, safe local/file/HTTP temp lifecycle, strict frame/result validation. Verification: compileall ai/vlm + incident/extractor pytest + diff check; 18 passed, 7 subtests passed. Please integrate these worker-1 files before Lane B final verification.",
+      "created_at": "2026-07-15T00:34:18.764Z"
+    },
+    {
+      "message_id": "msg-6343b72e22db0099cf0d7dd5",
+      "from_worker": "worker-3",
+      "to_worker": "leader-fixed",
+      "body": "undefined",
+      "created_at": "2026-07-15T00:36:50.149Z"
+    },
+    {
+      "message_id": "msg-4d5f113dd816056f787a81e7",
+      "from_worker": "worker-3",
+      "to_worker": "leader-fixed",
+      "body": "undefined",
+      "created_at": "2026-07-15T00:38:19.850Z"
+    },
+    {
+      "message_id": "msg-eb5c24c001c746fbbdafb5cc",
+      "from_worker": "worker-1",
+      "to_worker": "leader-fixed",
+      "body": "INTEGRATED: merged worker-1 b31ae2a57586 into leader.",
+      "created_at": "2026-07-15T00:40:49.338Z"
+    },
+    {
+      "message_id": "msg-1ec88ae3ca11796c8fd5c8f7",
+      "from_worker": "worker-3",
+      "to_worker": "leader-fixed",
+      "body": "INTEGRATED: cherry-picked 4fce75a951f5 from worker-3.",
+      "created_at": "2026-07-15T00:40:50.176Z"
+    },
+    {
+      "message_id": "msg-dada9333ccdf19228e027fca",
+      "from_worker": "worker-2",
+      "to_worker": "leader-fixed",
+      "body": "INTEGRATED: cherry-picked 325ebb18ec0f from worker-2.",
+      "created_at": "2026-07-15T00:44:04.326Z"
+    },
+    {
+      "message_id": "msg-6d268fe6b2db5955493b9d68",
+      "from_worker": "worker-1",
+      "to_worker": "leader-fixed",
+      "body": "INTEGRATION REQUESTED: worker-1 has eligible git changes at b31ae2a57586.",
+      "created_at": "2026-07-15T00:45:14.798Z"
+    },
+    {
+      "message_id": "msg-db163cf986a97c0086b10ef0",
+      "from_worker": "worker-1",
+      "to_worker": "leader-fixed",
+      "body": "INTEGRATION REQUESTED: worker-1 has eligible git changes at b31ae2a57586.",
+      "created_at": "2026-07-15T00:45:33.110Z"
+    },
+    {
+      "message_id": "msg-726583b4ae5c62514bac6109",
+      "from_worker": "worker-1",
+      "to_worker": "leader-fixed",
+      "body": "Task-4 completed and committed: d194dd8. validate_keyframes now compares declared sha256 with hashlib.sha256(jpeg_bytes).hexdigest(); mismatch test added. Focused digest regression + local VLM suites + compileall + diff check: 22 passed, 7 subtests. Full worker-3 regression was run too: 5 passed, 2 unrelated failures because worker-2 CLI/provider integration is absent from this isolated worker-1 baseline. Commit contains tracked files only; .gjc remains untracked.",
+      "created_at": "2026-07-15T00:47:08.474Z"
+    },
+    {
+      "message_id": "msg-88cec9f5746cb2b8b853f64b",
+      "from_worker": "worker-1",
+      "to_worker": "leader-fixed",
+      "body": "INTEGRATED: cherry-picked d194dd838af0 from worker-1.",
+      "created_at": "2026-07-15T00:47:46.399Z"
+    },
+    {
+      "message_id": "msg-e16de5d4b1aa3b49e8f56e84",
+      "from_worker": "worker-2",
+      "to_worker": "leader-fixed",
+      "body": "INTEGRATION REQUESTED: worker-2 has eligible git changes at 73065b8a6278.",
+      "created_at": "2026-07-15T00:49:51.838Z"
+    },
+    {
+      "message_id": "msg-9ff2caba01be2ff4c559877c",
+      "from_worker": "worker-2",
+      "to_worker": "leader-fixed",
+      "body": "INTEGRATION REQUESTED: worker-2 has eligible git changes at 73065b8a6278.",
+      "created_at": "2026-07-15T00:49:56.292Z"
+    },
+    {
+      "message_id": "msg-8153c02ca76589c158b0feed",
+      "from_worker": "worker-2",
+      "to_worker": "leader-fixed",
+      "body": "INTEGRATION REQUESTED: worker-2 has eligible git changes at 73065b8a6278.",
+      "created_at": "2026-07-15T00:50:24.660Z"
+    },
+    {
+      "message_id": "msg-e8f4493429a03b65c7353a7c",
+      "from_worker": "worker-2",
+      "to_worker": "leader-fixed",
+      "body": "INTEGRATION REQUESTED: worker-2 has eligible git changes at 73065b8a6278.",
+      "created_at": "2026-07-15T00:50:38.539Z"
+    },
+    {
+      "message_id": "msg-0a4e63dc289c741297f9985c",
+      "from_worker": "worker-2",
+      "to_worker": "leader-fixed",
+      "body": "INTEGRATION REQUESTED: worker-2 has eligible git changes at 73065b8a6278.",
+      "created_at": "2026-07-15T00:50:49.636Z"
+    },
+    {
+      "message_id": "msg-f75dc49abac5bf417a4fecb9",
+      "from_worker": "worker-2",
+      "to_worker": "leader-fixed",
+      "body": "INTEGRATION REQUESTED: worker-2 has eligible git changes at 73065b8a6278.",
+      "created_at": "2026-07-15T00:51:11.842Z"
+    },
+    {
+      "message_id": "msg-ac53019e647c27372e1858cf",
+      "from_worker": "worker-2",
+      "to_worker": "leader-fixed",
+      "body": "CONFLICT: cherry-pick failed for worker-2; files: ai/vlm/contracts.py,tests/test_vlm_keyframe_extractor.py. Manual resolution required; runtime aborted the cherry-pick and did not auto-resolve.",
+      "created_at": "2026-07-15T00:54:35.701Z"
+    },
+    {
+      "message_id": "msg-a73d95d8f93e051025927809",
+      "from_worker": "worker-2",
+      "to_worker": "leader-fixed",
+      "body": "INTEGRATION REQUESTED: worker-2 has eligible git changes at 27d033de10a9.",
+      "created_at": "2026-07-15T00:57:00.199Z"
+    },
+    {
+      "message_id": "msg-23c764226926f1dea7e13dd4",
+      "from_worker": "worker-2",
+      "to_worker": "leader-fixed",
+      "body": "INTEGRATION REQUESTED: worker-2 has eligible git changes at 27d033de10a9.",
+      "created_at": "2026-07-15T00:57:28.886Z"
+    },
+    {
+      "message_id": "msg-7300ad38853bf1e7d5ed68b9",
+      "from_worker": "worker-2",
+      "to_worker": "leader-fixed",
+      "body": "INTEGRATED: cherry-picked 09419136801c from worker-2.",
+      "created_at": "2026-07-15T00:59:21.212Z"
+    },
+    {
+      "message_id": "msg-33c9cde9afa0a84aaf2b2e00",
+      "from_worker": "worker-3",
+      "to_worker": "leader-fixed",
+      "body": "INTEGRATION REQUESTED: worker-3 has eligible git changes at 4fce75a951f5.",
+      "created_at": "2026-07-15T01:01:43.102Z"
+    },
+    {
+      "message_id": "msg-b509548ed0b48c09a9685cc6",
+      "from_worker": "worker-3",
+      "to_worker": "leader-fixed",
+      "body": "INTEGRATED: cherry-picked f4567c94f0ca from worker-3.",
+      "created_at": "2026-07-15T01:04:37.898Z"
+    }
+  ]
+}

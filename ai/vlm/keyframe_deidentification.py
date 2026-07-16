@@ -47,6 +47,10 @@ def deidentify_keyframes(
         raise KeyframeDeidentificationError("keyframe batch must not be empty")
 
     observations = _load_pose_observations(metadata or {})
+    if not observations:
+        raise KeyframeDeidentificationError(
+            "pose sidecar metadata is required for keyframe de-identification"
+        )
     processed_frames: list[ExtractedKeyframe] = []
     reports: list[DeidentificationFrameReport] = []
 
@@ -66,8 +70,6 @@ def deidentify_keyframes(
         frames=tuple(processed_frames),
         reports=tuple(reports),
     )
-
-
 def build_default_deidentify_frames(
     metadata: Mapping[str, object],
 ) -> Callable[[tuple[ExtractedKeyframe, ...]], DeidentificationOutcome]:
@@ -92,7 +94,9 @@ def _mask_single_frame(
             deidentified_count += 1
 
     if detected_count == 0:
-        return frame, 0, 0
+        raise KeyframeDeidentificationError(
+            "person may be present but no pose observation matched this keyframe"
+        )
 
     payload = _encode_jpeg(image)
     return (

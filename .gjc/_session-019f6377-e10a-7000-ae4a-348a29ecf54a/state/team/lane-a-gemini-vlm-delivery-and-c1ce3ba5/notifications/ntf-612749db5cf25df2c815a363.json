@@ -1,0 +1,17 @@
+{
+  "id": "ntf-612749db5cf25df2c815a363",
+  "kind": "mailbox_message",
+  "team_name": "lane-a-gemini-vlm-delivery-and-c1ce3ba5",
+  "recipient": "leader-fixed",
+  "source": {
+    "type": "message",
+    "id": "msg-36d5db617bc03496eadb4f04"
+  },
+  "delivery_state": "queued",
+  "created_at": "2026-07-15T02:26:00.929Z",
+  "updated_at": "2026-07-15T02:44:27.712Z",
+  "replay_count": 5,
+  "pane_attempt_result": "queued",
+  "pane_attempt_reason": "tmux_delivery_recorded_without_injection",
+  "pane_attempt_at": "2026-07-15T02:44:27.711Z"
+}

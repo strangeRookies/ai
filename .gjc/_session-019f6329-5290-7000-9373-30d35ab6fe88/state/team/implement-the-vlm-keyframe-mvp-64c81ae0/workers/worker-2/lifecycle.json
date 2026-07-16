@@ -1,0 +1,14 @@
+{
+  "worker": "worker-2",
+  "lifecycle_state": "stopped",
+  "worker_status_state": "done",
+  "pane_id": "%5",
+  "updated_at": "2026-07-15T01:05:10.298Z",
+  "pid": 0,
+  "started_at": "2026-07-15T00:28:18.646Z",
+  "shutdown_request_id": "shutdown-bcbfe097ccb07dc0cc0adf8c",
+  "shutdown_requested_at": "2026-07-15T01:05:09.888Z",
+  "shutdown_mode": "graceful",
+  "stopped_at": "2026-07-15T01:05:10.289Z",
+  "stop_reason": "graceful_shutdown"
+}

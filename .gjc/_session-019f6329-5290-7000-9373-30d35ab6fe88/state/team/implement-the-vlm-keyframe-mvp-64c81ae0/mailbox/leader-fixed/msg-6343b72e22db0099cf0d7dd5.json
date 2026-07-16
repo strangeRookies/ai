@@ -1,0 +1,7 @@
+{
+  "message_id": "msg-6343b72e22db0099cf0d7dd5",
+  "from_worker": "worker-3",
+  "to_worker": "leader-fixed",
+  "body": "undefined",
+  "created_at": "2026-07-15T00:36:50.149Z"
+}

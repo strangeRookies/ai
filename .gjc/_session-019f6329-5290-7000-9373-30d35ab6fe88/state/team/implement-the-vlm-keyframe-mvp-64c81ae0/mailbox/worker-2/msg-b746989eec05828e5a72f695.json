@@ -1,0 +1,7 @@
+{
+  "message_id": "msg-b746989eec05828e5a72f695",
+  "from_worker": "worker-1",
+  "to_worker": "worker-2",
+  "body": "Lane A API is ready in shared worktree: ai.vlm.keyframe_extractor.local_video_source(input_url) context manager; extract_eight_keyframes(path, start_sec=0.0, end_sec=None) -> tuple[ExtractedKeyframe,...] exactly 8; each has jpeg_bytes plus metadata() with index/timestamp_sec/frame_index/dimensions/sha256. ai.vlm.contracts.validate_keyframes(frames) and validate_vlm_result(mapping), strict schema_version vlm-result-v1. Focused tests pass.",
+  "created_at": "2026-07-15T00:33:30.217Z"
+}

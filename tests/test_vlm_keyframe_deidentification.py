@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 
 from ai.vlm.deidentification_contracts import DeidentificationOutcome
-from ai.vlm.keyframe_deidentification import deidentify_keyframes
+from ai.vlm.keyframe_deidentification import KeyframeDeidentificationError, deidentify_keyframes
 from ai.vlm.keyframe_extractor import ExtractedKeyframe
 from scripts.process_vlm import MetadataJson, ProcessVlmArgs, normalize_processing_metadata, process
 
@@ -79,12 +79,10 @@ class KeyframeDeidentificationTest(unittest.TestCase):
         self.assertEqual(outcome.reports[0].deidentified_person_count, 1)
         self.assertNotEqual(outcome.frames[0].jpeg_bytes, frame.jpeg_bytes)
 
-    def test_zero_person_frames_remain_unchanged(self) -> None:
+    def test_missing_pose_sidecar_is_rejected(self) -> None:
         frame = _frame_with_face()
-        outcome = deidentify_keyframes((frame,), {})
-        self.assertEqual(outcome.frames[0].jpeg_bytes, frame.jpeg_bytes)
-        self.assertEqual(outcome.reports[0].detected_person_count, 0)
-        self.assertEqual(outcome.reports[0].deidentified_person_count, 0)
+        with self.assertRaises(KeyframeDeidentificationError):
+            deidentify_keyframes((frame,), {})
 
     def test_normalize_processing_metadata_maps_backend_fields(self) -> None:
         normalized = normalize_processing_metadata(
@@ -136,7 +134,7 @@ class ProcessGeminiDeidentificationWiringTest(unittest.TestCase):
 
         self.assertEqual(provider.calls, 1)
         self.assertEqual(len(provider.request.frames), 8)
-        upload_mock.assert_called_once()
+        upload_mock.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "active": true,
+  "skill": "ultragoal",
+  "keyword": "/skill:ultragoal",
+  "phase": "goal-planning",
+  "activated_at": "2026-07-14T08:17:45.349Z",
+  "updated_at": "2026-07-14T08:17:45.349Z",
+  "source": "gjc-skill-invocation",
+  "session_id": "019f5faf-d869-7000-abbe-d36f814d25d3",
+  "initialized_mode": "ultragoal",
+  "initialized_state_path": "C:\\Users\\user\\Documents\\최종 쉴더스\\strange_ai\\.gjc\\_session-019f5faf-d869-7000-abbe-d36f814d25d3\\state\\ultragoal-state.json",
+  "active_skills": [
+    {
+      "skill": "ultragoal",
+      "phase": "goal-planning",
+      "active": true,
+      "activated_at": "2026-07-14T08:17:45.349Z",
+      "updated_at": "2026-07-14T08:17:45.349Z",
+      "session_id": "019f5faf-d869-7000-abbe-d36f814d25d3"
+    }
+  ],
+  "source_state_revision": 2,
+  "state_revision": 2
+}

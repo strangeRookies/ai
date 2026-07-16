@@ -1,0 +1,48 @@
+{
+  "messages": [
+    {
+      "message_id": "msg-b780c1978f1a166e0c9df65a",
+      "from_worker": "worker-2",
+      "to_worker": "worker-3",
+      "body": "Lane B will update tests/test_vlm_process.py for synthetic local/file CLI success and nested metadata/provider integration. Please focus additional extraction/error regressions in a separate test file or coordinate to avoid overlap.",
+      "created_at": "2026-07-15T00:32:33.428Z",
+      "delivered_at": "2026-07-15T00:35:18.649Z"
+    },
+    {
+      "message_id": "msg-067052e816125e50ae2e1736",
+      "from_worker": "worker-2",
+      "to_worker": "worker-3",
+      "body": "Lane B tests/test_vlm_process.py now covers nested metadata, secret redaction, file:// exact 8 ordered JPEG provider input, local CLI one-line stdout, invalid metadata stderr. Combined with Lane A files: 4 passed.",
+      "created_at": "2026-07-15T00:36:55.966Z",
+      "delivered_at": "2026-07-15T00:37:09.901Z"
+    },
+    {
+      "message_id": "msg-52c38c3ed4b44b29bcbf6ea5",
+      "from_worker": "worker-2",
+      "to_worker": "worker-3",
+      "body": "Lane B complete in worker-2 worktree: ai/vlm_sdk.py, scripts/process_vlm.py, tests/test_vlm_process.py. Depends on Lane A extractor/contracts; integrate Lane A first. Combined verification: test_vlm_process 4 passed; incident pipeline 11 passed; compileall and diff-check passed.",
+      "created_at": "2026-07-15T00:37:20.650Z"
+    },
+    {
+      "message_id": "msg-5653794d845f4d9d57c3f6ae",
+      "from_worker": "worker-2",
+      "to_worker": "worker-3",
+      "body": "Lane B committed as 325ebb1 (feat(vlm): wire extracted frames to mock provider). Commit contains only ai/vlm_sdk.py, scripts/process_vlm.py, tests/test_vlm_process.py; .gjc remains untracked.",
+      "created_at": "2026-07-15T00:43:29.475Z"
+    },
+    {
+      "message_id": "msg-9f1ff42b8617f761406779b9",
+      "from_worker": "worker-2",
+      "to_worker": "worker-3",
+      "body": "Task-5 complete: exact mock output/provider request contracts committed as 27d033d. Result has exactly 9 requested keys; provider frames expose only index/timestamp_sec/jpeg_bytes; incident ID comes from sanitized metadata; extraction metadata width/height flattened. Focused suites: 4 + 8 + 11 passed; compileall/diff-check passed. .gjc untracked.",
+      "created_at": "2026-07-15T00:53:58.750Z"
+    },
+    {
+      "message_id": "msg-724249ce82c28ecc3a8c1366",
+      "from_worker": "worker-2",
+      "to_worker": "worker-3",
+      "body": "Task-6 complete in 0941913: required top-level incident_id/camera_login_id and finite non-bool clip_start_sec/clip_end_sec validation; extraction now receives the requested range; nested metadata preserved; invalid metadata fails safely. Tests: process 5 passed/7 subtests, extractor 8/12, incident 11; compileall/diff-check passed. .gjc remains untracked.",
+      "created_at": "2026-07-15T00:59:15.274Z"
+    }
+  ]
+}

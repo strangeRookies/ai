@@ -1,0 +1,7 @@
+{
+  "message_id": "msg-3a08cb06af508f436ca60b4f",
+  "from_worker": "worker-2",
+  "to_worker": "worker-1",
+  "body": "Lane B integrating process_vlm and VlmAnalyzeRequest. Please share intended extractor/contracts module API as soon as settled; request must carry exactly eight ordered JPEG payloads plus frame metadata.",
+  "created_at": "2026-07-15T00:30:20.905Z"
+}

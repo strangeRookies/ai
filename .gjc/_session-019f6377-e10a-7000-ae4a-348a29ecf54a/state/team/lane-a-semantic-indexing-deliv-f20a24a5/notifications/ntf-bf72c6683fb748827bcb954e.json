@@ -1,0 +1,17 @@
+{
+  "id": "ntf-bf72c6683fb748827bcb954e",
+  "kind": "worker_lifecycle",
+  "team_name": "lane-a-semantic-indexing-deliv-f20a24a5",
+  "recipient": "leader-fixed",
+  "source": {
+    "type": "worker",
+    "id": "worker-1"
+  },
+  "delivery_state": "queued",
+  "created_at": "2026-07-15T03:18:30.301Z",
+  "updated_at": "2026-07-15T03:24:42.982Z",
+  "replay_count": 1,
+  "pane_attempt_result": "queued",
+  "pane_attempt_reason": "tmux_delivery_recorded_without_injection",
+  "pane_attempt_at": "2026-07-15T03:24:42.976Z"
+}

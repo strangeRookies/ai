@@ -1,0 +1,7 @@
+{
+  "message_id": "msg-1186502a32fb975b1a988c04",
+  "from_worker": "worker-1",
+  "to_worker": "leader-fixed",
+  "body": "INTEGRATED: merged worker-1 57f03b88a324 into leader.",
+  "created_at": "2026-07-15T03:18:30.030Z"
+}
