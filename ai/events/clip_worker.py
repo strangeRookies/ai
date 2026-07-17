@@ -484,9 +484,12 @@ class ClipWriterWorker:
                         # Pass through primary snapshot key if present in metadata (decoupled from VLM).
                         # Never copy clip key into snapshot_object_key.
                         snap_key = (meta.get("snapshot_object_key")
-                                    or meta.get("snapshotObjectKey")
-                                    or meta.get("snapshot_url")
-                                    or meta.get("snapshotUrl"))
+                                    or meta.get("snapshotObjectKey"))
+                        # Accept only canonical snapshots/*.jpg keys (never clip URLs/paths)
+                        if isinstance(snap_key, str):
+                            snap_key = snap_key.strip()
+                            if not (snap_key.startswith("snapshots/") and snap_key.endswith(".jpg")):
+                                snap_key = None
                         if snap_key:
                             event_payload["snapshot_object_key"] = snap_key
                             event_payload["snapshotObjectKey"] = snap_key
