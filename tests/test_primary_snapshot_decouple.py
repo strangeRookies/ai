@@ -18,6 +18,7 @@ from unittest.mock import patch
 
 import numpy as np
 
+from ai.storage.uploader import resolve_s3_bucket_name
 from ai.storage.snapshot_uploader import (
     _build_snapshot_key,
     attach_primary_snapshot_if_enabled,
@@ -32,6 +33,23 @@ from ai.storage.snapshot_uploader import (
 
 def _dummy_frame():
     return np.zeros((8, 8, 3), dtype="uint8")
+
+
+class StorageBucketConfigTest(unittest.TestCase):
+    def test_legacy_bucket_name_remains_supported(self):
+        with patch.dict(os.environ, {"S3_BUCKET_NAME": "legacy-bucket"}, clear=True):
+            self.assertEqual(resolve_s3_bucket_name(), "legacy-bucket")
+
+    def test_canonical_bucket_name_takes_precedence(self):
+        with patch.dict(
+            os.environ,
+            {
+                "AWS_S3_BUCKET_NAME": "canonical-bucket",
+                "S3_BUCKET_NAME": "legacy-bucket",
+            },
+            clear=True,
+        ):
+            self.assertEqual(resolve_s3_bucket_name(), "canonical-bucket")
 
 
 class PrimarySnapshotFlagsTest(unittest.TestCase):
