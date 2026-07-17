@@ -782,7 +782,7 @@ def faint_probability(prediction):
     return None
 
 
-DEFAULT_EXIT_MIN_CONSECUTIVE = 2
+DEFAULT_EXIT_MIN_CONSECUTIVE = 40
 DEFAULT_EXIT_COOLDOWN_SECONDS = 60.0
 
 
@@ -831,7 +831,7 @@ class ExitEventPostProcessor:
         self._consecutive_by_track[f"{camera_id}:track:{track_id}"] = 0
 
 
-DEFAULT_HAZARD_MIN_CONSECUTIVE = 2
+DEFAULT_HAZARD_MIN_CONSECUTIVE = 40
 DEFAULT_HAZARD_COOLDOWN_SECONDS = 60.0
 
 
