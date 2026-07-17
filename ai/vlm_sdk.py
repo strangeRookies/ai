@@ -6,6 +6,7 @@ import base64
 import hashlib
 import json
 import math
+import logging
 import os
 import socket
 import time
@@ -16,9 +17,15 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from ai.gemini_runtime import (
+    gemini_provider_call_slot,
+    gemini_retry_delay,
+    record_gemini_429,
+)
 from ai.vlm.contracts import VLM_RESULT_SCHEMA_VERSION, validate_vlm_result
 from ai.vlm.keyframe_extractor import KEYFRAME_COUNT
 from ai.vlm.provider_mode import resolve_vlm_provider_name, vlm_force_mock
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,9 +165,20 @@ def _incident_id(metadata: Mapping[str, object]) -> str:
 class GeminiTransportError(RuntimeError):
     """Sanitized Gemini transport failure safe to surface without request data."""
 
-    def __init__(self, message: str, *, transient: bool) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        transient: bool,
+        status_code: int | None = None,
+        model: str | None = None,
+        api_path: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.transient = transient
+        self.status_code = status_code
+        self.model = model
+        self.api_path = api_path
 
 
 class GeminiTransport(Protocol):
@@ -225,10 +243,8 @@ def _default_gemini_transport(
     payload: Mapping[str, object],
     timeout_sec: float,
 ) -> Mapping[str, Any]:
-    endpoint = (
-        "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{urllib.parse.quote(model, safe='')}:generateContent"
-    )
+    api_path = f"/v1beta/models/{urllib.parse.quote(model, safe='')}:generateContent"
+    endpoint = f"https://generativelanguage.googleapis.com{api_path}"
     body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     request = urllib.request.Request(
         endpoint,
@@ -243,6 +259,9 @@ def _default_gemini_transport(
         raise GeminiTransportError(
             f"Gemini request failed with HTTP {exc.code}",
             transient=exc.code in {408, 429} or 500 <= exc.code < 600,
+            status_code=exc.code,
+            model=model,
+            api_path=api_path,
         ) from None
     except (TimeoutError, socket.timeout):
         raise GeminiTransportError("Gemini request timed out", transient=True) from None
@@ -332,9 +351,10 @@ class GeminiVlmProvider:
         *,
         model: str | None = None,
         timeout_sec: float | None = None,
-        max_attempts: int = 3,
+        max_attempts: int = 5,
         transport: GeminiTransport = _default_gemini_transport,
         sleep: Callable[[float], None] = time.sleep,
+        random_value: Callable[[], float] | None = None,
     ) -> None:
         self._api_key = api_key
         self._model = (model or os.getenv("GEMINI_MODEL", "gemini-2.5-flash")).strip()
@@ -353,6 +373,7 @@ class GeminiVlmProvider:
         self._max_attempts = max_attempts
         self._transport = transport
         self._sleep = sleep
+        self._random_value = random_value
 
     def analyze(self, request: VlmAnalyzeRequest) -> VlmAnalyzeResult:
         if not self._api_key:
@@ -362,17 +383,30 @@ class GeminiVlmProvider:
         response: Mapping[str, Any] | None = None
         for attempt in range(self._max_attempts):
             try:
-                response = self._transport(
-                    api_key=self._api_key,
-                    model=self._model,
-                    payload=payload,
-                    timeout_sec=self._timeout_sec,
-                )
+                with gemini_provider_call_slot():
+                    response = self._transport(
+                        api_key=self._api_key,
+                        model=self._model,
+                        payload=payload,
+                        timeout_sec=self._timeout_sec,
+                    )
                 break
             except GeminiTransportError as exc:
+                if exc.status_code == 429:
+                    record_gemini_429("vlm")
+                if exc.status_code == 404:
+                    logger.error(
+                        "Gemini VLM model not found: model=%s api_path=%s",
+                        exc.model or self._model,
+                        exc.api_path or f"/v1beta/models/{urllib.parse.quote(self._model, safe='')}:generateContent",
+                    )
                 if not exc.transient or attempt + 1 >= self._max_attempts:
                     raise
-                self._sleep(0.25 * (2**attempt))
+                if self._random_value is None:
+                    delay = gemini_retry_delay(attempt)
+                else:
+                    delay = gemini_retry_delay(attempt, random_value=self._random_value)
+                self._sleep(delay)
         if response is None:  # defensive; loop always returns or raises
             raise GeminiTransportError("Gemini request failed", transient=False)
 
