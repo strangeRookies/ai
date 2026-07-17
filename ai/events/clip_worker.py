@@ -11,8 +11,7 @@ from pathlib import Path
 
 from ai.events.event_clip import EventClipTask
 from ai.storage.uploader import upload_clip
-from ai.storage.snapshot_uploader import encode_frame_jpeg, snapshot_capture_enabled, snapshot_upload_enabled, upload_snapshot_jpeg
-from ai.storage.uploader import upload_clip
+from ai.storage.snapshot_uploader import encode_frame_jpeg, upload_snapshot_jpeg
 
 # 브라우저 재생 호환을 위해 우선 시도할 ffmpeg 인코더 순서 (GPU면 nvenc가 더 빠름)
 _FFMPEG_ENCODER_CANDIDATES = ("h264_nvenc", "libx264")
@@ -448,7 +447,7 @@ class ClipWriterWorker:
                             f"duration={duration:.3f}s event_offset={event_offset:.3f}s",
                             file=sys.stderr,
                         )
-                        if snapshot_capture_enabled() and snapshot_upload_enabled() and event_id:
+                        if event_id:
                             thumbnail_frame = (
                                 task.frames[event_index]
                                 if 0 <= event_index < len(task.frames) and hasattr(task.frames[event_index], "shape")
