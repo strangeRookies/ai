@@ -166,12 +166,13 @@ class GeminiVlmProviderTest(unittest.TestCase):
             max_attempts=3,
             transport=transient_then_success,
             sleep=sleeps.append,
+            random_value=lambda: 0.0,
         )
         provider.analyze(
             VlmAnalyzeRequest(_provider_frames(), {"incident_id": "inc-1"})
         )
         self.assertEqual(attempts, 3)
-        self.assertEqual(sleeps, [0.25, 0.5])
+        self.assertEqual(sleeps, [1.0, 2.0])
 
         malformed_calls = 0
 

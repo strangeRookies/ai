@@ -4,19 +4,27 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 import os
 import socket
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Final, Protocol
+from ai.gemini_runtime import (
+    gemini_provider_call_slot,
+    gemini_retry_delay,
+    record_gemini_429,
+)
 
 from ai.vlm.provider_mode import resolve_embedding_provider_name, vlm_force_mock
 
 EMBEDDING_DIMENSION: Final = 768
+logger = logging.getLogger(__name__)
 
 
 class EmbeddingError(RuntimeError):
@@ -24,9 +32,20 @@ class EmbeddingError(RuntimeError):
 
 
 class EmbeddingTransportError(EmbeddingError):
-    def __init__(self, message: str, *, transient: bool) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        transient: bool,
+        status_code: int | None = None,
+        model: str | None = None,
+        api_path: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.transient = transient
+        self.status_code = status_code
+        self.model = model
+        self.api_path = api_path
 
 
 class EmbeddingProvider(Protocol):
@@ -93,9 +112,11 @@ class GeminiEmbeddingProvider:
         model: str = "gemini-embedding-001",
         *,
         timeout_sec: float = 30.0,
-        max_attempts: int = 3,
+        max_attempts: int = 5,
         transport: EmbeddingTransport | None = None,
-        retry_delay_sec: float = 0.1,
+        retry_delay_sec: float | None = None,
+        sleep: Callable[[float], None] = time.sleep,
+        random_value: Callable[[], float] | None = None,
     ) -> None:
         if not isinstance(timeout_sec, (int, float)) or not math.isfinite(timeout_sec) or timeout_sec <= 0:
             raise ValueError("embedding timeout_sec must be finite and positive")
@@ -106,7 +127,9 @@ class GeminiEmbeddingProvider:
         self._timeout_sec = float(timeout_sec)
         self._max_attempts = max_attempts
         self._transport = transport or _gemini_embedding_transport
-        self._retry_delay_sec = max(0.0, float(retry_delay_sec))
+        self._retry_delay_sec = None if retry_delay_sec is None else max(0.0, float(retry_delay_sec))
+        self._sleep = sleep
+        self._random_value = random_value
 
     def model_name(self) -> str:
         return f"gemini-{self._model}"
@@ -123,30 +146,43 @@ class GeminiEmbeddingProvider:
             "content": {"parts": [{"text": normalized}]},
             "outputDimensionality": self.dimension(),
         }
-        for attempt in range(1, self._max_attempts + 1):
+        for attempt in range(self._max_attempts):
             try:
-                body = self._transport(
-                    api_key=self._api_key,
-                    model=self._model,
-                    payload=payload,
-                    timeout_sec=self._timeout_sec,
-                )
+                with gemini_provider_call_slot():
+                    body = self._transport(
+                        api_key=self._api_key,
+                        model=self._model,
+                        payload=payload,
+                        timeout_sec=self._timeout_sec,
+                    )
                 return _validate_vector(_extract_embedding(body), self.dimension())
             except EmbeddingTransportError as exc:
-                if not exc.transient or attempt == self._max_attempts:
+                if exc.status_code == 429:
+                    record_gemini_429("embedding")
+                if exc.status_code == 404:
+                    logger.error(
+                        "Gemini embedding model not found: model=%s api_path=%s",
+                        exc.model or self._model,
+                        exc.api_path or f"/v1beta/models/{urllib.parse.quote(self._model, safe='')}:embedContent",
+                    )
+                if not exc.transient or attempt + 1 >= self._max_attempts:
                     raise
-                if self._retry_delay_sec:
-                    time.sleep(self._retry_delay_sec)
+                if self._retry_delay_sec is not None:
+                    delay = self._retry_delay_sec
+                elif self._random_value is not None:
+                    delay = gemini_retry_delay(attempt, random_value=self._random_value)
+                else:
+                    delay = gemini_retry_delay(attempt)
+                if delay:
+                    self._sleep(delay)
         raise EmbeddingError("embedding request failed")  # pragma: no cover
 
 
 def _gemini_embedding_transport(
     *, api_key: str, model: str, payload: Mapping[str, object], timeout_sec: float
 ) -> Mapping[str, Any]:
-    url = (
-        "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{model}:embedContent?key={api_key}"
-    )
+    api_path = f"/v1beta/models/{urllib.parse.quote(model, safe='')}:embedContent"
+    url = f"https://generativelanguage.googleapis.com{api_path}?key={api_key}"
     request = urllib.request.Request(
         url,
         data=json.dumps(payload).encode("utf-8"),
@@ -160,6 +196,9 @@ def _gemini_embedding_transport(
         raise EmbeddingTransportError(
             f"Gemini embedding request failed with HTTP {exc.code}",
             transient=exc.code in {408, 429} or 500 <= exc.code < 600,
+            status_code=exc.code,
+            model=model,
+            api_path=api_path,
         ) from None
     except (TimeoutError, socket.timeout):
         raise EmbeddingTransportError("Gemini embedding request timed out", transient=True) from None
@@ -202,7 +241,7 @@ def resolve_provider(provider_name: str | None = None, api_key: str | None = Non
     if resolved == "gemini":
         model = os.getenv("GEMINI_EMBEDDING_MODEL", os.getenv("VLM_QUERY_EMBEDDING_MODEL", "gemini-embedding-001"))
         timeout = _environment_float("EMBEDDING_TIMEOUT_SEC", 30.0)
-        attempts = _environment_int("EMBEDDING_MAX_ATTEMPTS", 3)
+        attempts = _environment_int("EMBEDDING_MAX_ATTEMPTS", 5)
         return GeminiEmbeddingProvider(api_key=key, model=model, timeout_sec=timeout, max_attempts=attempts)
     if resolved == "mock":
         return MockHashEmbeddingProvider()
