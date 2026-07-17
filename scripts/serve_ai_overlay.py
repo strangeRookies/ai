@@ -82,6 +82,8 @@ from ai.postprocess.incident_recovery import (
 from ai.postprocess.track_state_migration import finalize_recovery_detections
 from ai.action.fall_event_state import FallState
 
+from ai.storage.snapshot_uploader import attach_primary_snapshot_if_enabled
+
 
 def initial_summary():
     return initial_overlay_summary()
@@ -1048,6 +1050,11 @@ def _process_frame_impl(
             summary["sample_event"] = payload
         if args.print_events:
             print(f"[ai-overlay-event] {json.dumps(payload, ensure_ascii=False)}", flush=True)
+        # Primary snapshot (decoupled from VLM): capture + upload + attach snapshot_object_key if enabled.
+        try:
+            attach_primary_snapshot_if_enabled(payload, getattr(frame_packet, "frame", None))
+        except Exception as ps_exc:
+            print(f"[primary-snapshot][warn] non-fatal: {ps_exc}", flush=True)
         if publisher is not None:
             try:
                 event_publish_result = _publish_event(publisher, payload, topic_settings["event_topic"])
