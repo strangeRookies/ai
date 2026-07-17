@@ -12,9 +12,12 @@ Verifies:
 
 from __future__ import annotations
 
+import ast
 import os
+import time
 import unittest
-from unittest.mock import patch
+from pathlib import Path
+from unittest.mock import Mock, patch
 
 import numpy as np
 
@@ -33,6 +36,54 @@ from ai.storage.snapshot_uploader import (
 
 def _dummy_frame():
     return np.zeros((8, 8, 3), dtype="uint8")
+
+
+class RealtimeEventPathTest(unittest.TestCase):
+    _SCRIPTS = (
+        Path(__file__).parents[1] / "scripts" / "serve_ai_overlay.py",
+        Path(__file__).parents[1] / "scripts" / "run_rtsp_inference.py",
+    )
+
+    def test_realtime_scripts_do_not_call_snapshot_or_vlm_network_hooks(self):
+        forbidden_calls = {
+            "attach_primary_snapshot_if_enabled",
+            "submit_frame_snapshot_async",
+            "submit_snapshot",
+            "upload_snapshot_jpeg",
+            "enqueue_vlm",
+        }
+        for script in self._SCRIPTS:
+            tree = ast.parse(script.read_text(encoding="utf-8"), filename=str(script))
+            called_names = set()
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                if isinstance(node.func, ast.Name):
+                    called_names.add(node.func.id)
+                elif isinstance(node.func, ast.Attribute):
+                    called_names.add(node.func.attr)
+            self.assertTrue(forbidden_calls.isdisjoint(called_names), f"{script.name}: {forbidden_calls & called_names}")
+
+    def test_slow_s3_put_object_is_not_reached_before_initial_mqtt_publish(self):
+        from scripts.serve_ai_overlay import _publish_event
+
+        s3_client = Mock()
+        s3_client.put_object.side_effect = lambda **_kwargs: time.sleep(0.2)
+        published = []
+
+        class Publisher:
+            def enqueue_event(self, payload, topic):
+                published.append((payload, topic))
+                return True
+
+        started = time.perf_counter()
+        result = _publish_event(Publisher(), {"eventId": "evt-now"}, "safety/events")
+        elapsed = time.perf_counter() - started
+
+        self.assertTrue(result)
+        self.assertEqual(published, [({"eventId": "evt-now"}, "safety/events")])
+        s3_client.put_object.assert_not_called()
+        self.assertLess(elapsed, 0.1)
 
 
 class StorageBucketConfigTest(unittest.TestCase):
