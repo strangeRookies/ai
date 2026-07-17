@@ -47,11 +47,44 @@ class FallEventStateMachineTest(unittest.TestCase):
         self.assertEqual(d_u.event_type, EVENT_TYPE_FAINT_SUSPECTED)
         self.assertEqual(d_u.original_event_id, original_id)
         self.assertGreaterEqual(d_u.duration_sec or 0, 10.0)
-        self.assertNotEqual(d_u.event_id, original_id)
+        self.assertEqual(d_u.event_id, original_id)
 
         # Before repeat window: no second unrecovered
         d_wait = sm.update("cam_01", 20.0, track_id=7, is_alert=True, prediction={"label": "Faint"})
         self.assertEqual(d_wait.kind, LifecycleKind.SUPPRESS_NEW_FALL)
+
+
+    def test_confirm_freezes_faint_prob_and_reuses_event_id_on_unrecovered(self):
+        sm = FallEventStateMachine(
+            min_consecutive_faint=2,
+            recover_consecutive=2,
+            unrecovered_after_seconds=10.0,
+            unrecovered_repeat_seconds=30.0,
+        )
+        pred_high = {"label": "Faint", "score": 0.91, "probabilities": {"Faint": 0.91}}
+        sm.update("cam_01", 1.0, track_id=9, is_alert=True, prediction=pred_high)
+        d_new = sm.update("cam_01", 2.0, track_id=9, is_alert=True, prediction=pred_high)
+        self.assertEqual(d_new.kind, LifecycleKind.NEW_FALL)
+        self.assertAlmostEqual(d_new.faint_prob or 0.0, 0.91)
+        self.assertEqual(d_new.consecutive_count, 2)
+        original = d_new.event_id
+
+        pred_low = {"label": "Faint", "score": 0.33, "probabilities": {"Faint": 0.33}}
+        d_u = sm.update(
+            "cam_01",
+            13.0,
+            track_id=9,
+            is_alert=True,
+            prediction=pred_low,
+            movement_level="still",
+            posture_label="lying_like",
+            lying_like=True,
+        )
+        self.assertEqual(d_u.kind, LifecycleKind.UNRECOVERED)
+        self.assertEqual(d_u.event_id, original)
+        self.assertEqual(d_u.original_event_id, original)
+        # Unrecovered must keep confirm-time probability, not current 0.33 overlay frame.
+        self.assertAlmostEqual(d_u.faint_prob or 0.0, 0.91)
 
     def test_fall_label_maps_to_fall_unrecovered(self):
         sm = FallEventStateMachine(min_consecutive_faint=1, unrecovered_after_seconds=5.0)

@@ -47,6 +47,10 @@ class LifecycleDecision:
     original_event_id: str | None = None
     duration_sec: float | None = None
     event_type: str | None = None  # payload type override for unrecovered
+    faint_prob: float | None = None
+    consecutive_count: int | None = None
+    prev_lifecycle_state: str | None = None
+    next_lifecycle_state: str | None = None
 
     @property
     def allow_new_fall_alert(self) -> bool:
@@ -75,6 +79,9 @@ class FallTrackState:
     saw_upright: bool = False
     saw_upright_to_lying: bool = False
     last_posture: str | None = None
+    confirm_faint_prob: float | None = None
+    confirm_consecutive: int | None = None
+    confirm_prev_state: str | None = None
     extra: dict[str, Any] = field(default_factory=dict)
 
 
@@ -266,13 +273,13 @@ class FallEventStateMachine:
             st.recover_count = 0
             if st.candidate_count < self.min_consecutive_faint:
                 return LifecycleDecision(LifecycleKind.NONE, st.state, reason="fall_candidate")
-            return self._try_confirm(st, ts)
+            return self._try_confirm(st, ts, prediction=prediction)
 
         if st.state == FallState.FALL_CANDIDATE:
             st.candidate_count += 1
             if st.candidate_count < self.min_consecutive_faint:
                 return LifecycleDecision(LifecycleKind.NONE, st.state, reason="fall_candidate")
-            return self._try_confirm(st, ts)
+            return self._try_confirm(st, ts, prediction=prediction)
 
         return LifecycleDecision(LifecycleKind.SUPPRESS_NEW_FALL, st.state, reason="defensive_suppress")
 
@@ -334,7 +341,10 @@ class FallEventStateMachine:
 
         st.last_unrecovered_ts = ts
         st.last_persistent_ts = ts
-        unrecovered_id = str(uuid4())
+        # Same incident id as NEW_FALL — never mint a second uuid for unrecovered.
+        event_id = st.last_event_id or str(uuid4())
+        if st.last_event_id is None:
+            st.last_event_id = event_id
         event_type = unrecovered_event_type_for_prediction(
             prediction,
             movement_level=movement_level,
@@ -343,14 +353,18 @@ class FallEventStateMachine:
         return LifecycleDecision(
             LifecycleKind.UNRECOVERED,
             st.state,
-            event_id=unrecovered_id,
-            original_event_id=st.last_event_id,
+            event_id=event_id,
+            original_event_id=event_id,
             duration_sec=round(duration, 3),
             event_type=event_type,
             reason="fall_unrecovered_sustained_lying",
+            faint_prob=st.confirm_faint_prob,
+            consecutive_count=st.confirm_consecutive,
+            prev_lifecycle_state=st.confirm_prev_state or FallState.POST_FALL_LYING.value,
+            next_lifecycle_state=st.state.value if hasattr(st.state, "value") else str(st.state),
         )
 
-    def _try_confirm(self, st: FallTrackState, ts: float) -> LifecycleDecision:
+    def _try_confirm(self, st: FallTrackState, ts: float, prediction: dict | None = None) -> LifecycleDecision:
         # Standing Faint false-positive guard (default on):
         # currently upright_like without an upright→lying transition → never NEW_FALL.
         if (
@@ -378,6 +392,12 @@ class FallEventStateMachine:
                     st.state,
                     reason="blocked_no_upright_to_lying_transition",
                 )
+        prev_state = st.state.value if hasattr(st.state, "value") else str(st.state)
+        confirm_prob = _confirm_faint_prob(prediction)
+        confirm_consecutive = int(st.candidate_count) if st.candidate_count else self.min_consecutive_faint
+        st.confirm_faint_prob = confirm_prob
+        st.confirm_consecutive = confirm_consecutive
+        st.confirm_prev_state = prev_state
         event_id = str(uuid4())
         st.confirmed_ts = ts
         st.last_event_id = event_id
@@ -392,4 +412,28 @@ class FallEventStateMachine:
             st.state,
             event_id=event_id,
             reason="fall_confirmed",
+            faint_prob=confirm_prob,
+            consecutive_count=confirm_consecutive,
+            prev_lifecycle_state=prev_state,
+            next_lifecycle_state=FallState.POST_FALL_LYING.value,
         )
+
+def _confirm_faint_prob(prediction: dict | None) -> float | None:
+    """Freeze faint probability at NEW_FALL confirm time (not later overlay frames)."""
+    if not prediction:
+        return None
+    try:
+        from ai.action.faint_post_processing import faint_probability
+
+        value = faint_probability(prediction)
+        if value is not None:
+            return float(value)
+    except Exception:
+        pass
+    # Only use explicit score when present; missing score must stay None (not 0.0).
+    if "score" not in prediction or prediction.get("score") is None:
+        return None
+    try:
+        return float(prediction.get("score"))
+    except (TypeError, ValueError):
+        return None

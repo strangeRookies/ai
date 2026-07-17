@@ -54,6 +54,11 @@ class AlertEmitDecision:
     posture_label: str | None = None
     movement_level: str | None = None
     state: str | None = None
+    consecutive_count: int | None = None
+    faint_prob: float | None = None
+    prev_lifecycle_state: str | None = None
+    next_lifecycle_state: str | None = None
+    current_faint_prob: float | None = None
 
     @property
     def is_new_fall(self) -> bool:
@@ -359,15 +364,38 @@ class FaintEventPostProcessor:
                 self._last_event_time_by_camera[cooldown_key] = float(timestamp)
                 if self.spatial_dedup_enabled and fall_bbox is not None:
                     self._record_fall_location(cooldown_key, fall_bbox, float(timestamp), event_id=decision.event_id)
+                confirm_prob = getattr(decision, "faint_prob", None)
+                if confirm_prob is None:
+                    confirm_prob = faint_probability(prediction if isinstance(prediction, dict) else None)
+                confirm_consecutive = getattr(decision, "consecutive_count", None)
+                if confirm_consecutive is None:
+                    confirm_consecutive = consecutive
                 out = _context(
                     emit=True,
                     kind="new_fall",
                     event_type=None,  # keep prediction-based faint/fall
                     event_id=decision.event_id,
+                    original_event_id=decision.event_id,
                     lifecycle=decision,
                     memo_text=MEMO_NEW_FALL,
+                    consecutive_count=confirm_consecutive,
+                    faint_prob=confirm_prob,
+                    prev_lifecycle_state=getattr(decision, "prev_lifecycle_state", None),
+                    next_lifecycle_state=getattr(decision, "next_lifecycle_state", None)
+                    or (decision.state.value if hasattr(decision.state, "value") else str(decision.state)),
+                    current_faint_prob=faint_probability(prediction if isinstance(prediction, dict) else None),
                 )
                 self._last_emit_decision = out
+                _log_event_confirm(
+                    camera_id=camera_id,
+                    track_id=track_id,
+                    event_id=decision.event_id,
+                    kind="new_fall",
+                    faint_prob=confirm_prob,
+                    consecutive_count=confirm_consecutive,
+                    prev_state=out.prev_lifecycle_state,
+                    next_state=out.next_lifecycle_state,
+                )
                 _maybe_log_faint_diagnostic(
                     camera_id=camera_id,
                     track_id=track_id,
@@ -384,17 +412,47 @@ class FaintEventPostProcessor:
             if decision.kind == LifecycleKind.UNRECOVERED:
                 # Prefer lying-specific copy when posture says lying_like.
                 memo = MEMO_UNRECOVERED_LYING if posture_label == "lying_like" else MEMO_UNRECOVERED
+                confirm_prob = getattr(decision, "faint_prob", None)
+                if confirm_prob is None:
+                    # Fall back to track freeze via last_event lineage, not current frame.
+                    track = self._state_machine.get_track(camera_id, track_id) if self._state_machine else None
+                    confirm_prob = getattr(track, "confirm_faint_prob", None) if track is not None else None
+                confirm_consecutive = getattr(decision, "consecutive_count", None)
+                if confirm_consecutive is None:
+                    track = self._state_machine.get_track(camera_id, track_id) if self._state_machine else None
+                    confirm_consecutive = getattr(track, "confirm_consecutive", None) if track is not None else consecutive
+                current_prob = faint_probability(prediction if isinstance(prediction, dict) else None)
+                # Reuse NEW_FALL event_id (state machine already sets this); never diverge.
+                stable_event_id = decision.event_id or decision.original_event_id
                 out = _context(
                     emit=True,
                     kind="unrecovered",
                     event_type=decision.event_type,
-                    event_id=decision.event_id,
-                    original_event_id=decision.original_event_id,
+                    event_id=stable_event_id,
+                    original_event_id=stable_event_id,
                     duration_sec=decision.duration_sec,
                     lifecycle=decision,
                     memo_text=memo,
+                    consecutive_count=confirm_consecutive,
+                    faint_prob=confirm_prob,
+                    prev_lifecycle_state=getattr(decision, "prev_lifecycle_state", None),
+                    next_lifecycle_state=getattr(decision, "next_lifecycle_state", None)
+                    or (decision.state.value if hasattr(decision.state, "value") else str(decision.state)),
+                    current_faint_prob=current_prob,
                 )
                 self._last_emit_decision = out
+                _log_event_confirm(
+                    camera_id=camera_id,
+                    track_id=track_id,
+                    event_id=stable_event_id,
+                    kind="unrecovered",
+                    faint_prob=confirm_prob,
+                    consecutive_count=confirm_consecutive,
+                    prev_state=out.prev_lifecycle_state,
+                    next_state=out.next_lifecycle_state,
+                    current_faint_prob=current_prob,
+                    event_type=decision.event_type,
+                )
                 return out
 
             # Faint prediction still active (candidate path) — optional diagnostic
@@ -536,6 +594,35 @@ class FaintEventPostProcessor:
                 moved = True
         return moved
 
+
+def _log_event_confirm(
+    *,
+    camera_id,
+    track_id,
+    event_id,
+    kind: str,
+    faint_prob,
+    consecutive_count,
+    prev_state,
+    next_state,
+    current_faint_prob=None,
+    event_type=None,
+) -> None:
+    """Emit confirmation-time fields required for false-positive / duplicate diagnosis."""
+    print(
+        "[event-confirm] "
+        f"kind={kind} "
+        f"cameraLoginId={camera_id} "
+        f"trackId={track_id} "
+        f"eventId={event_id} "
+        f"eventType={event_type or ''} "
+        f"faint_prob={faint_prob} "
+        f"consecutive_count={consecutive_count} "
+        f"prev_lifecycle={prev_state or ''} "
+        f"next_lifecycle={next_state or ''} "
+        f"current_faint_prob={current_faint_prob if current_faint_prob is not None else ''}",
+        flush=True,
+    )
 
 def _maybe_log_faint_diagnostic(
     *,
@@ -688,6 +775,9 @@ def faint_probability(prediction):
     if "Faint" in probabilities:
         return float(probabilities["Faint"])
     if prediction.get("label") == "Faint":
+        # Missing score means unknown, not 0.0 — keep None so confirm freeze does not invent 0%.
+        if prediction.get("score") is None:
+            return None
         return float(prediction.get("score", 0.0))
     return None
 

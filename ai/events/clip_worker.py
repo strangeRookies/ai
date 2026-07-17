@@ -439,21 +439,48 @@ class ClipWriterWorker:
                         s3_url = upload_result["url"]
                         meta = task.metadata or {}
 
+                        # Prefer stable incident eventId from metadata; never use timestamp as id.
+                        event_id = (
+                            meta.get("eventId")
+                            or meta.get("event_id")
+                            or meta.get("evidenceId")
+                        )
+                        if not event_id:
+                            print(
+                                f"[clip-worker] skip MQTT re-publish: missing eventId for camera={task.camera_id}",
+                                file=sys.stderr,
+                            )
+                            continue
+
                         # 백엔드 DTO(SafetyEventDto) 규격에 맞게 페이로드 작성
                         event_payload = {
-                            "type": task.event_type,
+                            "type": meta.get("event_type") or meta.get("type") or task.event_type,
                             "camera_id": task.camera_id,
                             "camera_login_id": task.camera_id,
                             "timestamp": meta.get("event_timestamp") or datetime.now(timezone.utc).isoformat(),
                             "severity": "HIGH",
                             "message": "Fall-like safety event detected. (Video Uploaded)",
                             "source": "edge-ai",
-                            "eventId": meta.get("evidenceId") or meta.get("event_timestamp"),
+                            "eventId": event_id,
                             "track_id": str(meta.get("track_id", "")),
                             "clip_object_key": upload_result.get("s3_key"),
                             "clip_url": s3_url,
-                            "clip_path": str(output_path)
+                            "clip_path": str(output_path),
                         }
+                        if meta.get("originalEventId") or meta.get("original_event_id"):
+                            original = meta.get("originalEventId") or meta.get("original_event_id")
+                            event_payload["originalEventId"] = original
+                            event_payload["original_event_id"] = original
+                        if meta.get("confidence") is not None:
+                            event_payload["confidence"] = meta.get("confidence")
+                        if meta.get("faint_prob") is not None or meta.get("faintProb") is not None:
+                            fp = meta.get("faint_prob", meta.get("faintProb"))
+                            event_payload["faint_prob"] = fp
+                            event_payload["faintProb"] = fp
+                        if meta.get("consecutive_count") is not None or meta.get("consecutiveCount") is not None:
+                            cc = meta.get("consecutive_count", meta.get("consecutiveCount"))
+                            event_payload["consecutive_count"] = cc
+                            event_payload["consecutiveCount"] = cc
                         # Pass through primary snapshot key if present in metadata (decoupled from VLM).
                         # Never copy clip key into snapshot_object_key.
                         snap_key = (meta.get("snapshot_object_key")

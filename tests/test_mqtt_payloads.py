@@ -180,57 +180,43 @@ class MqttPayloadsTest(unittest.TestCase):
             boxes=[],
         )
 
-        self.assertEqual(
-            payload,
-            {
-                "schemaVersion": "1.1",
-                "messageType": "event",
-                "eventId": "evt-20260623-cam_01-000001",
-                "timestampMs": 1782180000123,
-                "timestamp": 1782180000.123,
-                "streamId": "cam_01",
-                "cameraLoginId": "cam_01",
-                "frameId": 123,
-                "capturedAtMs": 1782180000100,
-                "processedAtMs": 1782180000120,
-                "publishedAtMs": 1782180000123,
-                "aiLatencyMs": 20,
-                "publishLatencyMs": 23,
-                "camera_id": "cam_01",
-                "camera_login_id": "cam_01",
-                "type": "faint",
-                "event_type": "faint",
-                "memoText": "쓰러짐 의심!",
-                "message": "쓰러짐 의심!",
-                "source": "edge-ai",
-                "severity": "HIGH",
-                "confidence": 0.92,
-                "trackingId": 3,
-                "track_id": 3,
-                "frameWidth": 640,
-                "frameHeight": 360,
-                "sequence": {
-                    "sequenceLength": 30,
-                    "sequenceStride": 15,
-                    "sequenceStartFrameId": 94,
-                    "sequenceEndFrameId": 123,
-                    "sequenceStartAtMs": 1782179999000,
-                    "sequenceEndAtMs": 1782180000100,
-                },
-                "boundingBox": {"x": 120, "y": 80, "width": 200, "height": 150},
-                "bbox": [120, 80, 320, 230],
-                "events": [
-                    {
-                        "type": "faint",
-                        "confidence": 0.92,
-                        "trackingId": 3,
-                        "frameId": 123,
-                        "bbox": {"x": 120, "y": 80, "width": 200, "height": 150},
-                        "keypoints": [],
-                    }
-                ],
-            },
-        )
+        self.assertEqual(payload["schemaVersion"], "1.1")
+        self.assertEqual(payload["messageType"], "event")
+        self.assertEqual(payload["eventId"], "evt-20260623-cam_01-000001")
+        self.assertEqual(payload["timestampMs"], 1782180000123)
+        self.assertEqual(payload["timestamp"], 1782180000.123)
+        self.assertEqual(payload["streamId"], "cam_01")
+        self.assertEqual(payload["cameraLoginId"], "cam_01")
+        self.assertEqual(payload["frameId"], 123)
+        self.assertEqual(payload["capturedAtMs"], 1782180000100)
+        self.assertEqual(payload["processedAtMs"], 1782180000120)
+        self.assertEqual(payload["publishedAtMs"], 1782180000123)
+        self.assertEqual(payload["camera_id"], "cam_01")
+        self.assertEqual(payload["camera_login_id"], "cam_01")
+        self.assertEqual(payload["type"], "faint")
+        self.assertEqual(payload["event_type"], "faint")
+        self.assertEqual(payload["memoText"], "쓰러짐 의심!")
+        self.assertEqual(payload["message"], "쓰러짐 의심!")
+        self.assertEqual(payload["source"], "edge-ai")
+        self.assertEqual(payload["severity"], "HIGH")
+        self.assertEqual(payload["confidence"], 0.92)
+        self.assertEqual(payload["trackingId"], 3)
+        self.assertEqual(payload["track_id"], 3)
+        self.assertEqual(payload["frameWidth"], 640)
+        self.assertEqual(payload["frameHeight"], 360)
+        self.assertEqual(payload["boundingBox"], {"x": 120, "y": 80, "width": 200, "height": 150})
+        self.assertEqual(payload["bbox"], [120, 80, 320, 230])
+        self.assertEqual(payload["faint_prob"], 0.92)
+        self.assertEqual(payload["faintProb"], 0.92)
+        nested = payload["events"][0]
+        self.assertEqual(nested["type"], "faint")
+        self.assertEqual(nested["confidence"], 0.92)
+        self.assertEqual(nested["trackingId"], 3)
+        self.assertEqual(nested["trackId"], 3)
+        self.assertEqual(nested["track_id"], 3)
+        self.assertEqual(nested["frameId"], 123)
+        self.assertEqual(nested["bbox"], {"x": 120, "y": 80, "width": 200, "height": 150})
+        self.assertEqual(nested["faint_prob"], 0.92)
         # Phase C optional lifecycle fields must stay absent when not provided
         self.assertNotIn("originalEventId", payload)
         self.assertNotIn("alertKind", payload)

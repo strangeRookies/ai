@@ -85,6 +85,7 @@ class UnrecoveredEventPayloadTest(unittest.TestCase):
         self.assertTrue(unrec.is_unrecovered)
         self.assertIn(unrec.event_type, {EVENT_TYPE_FAINT_SUSPECTED, "FALL_UNRECOVERED"})
         self.assertEqual(unrec.original_event_id, original)
+        self.assertEqual(unrec.event_id, original)
         self.assertEqual(unrec.state, "POST_FALL_LYING")
         self.assertIn(unrec.memo_text, {MEMO_UNRECOVERED, MEMO_UNRECOVERED_LYING})
 
@@ -104,6 +105,9 @@ class UnrecoveredEventPayloadTest(unittest.TestCase):
         self.assertEqual(payload["alertKind"], "unrecovered")
         self.assertEqual(payload["cameraLoginId"], "cam_01")
         self.assertEqual(payload["trackingId"], 3)
+        self.assertEqual(payload["eventId"], original)
+        # Confirm-time freeze: unrecovered reuses NEW_FALL eventId (confidence may be 0 for label-only mocks).
+        self.assertEqual(payload["originalEventId"], original)
 
 
 if __name__ == "__main__":

@@ -279,6 +279,12 @@ def build_inference_event_payload(
     lifecycle_state=None,
     alert_kind=None,
     track_id_override=None,
+    confidence_override=None,
+    faint_prob=None,
+    consecutive_count=None,
+    prev_lifecycle_state=None,
+    next_lifecycle_state=None,
+    current_faint_prob=None,
 ):
     camera_login_id = getattr(args, "camera_login_id", None) or args.camera_id
     frame = getattr(packet, "frame", None)
@@ -315,6 +321,12 @@ def build_inference_event_payload(
         lifecycle_state=lifecycle_state,
         alert_kind=alert_kind,
         track_id_override=track_id_override,
+        confidence_override=confidence_override,
+        faint_prob=faint_prob,
+        consecutive_count=consecutive_count,
+        prev_lifecycle_state=prev_lifecycle_state,
+        next_lifecycle_state=next_lifecycle_state,
+        current_faint_prob=current_faint_prob,
     )
     if memo_text is not None:
         kwargs["memo_text"] = memo_text
@@ -325,10 +337,12 @@ def lifecycle_payload_kwargs(emit_decision) -> dict:
     """Map AlertEmitDecision → build_inference_event_payload kwargs."""
     if emit_decision is None:
         return {}
+    confirm_prob = getattr(emit_decision, "faint_prob", None)
     return {
         "event_type_override": getattr(emit_decision, "event_type", None),
         "event_id": getattr(emit_decision, "event_id", None),
-        "original_event_id": getattr(emit_decision, "original_event_id", None),
+        "original_event_id": getattr(emit_decision, "original_event_id", None)
+        or getattr(emit_decision, "event_id", None),
         "duration_sec": getattr(emit_decision, "duration_sec", None),
         "memo_text": getattr(emit_decision, "memo_text", None),
         "posture_label": getattr(emit_decision, "posture_label", None),
@@ -336,6 +350,12 @@ def lifecycle_payload_kwargs(emit_decision) -> dict:
         "lifecycle_state": getattr(emit_decision, "state", None),
         "alert_kind": getattr(emit_decision, "kind", None),
         "track_id_override": getattr(emit_decision, "track_id", None),
+        "confidence_override": confirm_prob,
+        "faint_prob": confirm_prob,
+        "consecutive_count": getattr(emit_decision, "consecutive_count", None),
+        "prev_lifecycle_state": getattr(emit_decision, "prev_lifecycle_state", None),
+        "next_lifecycle_state": getattr(emit_decision, "next_lifecycle_state", None),
+        "current_faint_prob": getattr(emit_decision, "current_faint_prob", None),
     }
 
 def snapshot_assist_meta_from_event_payload(
