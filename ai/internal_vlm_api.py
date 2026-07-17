@@ -10,6 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import urlparse
 
+from ai.gemini_runtime import gemini_429_metrics
 from ai.vlm.provider_mode import gemini_api_key, vlm_force_mock
 
 logger = logging.getLogger(__name__)
@@ -77,6 +78,7 @@ class _VlmHandler(BaseHTTPRequestHandler):
             "status": "UP",
             "provider": provider,
             "serviceTokenConfigured": bool(_service_token()),
+            "rateLimitMetrics": gemini_429_metrics(),
         })
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
@@ -99,8 +101,12 @@ class _VlmHandler(BaseHTTPRequestHandler):
             result = _run_job(body)
             self._json_response(200, result)
         except Exception as exc:
-            logger.warning("internal vlm job failed: %s", exc)
-            self._json_response(500, {"error": "job_failed", "message": str(exc)[:200]})
+            status_code = getattr(exc, "status_code", None)
+            logger.warning("internal vlm job failed: status=%s error=%s", status_code or 500, exc)
+            if status_code == 429:
+                self._json_response(429, {"error": "gemini_rate_limited", "message": str(exc)[:200]})
+            else:
+                self._json_response(500, {"error": "job_failed", "message": str(exc)[:200]})
 
     def _json_response(self, status: int, payload: dict[str, Any]) -> None:
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
