@@ -11,6 +11,8 @@ from pathlib import Path
 
 from ai.events.event_clip import EventClipTask
 from ai.storage.uploader import upload_clip
+from ai.storage.snapshot_uploader import encode_frame_jpeg, snapshot_capture_enabled, snapshot_upload_enabled, upload_snapshot_jpeg
+from ai.storage.uploader import upload_clip
 
 # 브라우저 재생 호환을 위해 우선 시도할 ffmpeg 인코더 순서 (GPU면 nvenc가 더 빠름)
 _FFMPEG_ENCODER_CANDIDATES = ("h264_nvenc", "libx264")
@@ -405,9 +407,10 @@ def save_clip_to_mp4(task):
 
 #ClipWriterWorker는 태스크를 큐에서 꺼내어 관리하는 작업 스레드의 역할만 담당하며, 실제 비디오 파일로 인코딩하여 기록하는 연산은 save_clip_to_mp4 함수가 처리하는 구조
 class ClipWriterWorker:
-    def __init__(self, task_queue, uploader=upload_clip, publisher=None, mqtt_event_topic=None):
+    def __init__(self, task_queue, uploader=upload_clip, publisher=None, mqtt_event_topic=None, snapshot_uploader=upload_snapshot_jpeg):
         self.task_queue = task_queue
         self.uploader = uploader
+        self.snapshot_uploader = snapshot_uploader
         self.publisher = publisher
         self.mqtt_event_topic = mqtt_event_topic
         self._stop_event = threading.Event()
@@ -432,13 +435,57 @@ class ClipWriterWorker:
                 output_path = save_clip_to_mp4(task)
                 try:
                     upload_result = self.uploader(output_path, task.metadata)
-                    print(f"[clip-worker] clip ready: path={output_path}", file=sys.stderr)
+                    meta = task.metadata or {}
+                    event_id = meta.get("eventId") or meta.get("event_id") or meta.get("evidenceId")
+                    clip_key = upload_result.get("s3_key") if upload_result else None
+                    clip_ok = bool(upload_result and upload_result.get("uploaded") and upload_result.get("url"))
+                    duration = len(task.frames) / float(task.fps or 30.0)
+                    event_index = int(meta.get("event_frame_index", 0) or 0)
+                    event_offset = float(meta.get("event_frame_offset_seconds", 0.0) or 0.0)
+                    if clip_ok:
+                        print(
+                            f"[clip-worker] [clip-created] clip_key={clip_key} eventId={event_id} "
+                            f"duration={duration:.3f}s event_offset={event_offset:.3f}s",
+                            file=sys.stderr,
+                        )
+                        if snapshot_capture_enabled() and snapshot_upload_enabled() and event_id:
+                            thumbnail_frame = (
+                                task.frames[event_index]
+                                if 0 <= event_index < len(task.frames) and hasattr(task.frames[event_index], "shape")
+                                else None
+                            )
+                            if thumbnail_frame is None:
+                                try:
+                                    import cv2
+                                    capture = cv2.VideoCapture(str(output_path))
+                                    capture.set(cv2.CAP_PROP_POS_MSEC, max(0.0, (event_index / float(task.fps or 30.0)) * 1000))
+                                    ok, thumbnail_frame = capture.read()
+                                    capture.release()
+                                    if not ok:
+                                        thumbnail_frame = None
+                                except Exception:
+                                    thumbnail_frame = None
+                            jpeg = encode_frame_jpeg(thumbnail_frame)
+                            if jpeg:
+                                try:
+                                    result = self.snapshot_uploader(jpeg, str(event_id), meta)
+                                    if result and result.get("uploaded") and result.get("s3_key"):
+                                        key = result["s3_key"]
+                                        if key.startswith("snapshots/") and key.endswith(".jpg"):
+                                            meta["snapshot_object_key"] = key
+                                            print(
+                                                f"[clip-worker] [thumbnail-created] source_clip_key={clip_key} "
+                                                f"key={key} event_timestamp={meta.get('event_timestamp')} "
+                                                f"event_offset={event_offset:.3f}s",
+                                                file=sys.stderr,
+                                            )
+                                except Exception as exc:
+                                    print(f"[clip-worker] thumbnail upload failed: {exc}", file=sys.stderr)
 
                     # 업로드 성공 후 publisher가 있으면 최종 MQTT 이벤트 발행
                     if upload_result and upload_result.get("uploaded") and upload_result.get("url") and self.publisher:
                         s3_url = upload_result["url"]
                         meta = task.metadata or {}
-
                         # Prefer stable incident eventId from metadata; never use timestamp as id.
                         event_id = (
                             meta.get("eventId")
@@ -451,7 +498,6 @@ class ClipWriterWorker:
                                 file=sys.stderr,
                             )
                             continue
-
                         # 백엔드 DTO(SafetyEventDto) 규격에 맞게 페이로드 작성
                         event_payload = {
                             "type": meta.get("event_type") or meta.get("type") or task.event_type,
@@ -481,11 +527,7 @@ class ClipWriterWorker:
                             cc = meta.get("consecutive_count", meta.get("consecutiveCount"))
                             event_payload["consecutive_count"] = cc
                             event_payload["consecutiveCount"] = cc
-                        # Pass through primary snapshot key if present in metadata (decoupled from VLM).
-                        # Never copy clip key into snapshot_object_key.
-                        snap_key = (meta.get("snapshot_object_key")
-                                    or meta.get("snapshotObjectKey"))
-                        # Accept only canonical snapshots/*.jpg keys (never clip URLs/paths)
+                        snap_key = meta.get("snapshot_object_key") or meta.get("snapshotObjectKey")
                         if isinstance(snap_key, str):
                             snap_key = snap_key.strip()
                             if not (snap_key.startswith("snapshots/") and snap_key.endswith(".jpg")):
@@ -493,7 +535,6 @@ class ClipWriterWorker:
                         if snap_key:
                             event_payload["snapshot_object_key"] = snap_key
                             event_payload["snapshotObjectKey"] = snap_key
-
                         topic = self.mqtt_event_topic or "safety/events"
                         if hasattr(self.publisher, "publish_event"):
                             self.publisher.publish_event(event_payload)

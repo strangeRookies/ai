@@ -104,10 +104,15 @@ class EventClipBuffer:
         snapshot = self.pre_event_buffer.snapshot()
         pre_frames = [self._copy_frame(frame) for frame, _boxes in snapshot]
         pre_boxes = [boxes for _frame, boxes in snapshot]
+        event_metadata = dict(metadata or {})
+        event_metadata["event_frame_index"] = max(0, len(pre_frames) - 1)
+        event_metadata["event_frame_offset_seconds"] = -((len(pre_frames) - 1) / self.fps)
+        event_metadata["event_timestamp"] = event_metadata.get("event_timestamp") or now
         new_event = {
             "event_type": str(event_type),
             "camera_id": camera_key,
             "metadata": dict(metadata or {}),
+            "metadata": event_metadata,
             "pre_frames": pre_frames,
             "post_frames": [],
             "pre_boxes": pre_boxes,

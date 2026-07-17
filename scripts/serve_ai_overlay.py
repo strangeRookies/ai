@@ -82,7 +82,6 @@ from ai.postprocess.incident_recovery import (
 from ai.postprocess.track_state_migration import finalize_recovery_detections
 from ai.action.fall_event_state import FallState
 
-from ai.storage.snapshot_uploader import attach_primary_snapshot_if_enabled
 
 
 def initial_summary():
@@ -767,10 +766,6 @@ def _process_frame_impl(
                 )
                 topic_settings_exit = mqtt_topic_settings_from_args(args)
                 if publisher is not None:
-                    try:
-                        attach_primary_snapshot_if_enabled(exit_payload, getattr(frame_packet, "frame", None))
-                    except Exception as ps_exc:
-                        print(f"[primary-snapshot][warn] non-fatal EXIT: {ps_exc}", flush=True)
                     _publish_event(publisher, exit_payload, topic_settings_exit["event_topic"])
                     
                     if state is not None and getattr(state, "clip_buffer", None) is not None:
@@ -782,10 +777,6 @@ def _process_frame_impl(
                             "track_id": track_id,
                             "type": exit_payload.get("type"),
                             "event_type": exit_payload.get("type") or exit_payload.get("event_type"),
-                            "snapshot_object_key": exit_payload.get("snapshot_object_key") or exit_payload.get("snapshotObjectKey"),
-                            "snapshotObjectKey": exit_payload.get("snapshotObjectKey") or exit_payload.get("snapshot_object_key"),
-                            "snapshot_url": exit_payload.get("snapshot_url") or exit_payload.get("snapshotUrl"),
-                            "snapshotUrl": exit_payload.get("snapshotUrl") or exit_payload.get("snapshot_url"),
                         }
                         clip_triggered = state.clip_buffer.trigger_event(
                             event_type=exit_payload.get("type", "exit"),
@@ -817,10 +808,6 @@ def _process_frame_impl(
                 )
                 topic_settings_hazard = mqtt_topic_settings_from_args(args)
                 if publisher is not None:
-                    try:
-                        attach_primary_snapshot_if_enabled(hazard_payload, getattr(frame_packet, "frame", None))
-                    except Exception as ps_exc:
-                        print(f"[primary-snapshot][warn] non-fatal HAZARD: {ps_exc}", flush=True)
                     _publish_event(publisher, hazard_payload, topic_settings_hazard["event_topic"])
                     
                     if state is not None and getattr(state, "clip_buffer", None) is not None:
@@ -832,10 +819,6 @@ def _process_frame_impl(
                             "track_id": track_id,
                             "type": hazard_payload.get("type"),
                             "event_type": hazard_payload.get("type") or hazard_payload.get("event_type"),
-                            "snapshot_object_key": hazard_payload.get("snapshot_object_key") or hazard_payload.get("snapshotObjectKey"),
-                            "snapshotObjectKey": hazard_payload.get("snapshotObjectKey") or hazard_payload.get("snapshot_object_key"),
-                            "snapshot_url": hazard_payload.get("snapshot_url") or hazard_payload.get("snapshotUrl"),
-                            "snapshotUrl": hazard_payload.get("snapshotUrl") or hazard_payload.get("snapshot_url"),
                         }
                         clip_triggered = state.clip_buffer.trigger_event(
                             event_type=hazard_payload.get("type", "hazard"),
@@ -1074,11 +1057,6 @@ def _process_frame_impl(
             summary["sample_event"] = payload
         if args.print_events:
             print(f"[ai-overlay-event] {json.dumps(payload, ensure_ascii=False)}", flush=True)
-        # Primary snapshot (decoupled from VLM): capture + upload + attach snapshot_object_key if enabled.
-        try:
-            attach_primary_snapshot_if_enabled(payload, getattr(frame_packet, "frame", None))
-        except Exception as ps_exc:
-            print(f"[primary-snapshot][warn] non-fatal: {ps_exc}", flush=True)
         if publisher is not None:
             try:
                 event_publish_result = _publish_event(publisher, payload, topic_settings["event_topic"])
