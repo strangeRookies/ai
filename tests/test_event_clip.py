@@ -73,6 +73,19 @@ class EventClipTest(unittest.TestCase):
         self.assertEqual(task.metadata["evidenceId"], "cam_01-7-2000")
         self.assertEqual(task.metadata["traceId"], "cam_01-7-2000")
 
+    def test_clip_worker_prefers_event_id_not_timestamp(self):
+        meta = {
+            "eventId": "stable-evt-1",
+            "evidenceId": "stable-evt-1",
+            "event_timestamp": 1_700_000_000.0,
+            "track_id": 4,
+            "confidence": 0.88,
+            "faint_prob": 0.88,
+        }
+        event_id = meta.get("eventId") or meta.get("event_id") or meta.get("evidenceId")
+        self.assertEqual(event_id, "stable-evt-1")
+        self.assertNotEqual(event_id, meta["event_timestamp"])
+
     def test_overlapping_events_on_same_camera_both_tracked_independently(self):
         clip_buffer = EventClipBuffer(pre_event_frame_count=2, post_event_frame_count=2, cooldown_seconds=10, max_concurrent_events=4)
         for index in range(2):

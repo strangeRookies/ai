@@ -1086,8 +1086,17 @@ def _process_frame_impl(
         if state is not None and getattr(state, "clip_buffer", None) is not None:
             task_metadata = {
                 "evidenceId": payload.get("eventId"),
+                "eventId": payload.get("eventId"),
+                "event_id": payload.get("eventId"),
+                "originalEventId": payload.get("originalEventId") or payload.get("eventId"),
+                "original_event_id": payload.get("original_event_id") or payload.get("eventId"),
                 "event_timestamp": payload.get("timestamp"),
                 "track_id": track_id,
+                "type": payload.get("type"),
+                "event_type": payload.get("type") or payload.get("event_type"),
+                "confidence": payload.get("confidence"),
+                "faint_prob": payload.get("faint_prob") or payload.get("faintProb"),
+                "consecutive_count": payload.get("consecutive_count") or payload.get("consecutiveCount"),
             }
             
             clip_triggered = state.clip_buffer.trigger_event(

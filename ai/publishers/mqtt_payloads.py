@@ -126,10 +126,25 @@ def build_confirmed_event_payload(
     lifecycle_state: str | None = None,
     alert_kind: str | None = None,
     track_id_override: int | str | None = None,
+    confidence_override: float | None = None,
+    faint_prob: float | None = None,
+    consecutive_count: int | None = None,
+    prev_lifecycle_state: str | None = None,
+    next_lifecycle_state: str | None = None,
+    current_faint_prob: float | None = None,
 ) -> dict[str, JsonValue]:
     emitted_at = timestamp_ms if timestamp_ms is not None else published_at_ms or current_timestamp_ms()
     event_type = event_type_override or _event_type(prediction)
-    confidence = _prediction_confidence(prediction)
+    # Prefer confirm-time probability freeze over current-frame prediction score.
+    if confidence_override is not None:
+        confidence = _clamp_probability(confidence_override)
+    elif faint_prob is not None:
+        confidence = _clamp_probability(faint_prob)
+    else:
+        confidence = _prediction_confidence(prediction)
+    resolved_faint_prob = faint_prob
+    if resolved_faint_prob is None:
+        resolved_faint_prob = faint_probability(prediction)
     tracking_id = _tracking_id(sequence) if sequence is not None else None
     if tracking_id is None and track_id_override is not None:
         try:
@@ -151,6 +166,25 @@ def build_confirmed_event_payload(
     }
     if tracking_id is not None:
         event["trackingId"] = tracking_id
+        event["trackId"] = tracking_id
+        event["track_id"] = tracking_id
+    if resolved_faint_prob is not None:
+        event["faint_probability"] = float(resolved_faint_prob)
+        event["faintProbability"] = float(resolved_faint_prob)
+        event["faint_prob"] = float(resolved_faint_prob)
+        event["faintProb"] = float(resolved_faint_prob)
+    if consecutive_count is not None:
+        event["consecutiveCount"] = int(consecutive_count)
+        event["consecutive_count"] = int(consecutive_count)
+    if prev_lifecycle_state is not None:
+        event["prevLifecycleState"] = prev_lifecycle_state
+        event["prev_lifecycle_state"] = prev_lifecycle_state
+    if next_lifecycle_state is not None:
+        event["nextLifecycleState"] = next_lifecycle_state
+        event["next_lifecycle_state"] = next_lifecycle_state
+    if current_faint_prob is not None:
+        event["currentFaintProb"] = float(current_faint_prob)
+        event["current_faint_prob"] = float(current_faint_prob)
     _add_track_identity_fields(event, sequence)
     if frame_id is not None:
         event["frameId"] = int(frame_id)
@@ -190,6 +224,23 @@ def build_confirmed_event_payload(
         "bbox": dto_bbox,
         "events": [event],
     }
+    if resolved_faint_prob is not None:
+        payload["faint_prob"] = float(resolved_faint_prob)
+        payload["faintProb"] = float(resolved_faint_prob)
+        payload["faint_probability"] = float(resolved_faint_prob)
+        payload["faintProbability"] = float(resolved_faint_prob)
+    if consecutive_count is not None:
+        payload["consecutiveCount"] = int(consecutive_count)
+        payload["consecutive_count"] = int(consecutive_count)
+    if prev_lifecycle_state is not None:
+        payload["prevLifecycleState"] = prev_lifecycle_state
+        payload["prev_lifecycle_state"] = prev_lifecycle_state
+    if next_lifecycle_state is not None:
+        payload["nextLifecycleState"] = next_lifecycle_state
+        payload["next_lifecycle_state"] = next_lifecycle_state
+    if current_faint_prob is not None:
+        payload["currentFaintProb"] = float(current_faint_prob)
+        payload["current_faint_prob"] = float(current_faint_prob)
     if original_event_id is not None:
         payload["originalEventId"] = original_event_id
         payload["original_event_id"] = original_event_id
