@@ -454,6 +454,15 @@ class ClipWriterWorker:
                             "clip_url": s3_url,
                             "clip_path": str(output_path)
                         }
+                        # Pass through primary snapshot key if present in metadata (decoupled from VLM).
+                        # Never copy clip key into snapshot_object_key.
+                        snap_key = (meta.get("snapshot_object_key")
+                                    or meta.get("snapshotObjectKey")
+                                    or meta.get("snapshot_url")
+                                    or meta.get("snapshotUrl"))
+                        if snap_key:
+                            event_payload["snapshot_object_key"] = snap_key
+                            event_payload["snapshotObjectKey"] = snap_key
 
                         topic = self.mqtt_event_topic or "safety/events"
                         if hasattr(self.publisher, "publish_event"):

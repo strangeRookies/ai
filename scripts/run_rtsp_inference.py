@@ -74,6 +74,7 @@ from ai.postprocess.incident_recovery import (
 from ai.postprocess.track_state_migration import finalize_recovery_detections
 from ai.action.fall_event_state import FallState
 from scripts.rtsp_inference_args import parse_args
+from ai.storage.snapshot_uploader import attach_primary_snapshot_if_enabled
 
 
 def run(args):
@@ -617,6 +618,11 @@ def run(args):
                         dropped_frame_count=queue.dropped_frame_count,
                         **lifecycle_payload_kwargs(emit_decision),
                     )
+                    # Primary snapshot (decoupled): attach snapshot_object_key when enabled; never blocks
+                    try:
+                        attach_primary_snapshot_if_enabled(payload, getattr(frame_packet, "frame", None))
+                    except Exception as ps_exc:
+                        print(f"[primary-snapshot][warn] non-fatal: {ps_exc}", flush=True)
                     event_log = build_inference_event_log(args, frame_packet, track_prediction, boxes, sequence)
                     if getattr(args, "event_log_dir", None):
                         save_inference_event_log(args.event_log_dir, event_log)
