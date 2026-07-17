@@ -85,6 +85,19 @@ class EventClipTest(unittest.TestCase):
         event_id = meta.get("eventId") or meta.get("event_id") or meta.get("evidenceId")
         self.assertEqual(event_id, "stable-evt-1")
         self.assertNotEqual(event_id, meta["event_timestamp"])
+    def test_clip_worker_passes_snapshot_object_key_from_metadata(self):
+        meta = {
+            "eventId": "stable-evt-snap",
+            "snapshot_object_key": "snapshots/stable-evt-snap.jpg",
+            "snapshotObjectKey": "snapshots/stable-evt-snap.jpg",
+            "snapshot_url": "https://bucket.s3.ap-northeast-2.amazonaws.com/snapshots/stable-evt-snap.jpg",
+            "clip_object_key": "clips/x.mp4",
+        }
+        snap_key = meta.get("snapshot_object_key") or meta.get("snapshotObjectKey")
+        self.assertEqual(snap_key, "snapshots/stable-evt-snap.jpg")
+        self.assertTrue(str(snap_key).startswith("snapshots/") and str(snap_key).endswith(".jpg"))
+        # Clip keys must not be selected as snapshot keys
+        self.assertNotEqual(snap_key, meta["clip_object_key"])
 
     def test_overlapping_events_on_same_camera_both_tracked_independently(self):
         clip_buffer = EventClipBuffer(pre_event_frame_count=2, post_event_frame_count=2, cooldown_seconds=10, max_concurrent_events=4)
