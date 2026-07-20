@@ -15,8 +15,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from ai.storage.uploader import resolve_s3_bucket_name
-
 
 def snapshot_capture_enabled() -> bool:
     val = os.getenv("SNAPSHOT_CAPTURE_ENABLED", "true").strip().lower()
@@ -95,7 +93,7 @@ def upload_snapshot_jpeg(
 
     aws_access_key = os.environ.get("AWS_ACCESS_KEY_ID")
     aws_secret_key = os.environ.get("AWS_SECRET_ACCESS_KEY")
-    bucket_name = resolve_s3_bucket_name()
+    bucket_name = os.environ.get("AWS_S3_BUCKET_NAME")
     region_name = os.environ.get("AWS_REGION", "ap-northeast-2")
 
     if not (aws_access_key and aws_secret_key and bucket_name):

@@ -3,11 +3,6 @@ import sys
 from pathlib import Path
 
 
-def resolve_s3_bucket_name():
-    """Return the canonical bucket setting, accepting the deployed legacy alias."""
-    return os.environ.get("AWS_S3_BUCKET_NAME") or os.environ.get("S3_BUCKET_NAME")
-
-
 def upload_clip(path, metadata=None):
     path_obj = Path(path)
     filename = path_obj.name
@@ -15,7 +10,7 @@ def upload_clip(path, metadata=None):
     # 1. 환경 변수 로드
     aws_access_key = os.environ.get("AWS_ACCESS_KEY_ID")
     aws_secret_key = os.environ.get("AWS_SECRET_ACCESS_KEY")
-    bucket_name = resolve_s3_bucket_name()
+    bucket_name = os.environ.get("AWS_S3_BUCKET_NAME")
     region_name = os.environ.get("AWS_REGION", "ap-northeast-2")  # 기본 서울 리전
 
     # 2. 필수 환경 변수 부재 시 로컬 폴백 작동
