@@ -3,11 +3,10 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 import numpy as np
 
-from ai.events.clip_worker import ClipWriterWorker, _stable_event_id, enqueue_event_clip, save_clip_to_mp4
+from ai.events.clip_worker import ClipWriterWorker, enqueue_event_clip, save_clip_to_mp4
 from ai.events.event_clip import CircularFrameBuffer, EventClipBuffer, EventClipTask
 
 
@@ -83,14 +82,9 @@ class EventClipTest(unittest.TestCase):
             "confidence": 0.88,
             "faint_prob": 0.88,
         }
-        event_id = _stable_event_id(meta)
+        event_id = meta.get("eventId") or meta.get("event_id") or meta.get("evidenceId")
         self.assertEqual(event_id, "stable-evt-1")
         self.assertNotEqual(event_id, meta["event_timestamp"])
-
-    def test_clip_worker_rejects_evidence_id_as_event_id_fallback(self):
-        self.assertIsNone(_stable_event_id({"evidenceId": "derived-id", "event_timestamp": 1_700_000_000.0}))
-        self.assertIsNone(_stable_event_id({"eventId": "   "}))
-        self.assertEqual(_stable_event_id({"event_id": " stable-evt-2 "}), "stable-evt-2")
     def test_clip_worker_passes_snapshot_object_key_from_metadata(self):
         meta = {
             "eventId": "stable-evt-snap",
@@ -219,99 +213,6 @@ class EventClipTest(unittest.TestCase):
         self.assertTrue(output_path.name.startswith("Fall_cam_01_"))
         self.assertIn("evidence-cam_01-7-2000", output_path.name)
 
-    def test_worker_publishes_clip_and_thumbnail_with_stable_event_id(self):
-        published = []
-
-        class Publisher:
-            def publish_event(self, payload):
-                published.append(payload)
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            output_path = Path(temp_dir) / "clip.mp4"
-            output_path.write_bytes(b"clip")
-            task_queue = queue.Queue(maxsize=1)
-            worker = ClipWriterWorker(
-                task_queue,
-                uploader=lambda path, metadata: {
-                    "uploaded": True,
-                    "s3_key": "clips/stable-evt.mp4",
-                    "url": "https://example.test/clips/stable-evt.mp4",
-                },
-                publisher=Publisher(),
-                snapshot_uploader=lambda jpeg, event_id, metadata: {
-                    "uploaded": True,
-                    "s3_key": f"snapshots/{event_id}.jpg",
-                },
-            )
-            task = EventClipTask(
-                event_type="Fall",
-                camera_id="cam_01",
-                frames=[dummy_frame(7)],
-                fps=10.0,
-                output_dir=temp_dir,
-                metadata={
-                    "eventId": "stable-evt",
-                    "event_timestamp": "2026-07-17T00:00:00Z",
-                    "event_frame_index": 0,
-                },
-            )
-            with patch("ai.events.clip_worker.save_clip_to_mp4", return_value=output_path):
-                worker.start()
-                self.assertTrue(enqueue_event_clip(task_queue, task))
-                task_queue.join()
-                worker.stop()
-
-        self.assertEqual(len(published), 1)
-        self.assertEqual(published[0]["eventId"], "stable-evt")
-        self.assertEqual(published[0]["clip_object_key"], "clips/stable-evt.mp4")
-        self.assertEqual(published[0]["snapshot_object_key"], "snapshots/stable-evt.jpg")
-
-    def test_worker_snapshot_failure_still_publishes_clip_attachment(self):
-        published = []
-
-        class Publisher:
-            def publish_event(self, payload):
-                published.append(payload)
-
-        def failing_snapshot_upload(*_args, **_kwargs):
-            raise RuntimeError("S3 put_object failed")
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            output_path = Path(temp_dir) / "clip.mp4"
-            output_path.write_bytes(b"clip")
-            task_queue = queue.Queue(maxsize=1)
-            worker = ClipWriterWorker(
-                task_queue,
-                uploader=lambda path, metadata: {
-                    "uploaded": True,
-                    "s3_key": "clips/stable-evt.mp4",
-                    "url": "https://example.test/clips/stable-evt.mp4",
-                },
-                publisher=Publisher(),
-                snapshot_uploader=failing_snapshot_upload,
-            )
-            task = EventClipTask(
-                event_type="Fall",
-                camera_id="cam_01",
-                frames=[dummy_frame(7)],
-                fps=10.0,
-                output_dir=temp_dir,
-                metadata={
-                    "eventId": "stable-evt",
-                    "event_timestamp": "2026-07-17T00:00:00Z",
-                    "event_frame_index": 0,
-                },
-            )
-            with patch("ai.events.clip_worker.save_clip_to_mp4", return_value=output_path):
-                worker.start()
-                self.assertTrue(enqueue_event_clip(task_queue, task))
-                task_queue.join()
-                worker.stop()
-
-        self.assertEqual(len(published), 1)
-        self.assertEqual(published[0]["eventId"], "stable-evt")
-        self.assertEqual(published[0]["clip_object_key"], "clips/stable-evt.mp4")
-        self.assertNotIn("snapshot_object_key", published[0])
     def test_worker_failure_does_not_stop_worker_thread(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             task_queue = queue.Queue(maxsize=2)

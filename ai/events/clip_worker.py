@@ -404,16 +404,6 @@ def save_clip_to_mp4(task):
         raise RuntimeError(f"encoded clip is empty: {output_path}")
     return output_path
 
-def _stable_event_id(metadata):
-    if not isinstance(metadata, dict):
-        return None
-    event_id = metadata.get("eventId") or metadata.get("event_id")
-    if event_id is None:
-        return None
-    event_id = str(event_id).strip()
-    return event_id or None
-
-
 #ClipWriterWorker는 태스크를 큐에서 꺼내어 관리하는 작업 스레드의 역할만 담당하며, 실제 비디오 파일로 인코딩하여 기록하는 연산은 save_clip_to_mp4 함수가 처리하는 구조
 class ClipWriterWorker:
     def __init__(self, task_queue, uploader=upload_clip, publisher=None, mqtt_event_topic=None, snapshot_uploader=upload_snapshot_jpeg):
@@ -445,7 +435,7 @@ class ClipWriterWorker:
                 try:
                     upload_result = self.uploader(output_path, task.metadata)
                     meta = task.metadata or {}
-                    event_id = _stable_event_id(meta)
+                    event_id = meta.get("eventId") or meta.get("event_id") or meta.get("evidenceId")
                     clip_key = upload_result.get("s3_key") if upload_result else None
                     clip_ok = bool(upload_result and upload_result.get("uploaded") and upload_result.get("url"))
                     duration = len(task.frames) / float(task.fps or 30.0)
@@ -495,7 +485,12 @@ class ClipWriterWorker:
                     if upload_result and upload_result.get("uploaded") and upload_result.get("url") and self.publisher:
                         s3_url = upload_result["url"]
                         meta = task.metadata or {}
-                        event_id = _stable_event_id(meta)
+                        # Prefer stable incident eventId from metadata; never use timestamp as id.
+                        event_id = (
+                            meta.get("eventId")
+                            or meta.get("event_id")
+                            or meta.get("evidenceId")
+                        )
                         if not event_id:
                             print(
                                 f"[clip-worker] skip MQTT re-publish: missing eventId for camera={task.camera_id}",

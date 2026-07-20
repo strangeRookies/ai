@@ -38,6 +38,7 @@ from ai.inference.rtsp_runtime import (
     update_prediction_counts,
     update_tracking_summary,
     lifecycle_payload_kwargs,
+    snapshot_assist_meta_from_event_payload,
 )
 from ai.inference.rtsp_runtime import (
     log_detection_stage,
@@ -1060,6 +1061,23 @@ def _process_frame_impl(
             try:
                 event_publish_result = _publish_event(publisher, payload, topic_settings["event_topic"])
                 _record_publish_outcome(summary, "events_publish", event_publish_result, attempted=True)
+                # Single VLM snapshot assist hook (never blocks alert loop)
+                try:
+                    from ai.snapshot_assist_upload import submit_frame_snapshot_async
+                    assist_meta = snapshot_assist_meta_from_event_payload(
+                        payload,
+                        track_id=track_id,
+                        prediction=track_prediction,
+                        emit_decision=emit_decision,
+                    )
+                    submit_frame_snapshot_async(
+                        event_id=str(payload.get("eventId") or ""),
+                        camera_login_id=str(stream_id),
+                        frame=getattr(frame_packet, "frame", None),
+                        **assist_meta,
+                    )
+                except Exception as snap_exc:
+                    print(f"[snapshot-assist][warn] non-fatal upload schedule failed: {snap_exc}", flush=True)
             except Exception as exc:
                 _record_publish_outcome(summary, "events_publish", attempted=True)
                 print(f"[ai-worker][error] failed to publish event payload for camera={stream_id}: {exc}", file=sys.stderr, flush=True)
@@ -1081,6 +1099,11 @@ def _process_frame_impl(
                 "confidence": payload.get("confidence"),
                 "faint_prob": payload.get("faint_prob") or payload.get("faintProb"),
                 "consecutive_count": payload.get("consecutive_count") or payload.get("consecutiveCount"),
+                # Primary snapshot key must survive clip re-publish so back can attach Snapshot.
+                "snapshot_object_key": payload.get("snapshot_object_key") or payload.get("snapshotObjectKey"),
+                "snapshotObjectKey": payload.get("snapshotObjectKey") or payload.get("snapshot_object_key"),
+                "snapshot_url": payload.get("snapshot_url") or payload.get("snapshotUrl"),
+                "snapshotUrl": payload.get("snapshotUrl") or payload.get("snapshot_url"),
             }
             
             clip_triggered = state.clip_buffer.trigger_event(
