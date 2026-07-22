@@ -141,9 +141,9 @@ class StreamHandler(BaseHTTPRequestHandler):
         if path == "/cameras":
             self.send_json({"cameras": self.public_camera_status()})
             return
-        if path.startswith("/stream/"):
-            camera_id = path.removeprefix("/stream/").strip("/")
-            self.stream_camera(camera_id)
+        if path.startswith("/stream/") or path.startswith("/mjpeg/"):
+            raw_id = path.replace("/stream/", "").replace("/mjpeg/", "").strip("/")
+            self.stream_camera(raw_id)
             return
         self.send_error(HTTPStatus.NOT_FOUND, "Not found")
 
@@ -159,7 +159,7 @@ class StreamHandler(BaseHTTPRequestHandler):
                     "id": camera_id,
                     "name": camera["name"],
                     "location": camera["location"],
-                    "streamUrl": f"/stream/{camera_id}",
+                    "streamUrl": f"/mjpeg/{camera_id}",
                     "connected": state["connected"],
                     "updated_at": state["updated_at"],
                     "last_error": state["last_error"],
@@ -178,6 +178,18 @@ class StreamHandler(BaseHTTPRequestHandler):
 
     def stream_camera(self, camera_id):
         worker = self.workers.get(camera_id)
+        if worker is None:
+            # Try aliases: cam_01 -> camera-1, 1 -> camera-1, etc.
+            normalized = camera_id.lower().replace("cam_", "").replace("camera-", "").replace("camera_", "")
+            for key in self.workers:
+                key_norm = key.lower().replace("cam_", "").replace("camera-", "").replace("camera_", "")
+                if normalized == key_norm or normalized.zfill(2) == key_norm.zfill(2):
+                    worker = self.workers[key]
+                    break
+        if worker is None and self.workers:
+            # Fallback to first worker if unknown camera requested
+            worker = list(self.workers.values())[0]
+
         if worker is None:
             self.send_error(HTTPStatus.NOT_FOUND, "Unknown camera")
             return

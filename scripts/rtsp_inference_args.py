@@ -1,5 +1,13 @@
 import argparse
 import os
+from pathlib import Path
+
+try:
+    from dotenv import load_dotenv
+    _PROJECT_ROOT = Path(__file__).resolve().parents[1]
+    load_dotenv(_PROJECT_ROOT / ".env")
+except ImportError:
+    print("[config] python-dotenv is not installed; using process environment only.", flush=True)
 
 from ai.action.faint_post_processing import (
     DEFAULT_ACTION_MODEL,
@@ -23,8 +31,16 @@ def parse_args(argv=None):
     parser.add_argument("--rtsp-url", default=os.getenv("RTSP_URL", "rtsp://localhost:8554/cam1"))
     parser.add_argument("--camera-id", default=os.getenv("CAMERA_ID", "cam_01"))
     parser.add_argument("--camera-login-id", default=os.getenv("CAMERA_LOGIN_ID"))
-    parser.add_argument("--max-frames", type=int, default=60)
-    parser.add_argument("--detector-mode", choices=["real", "mock"], default="mock")
+    parser.add_argument(
+        "--max-frames",
+        type=int,
+        default=env_int("MAX_FRAMES", 0),
+    )
+    parser.add_argument(
+        "--detector-mode",
+        choices=["real", "mock"],
+        default=os.getenv("DETECTOR_MODE", "real"),
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--preflight-only", action="store_true", help="Load configured detector/classifier and print settings without opening RTSP or MQTT.")
     parser.add_argument("--output", default=None, help="Write one run summary JSON containing counters and sample_event.")
