@@ -1,5 +1,13 @@
 import os
 from dataclasses import dataclass
+from pathlib import Path
+
+try:
+    from dotenv import load_dotenv
+    _PROJECT_ROOT = Path(__file__).resolve().parent
+    load_dotenv(_PROJECT_ROOT / ".env")
+except ImportError:
+    print("[config] python-dotenv is not installed; using process environment only.", flush=True)
 
 from ai.action.lstm_contract import DEFAULT_LSTM_SEQUENCE_LENGTH, DEFAULT_LSTM_SEQUENCE_STRIDE
 
