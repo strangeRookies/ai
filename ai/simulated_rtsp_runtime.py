@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
 import signal
 import subprocess
@@ -36,10 +37,8 @@ def video_pool_for_camera_position(
     outdoor_files: list[Path],
     chromakey_files: list[Path],
 ) -> tuple[list[Path], bool]:
-    # Pair cameras in sorted order: 1st/3rd/... use outdoor footage and
-    # 2nd/4th/... use chromakey footage. This keeps cam_03/cam_04 split even
-    # when cam_01/cam_02 are also active in the backend.
-    if camera_position % 2 == 1:
+    allow_chromakey = os.getenv("ALLOW_CHROMAKEY", "false").lower() in {"1", "true", "yes", "on"}
+    if allow_chromakey and camera_position % 2 == 1 and chromakey_files:
         return chromakey_files, True
     return outdoor_files, False
 
