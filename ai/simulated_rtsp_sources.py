@@ -108,14 +108,15 @@ def filter_stream_video_pools(
     missing_pools: list[str] = []
     if not outdoor_files:
         missing_pools.append("outdoor/non-chromakey")
-    if not chromakey_files:
+    if not chromakey_files and outdoor_files:
+        chromakey_files = list(outdoor_files)
+    elif not chromakey_files:
         missing_pools.append("chromakey")
+
     if missing_pools:
         filter_summary = f"domain={domain}, label={label}, video_filter={video_filter}"
         raise ValueError(
-            f"Required video pool(s) are empty: {', '.join(missing_pools)} ({filter_summary}). "
-            "Add at least one normal/outdoor video and one chromakey video whose path contains "
-            "chroma, chromakey, green_screen, studio, chm, croki, or 크로마키."
+            f"Required video pool(s) are empty: {', '.join(missing_pools)} ({filter_summary})."
         )
 
     return outdoor_files, chromakey_files, excluded_files
